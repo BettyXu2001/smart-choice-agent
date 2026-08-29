@@ -6,14 +6,16 @@ from typing import Any
 
 from choice_agent.agents.base import AgentContext, BaseAgent
 from choice_agent.decision.engine import DecisionEngine, RankedMeal
+from choice_agent.decision.selector import SelectionCandidate, select_candidates
+from choice_agent.decision.state_machine import transition_decision
 from choice_agent.domains.diet.rules import (
     clarify, classify_intent, conservative_message, extract_slots, hard_exclusions, risk_reasons,
 )
 from choice_agent.providers.model import ModelProvider
 from choice_agent.repositories.diet_repository import DietRepository
 from choice_agent.schemas import (
-    Constraint, ConstraintKind, DecisionStatus, Intent, MealResponse,
-    Recommendation, SlotBundle, SourceMode,
+    CandidateState, Constraint, ConstraintKind, DecisionNextAction, DecisionStatus,
+    Intent, MealResponse, Recommendation, SlotBundle, SourceMode, UnansweredQuestion,
 )
 
 
@@ -95,8 +97,16 @@ class ClarificationAgent(BaseAgent):
         context.data["clarify_question"] = question
         context.data["missing_slots"] = missing
         context.decision.clarifying_questions = [question] if question else []
+        context.decision.unanswered_questions = [
+            UnansweredQuestion(key=key, question=question, asked_by=self.name)
+            for key in missing
+        ] if question else []
         if question:
-            context.decision.status = DecisionStatus.CLARIFYING
+            transition_decision(
+                context.decision, DecisionStatus.CLARIFYING, DecisionNextAction.ASK_CLARIFY
+            )
+        else:
+            context.decision.next_action = DecisionNextAction.SEARCH_CANDIDATES
         return {"action": action.value, "questionToAsk": question, "missingSlots": missing}
 
 
@@ -114,12 +124,35 @@ class CandidateAgent(BaseAgent):
             meals, context.data["slots"], context.data.get("exclude_ids", []),
             context.data.get("hard_exclusions", []),
         )
+        selection = select_candidates(
+            [
+                SelectionCandidate(
+                    candidate_id=str(item.meal.id),
+                    name=item.meal.name,
+                    score=item.score,
+                    attributes={"sourceMode": item.meal.source_type},
+                )
+                for item in ranked
+            ],
+            context.data.get("selection_strategy", "ranked"),
+            context.data.get("recent_recommendation_ids", []),
+            context.data.get("avoid_recent_count", 0),
+        )
+        ranked_by_id = {str(item.meal.id): item for item in ranked}
+        ranked = [ranked_by_id[item_id] for item_id in selection.ordered_ids]
         context.data["ranked"] = ranked
+        context.decision.domain_state["selection"] = selection.insights.as_dict()
         context.decision.candidates = [self.engine.candidate(item) for item in ranked]
+        context.decision.candidate_state = {
+            candidate.candidate_id: CandidateState(status="active", updated_by=self.name)
+            for candidate in context.decision.candidates
+        }
         context.decision.evidence = [
             evidence for candidate in context.decision.candidates for evidence in candidate.evidence
         ]
-        context.decision.status = DecisionStatus.COMPARING
+        transition_decision(
+            context.decision, DecisionStatus.COMPARING, DecisionNextAction.COMPARE_CANDIDATES
+        )
         return {
             "sourceMode": source.value,
             "candidateCount": len(ranked),
@@ -171,7 +204,13 @@ class PlanningAgent(BaseAgent):
         context.decision.candidates = [
             self.engine.candidate(item) for item in context.data["ranked"]
         ]
-        context.decision.status = DecisionStatus.COMPARING
+        context.decision.candidate_state = {
+            candidate.candidate_id: CandidateState(status="active", updated_by=self.name)
+            for candidate in context.decision.candidates
+        }
+        transition_decision(
+            context.decision, DecisionStatus.COMPARING, DecisionNextAction.COMPARE_CANDIDATES
+        )
         return {
             "mealTimes": meal_times,
             "plannedMeals": [
@@ -230,6 +269,9 @@ class ExplanationAgent(BaseAgent):
             context.data["display_blocks"] = []
             context.data["speech_text"] = speech
             context.decision.recommendation = Recommendation(summary=speech)
+            transition_decision(
+                context.decision, DecisionStatus.DECIDED, DecisionNextAction.WAIT_USER
+            )
             return {"speechText": speech, "recommendations": []}
 
         selected = ranked[:3]
@@ -273,7 +315,9 @@ class ExplanationAgent(BaseAgent):
             summary=speech,
             tradeoffs=[block.reason or "" for block in blocks],
         )
-        context.decision.status = DecisionStatus.DECIDED
+        transition_decision(
+            context.decision, DecisionStatus.DECIDED, DecisionNextAction.WAIT_USER
+        )
         return {
             "speechText": speech,
             "recommendations": [block.model_dump(by_alias=True) for block in blocks],
@@ -291,6 +335,9 @@ class RiskAgent(BaseAgent):
         if reasons:
             context.data["speech_text"] = conservative_message()
             context.data["display_blocks"] = []
+            transition_decision(
+                context.decision, DecisionStatus.DECIDED, DecisionNextAction.WAIT_USER
+            )
         return {
             "passed": not reasons,
             "reasons": reasons,

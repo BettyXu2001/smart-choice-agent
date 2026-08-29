@@ -12,11 +12,13 @@ from choice_agent.agents.diet import (
 from choice_agent.config import Settings
 from choice_agent.db_models import SessionRecord
 from choice_agent.decision.engine import DecisionEngine
+from choice_agent.decision.selector import normalize_avoid_recent_count, normalize_strategy
+from choice_agent.decision.state_machine import assert_expected_revision, transition_decision
 from choice_agent.providers.model import ModelProvider
 from choice_agent.repositories.diet_repository import DietRepository
 from choice_agent.schemas import (
-    ChatRequest, ChatResponse, ClarifyAction, DecisionState, Intent,
-    SessionPhase, SlotBundle, SourceMode,
+    ChatRequest, ChatResponse, ClarifyAction, DecisionNextAction, DecisionState,
+    DecisionStatus, Intent, SessionPhase, SlotBundle, SourceMode, TraceReference,
 )
 from choice_agent.services.trace import TraceScope
 
@@ -41,9 +43,11 @@ class DietOrchestrator:
         if not request.message.strip():
             raise ValueError("message 不能为空")
         session = self._session(user_id, request)
+        assert_expected_revision(session.revision, request.expected_revision)
         session.source_mode = request.source_mode.value
         trace_id = uuid4().hex
         decision = DecisionState(decision_id=uuid4().hex, session_id=session.id)
+        decision.trace_refs = [TraceReference(trace_id=trace_id, event_type="REQUEST")]
         recent = [
             {"role": row.role, "content": row.content}
             for row in self.repository.recent_messages(session.id, 6)
@@ -65,6 +69,15 @@ class DietOrchestrator:
                     "slot_options": self.repository.slot_options(),
                     "recent_messages": recent,
                     "exclude_ids": [],
+                    "selection_strategy": normalize_strategy(
+                        request.context.get("selectionStrategy")
+                    ),
+                    "avoid_recent_count": normalize_avoid_recent_count(
+                        request.context.get("avoidRecentCount")
+                    ),
+                    "recent_recommendation_ids": [
+                        str(item) for item in (session.last_recommendations or [])
+                    ],
                 },
             )
             runtime = AgentRuntime(trace)
@@ -81,6 +94,9 @@ class DietOrchestrator:
                     "我现在主要帮你做饮食选择。你可以告诉我餐次、口味、场景或健康目标。"
                 )
                 context.data["display_blocks"] = []
+                transition_decision(
+                    decision, DecisionStatus.DECIDED, DecisionNextAction.WAIT_USER
+                )
                 return self._finish_text(session, context, trace_id, SessionPhase.START)
 
             if decision.intent == Intent.MEAL_ADJUST:
@@ -135,7 +151,7 @@ class DietOrchestrator:
             trace_id=trace_id,
             response_type="CLARIFY",
             speech_text=question,
-            next_action="ASK_CLARIFY",
+            next_action=context.decision.next_action.value,
             clarify_question=question,
             missing_slots=context.data["missing_slots"],
             decision_state=context.decision,
@@ -159,6 +175,7 @@ class DietOrchestrator:
             response_type="ANSWER",
             speech_text=speech,
             display_blocks=context.data.get("display_blocks", []),
+            next_action=context.decision.next_action.value,
             decision_state=context.decision,
         )
 

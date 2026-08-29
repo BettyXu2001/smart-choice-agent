@@ -7,6 +7,16 @@
     <link rel="stylesheet" href="./assets/css/app.css">
 </head>
 <body>
+<script>
+    (() => {
+        try {
+            const theme = localStorage.getItem("choiceAgentTheme");
+            document.body.dataset.theme = theme === "pop" ? "pop" : "mint";
+        } catch (error) {
+            document.body.dataset.theme = "mint";
+        }
+    })();
+</script>
 <div class="app-shell">
     <header class="topbar">
         <a class="brand" href="#/" aria-label="回到 Choice Agent 首页">
@@ -22,10 +32,16 @@
             <a href="#/admin/traces" data-nav="/admin/traces">Trace</a>
             <a href="#/admin/evaluations" data-nav="/admin/evaluations">评估</a>
         </nav>
-        <label class="user-field">
-            <span>用户 ID</span>
-            <input id="userIdInput" type="number" min="1" value="1">
-        </label>
+        <div class="topbar-actions">
+            <div id="themeSwitch" class="theme-switch" aria-label="界面皮肤">
+                <button type="button" data-action="set-theme" data-theme-value="mint" aria-pressed="true">清新绿</button>
+                <button type="button" data-action="set-theme" data-theme-value="pop" aria-pressed="false">活力橙</button>
+            </div>
+            <label class="user-field">
+                <span>用户 ID</span>
+                <input id="userIdInput" type="number" min="1" value="1">
+            </label>
+        </div>
     </header>
 
     <main id="app" class="page" tabindex="-1"></main>

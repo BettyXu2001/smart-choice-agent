@@ -55,6 +55,21 @@ class ConstraintKind(str, Enum):
     SOFT = "soft"
 
 
+class DecisionNextAction(str, Enum):
+    ASK_CLARIFY = "ASK_CLARIFY"
+    SEARCH_CANDIDATES = "SEARCH_CANDIDATES"
+    COMPARE_CANDIDATES = "COMPARE_CANDIDATES"
+    SHOW_RECOMMENDATION = "SHOW_RECOMMENDATION"
+    WAIT_USER = "WAIT_USER"
+
+
+class SelectionStrategy(str, Enum):
+    RANKED = "ranked"
+    RANDOM = "random"
+    WEIGHTED = "weighted"
+    LEAST_RECENT = "least_recent"
+
+
 class SlotBundle(ApiModel):
     meal_time: list[str] = Field(default_factory=list)
     mood: list[str] = Field(default_factory=list)
@@ -117,6 +132,32 @@ class Candidate(ApiModel):
     elimination_reasons: list[str] = Field(default_factory=list)
 
 
+class CandidateState(ApiModel):
+    status: str = "active"
+    reason: str | None = None
+    updated_by: str | None = None
+
+
+class UnansweredQuestion(ApiModel):
+    key: str
+    question: str
+    required: bool = True
+    asked_by: str | None = None
+
+
+class Assumption(ApiModel):
+    key: str
+    value: Any
+    confidence: float = Field(default=0.5, ge=0, le=1)
+    source: str = "system"
+
+
+class TraceReference(ApiModel):
+    trace_id: str
+    event_type: str | None = None
+    agent_name: str | None = None
+
+
 class Recommendation(ApiModel):
     primary_candidate_id: str | None = None
     alternative_candidate_ids: list[str] = Field(default_factory=list)
@@ -143,12 +184,17 @@ class DecisionState(ApiModel):
     constraints: list[Constraint] = Field(default_factory=list)
     criteria: list[Criterion] = Field(default_factory=list)
     candidates: list[Candidate] = Field(default_factory=list)
+    candidate_state: dict[str, CandidateState] = Field(default_factory=dict)
     evidence: list[Evidence] = Field(default_factory=list)
     clarifying_questions: list[str] = Field(default_factory=list)
+    unanswered_questions: list[UnansweredQuestion] = Field(default_factory=list)
+    assumptions: list[Assumption] = Field(default_factory=list)
     recommendation: Recommendation | None = None
+    next_action: DecisionNextAction = DecisionNextAction.WAIT_USER
     risk_flags: list[str] = Field(default_factory=list)
     excluded_candidates: list[str] = Field(default_factory=list)
     agent_runs: list[AgentRun] = Field(default_factory=list)
+    trace_refs: list[TraceReference] = Field(default_factory=list)
     revision: int = 0
     status: DecisionStatus = DecisionStatus.DRAFT
     domain_state: dict[str, Any] = Field(default_factory=dict)
@@ -159,6 +205,7 @@ class ChatRequest(ApiModel):
     message: str
     source_mode: SourceMode = SourceMode.PUBLIC
     context: dict[str, Any] = Field(default_factory=dict)
+    expected_revision: int | None = Field(default=None, ge=0)
 
 
 class MealRequest(ApiModel):

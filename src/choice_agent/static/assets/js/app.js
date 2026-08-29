@@ -3,6 +3,11 @@
     const app = document.getElementById("app");
     const toast = document.getElementById("toast");
     const userIdInput = document.getElementById("userIdInput");
+    const THEME_STORAGE_KEY = "choiceAgentTheme";
+    const THEMES = {
+        mint: "清新绿",
+        pop: "活力橙"
+    };
     const SLOT_LABELS = {
         mealTime: "用餐时间",
         mood: "心情状态",
@@ -21,6 +26,7 @@
         "OTHER"
     ];
     const state = {
+        theme: getSavedTheme(),
         home: { loaded: false, personalCount: 0, publicCount: 0, generalPrompt: "", notice: "" },
         slotOptions: null,
         personalMeals: [],
@@ -49,6 +55,43 @@
             form: defaultRangeForm()
         }
     };
+    function isKnownTheme(theme) {
+        return Object.prototype.hasOwnProperty.call(THEMES, theme);
+    }
+    function getSavedTheme() {
+        try {
+            const theme = window.localStorage.getItem(THEME_STORAGE_KEY);
+            return isKnownTheme(theme) ? theme : "mint";
+        } catch (error) {
+            return "mint";
+        }
+    }
+    function saveTheme(theme) {
+        try {
+            window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+    function applyTheme(theme) {
+        const nextTheme = isKnownTheme(theme) ? theme : "mint";
+        document.body.dataset.theme = nextTheme;
+        document.querySelectorAll('[data-action="set-theme"]').forEach((button) => {
+            const active = button.dataset.themeValue === nextTheme;
+            button.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+    }
+    function setTheme(theme) {
+        if (!isKnownTheme(theme)) {
+            showToast("未知皮肤", "error");
+            return;
+        }
+        state.theme = theme;
+        const saved = saveTheme(theme);
+        applyTheme(theme);
+        showToast(saved ? `已切换为${THEMES[theme]}` : `已切换为${THEMES[theme]}，但无法保存偏好`, saved ? undefined : "error");
+    }
     function defaultRangeForm() {
         const end = new Date();
         const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
@@ -981,7 +1024,9 @@
             return;
         }
         const action = target.dataset.action;
-        if (action === "general-example") {
+        if (action === "set-theme") {
+            setTheme(target.dataset.themeValue);
+        } else if (action === "general-example") {
             state.home.generalPrompt = target.dataset.example || "";
             state.home.notice = "";
             renderGeneralHome();
@@ -1058,6 +1103,9 @@
             runEvaluation(form);
         }
     }
+    function initTheme() {
+        applyTheme(state.theme);
+    }
     function initUserField() {
         userIdInput.value = DietApi.setUserId(DietApi.getUserId());
         userIdInput.addEventListener("change", () => {
@@ -1075,6 +1123,7 @@
     window.addEventListener("hashchange", render);
     app.addEventListener("click", handleClick);
     app.addEventListener("submit", handleSubmit);
+    initTheme();
     initUserField();
     if (!location.hash) {
         navigate("/");

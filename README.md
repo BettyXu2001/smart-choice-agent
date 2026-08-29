@@ -31,6 +31,7 @@ debuggable, explainable, and stable.
 
 - **Multi-agent workflow**: intent, understanding, clarification, candidate generation, adjustment, planning, review, explanation, risk, and evaluation agents.
 - **Deterministic ranking engine**: hard-constraint filtering plus seven-dimension scoring for stable, testable recommendations.
+- **Candidate selection strategies**: diet chat can opt into ranked, random, weighted, or least-recent selection with session-level recent-item cooldown.
 - **Works without an API key**: local rule agents can run the full flow when LLM mode is disabled.
 - **Optional LLM integration**: supports OpenAI-compatible Chat Completions through environment configuration.
 - **Auditable traces**: sessions, messages, recommendations, feedback, `DecisionState`, `Evidence`, and agent runs are persisted.
@@ -108,6 +109,21 @@ from `legacy_diet_db.sql`.
 
 The local database is ignored by Git and should not be committed.
 
+## Diet Selection Context
+
+Diet chat requests can pass optional selector controls in `context`:
+
+```json
+{
+  "context": {
+    "selectionStrategy": "weighted",
+    "avoidRecentCount": 3
+  }
+}
+```
+
+Supported strategies are `ranked`, `random`, `weighted`, and `least_recent`. The default is `ranked` to preserve stable existing behavior.
+
 ## Testing
 
 ```powershell
@@ -174,6 +190,7 @@ Smart Choice Agent 可以把模糊需求转成候选项排序、约束分析、�
 
 - **多 Agent 流程**：意图、理解、澄清、候选、调整、计划、审查、解释、风险和评估 Agent。
 - **确定性排序引擎**：硬约束过滤 + 七维评分，推荐结果稳定、可测试、可复现。
+- **候选选择策略**：饮食聊天可通过上下文启用稳定排序、随机、匹配度加权或很久未推荐优先，并支持会话级近期冷却。
 - **无 API Key 也能运行**：默认关闭 LLM，使用本地规则 Agent 完成完整流程。
 - **可选 LLM 集成**：通过环境变量接入 OpenAI-compatible Chat Completions 接口。
 - **完整可审计 Trace**：持久化会话、消息、推荐历史、反馈、`DecisionState`、`Evidence` 和 Agent Run。
@@ -246,6 +263,21 @@ CHOICE_AGENT_DEBUG=true
 `legacy_diet_db.sql` 幂等导入旧饮食项目的槽位选项和餐食数据。
 
 本地数据库已加入 `.gitignore`，不应提交到 GitHub。
+
+## 饮食选择上下文
+
+饮食聊天请求可以在 `context` 中传入可选选择器参数：
+
+```json
+{
+  "context": {
+    "selectionStrategy": "weighted",
+    "avoidRecentCount": 3
+  }
+}
+```
+
+支持的策略包括 `ranked`、`random`、`weighted` 和 `least_recent`。默认使用 `ranked`，保持现有稳定推荐行为。
 
 ## 测试
 

@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+import pytest
+
 from choice_agent.api.routes import evaluate
 from choice_agent.config import Settings
 from choice_agent.orchestration.diet import DietOrchestrator
@@ -103,3 +105,76 @@ def test_evaluation_report_aggregates_nested_metrics(database):
         )
         assert report["totalTraces"] == 1
         assert report["metricAverages"]["intentAccuracy"] == 1.0
+
+
+def test_chat_expected_revision_rejects_stale_session(database):
+    with database.session_factory() as db:
+        first = orchestrator(db).chat(
+            1,
+            ChatRequest(message="晚餐想吃清淡一点", source_mode=SourceMode.PUBLIC),
+        )
+        assert first.decision_state.revision == 1
+        with pytest.raises(ValueError, match="Decision revision mismatch"):
+            orchestrator(db).chat(
+                1,
+                ChatRequest(
+                    session_id=first.session_id,
+                    message="换一个",
+                    source_mode=SourceMode.PUBLIC,
+                    expected_revision=0,
+                ),
+            )
+
+
+def test_chat_expected_revision_accepts_current_session_revision(database):
+    with database.session_factory() as db:
+        first = orchestrator(db).chat(
+            1,
+            ChatRequest(message="晚餐想吃清淡一点", source_mode=SourceMode.PUBLIC),
+        )
+        second = orchestrator(db).chat(
+            1,
+            ChatRequest(
+                session_id=first.session_id,
+                message="换一个",
+                source_mode=SourceMode.PUBLIC,
+                expected_revision=first.decision_state.revision,
+            ),
+        )
+        assert second.response_type == "ANSWER"
+        assert second.decision_state.revision == 2
+
+def test_diet_recommendation_records_default_selection_insights(database):
+    with database.session_factory() as db:
+        response = orchestrator(db).chat(
+            1,
+            ChatRequest(message="晚餐想吃清淡一点", source_mode=SourceMode.PUBLIC),
+        )
+        selection = response.decision_state.domain_state["selection"]
+        assert selection["strategy"] == "ranked"
+        assert selection["candidateCount"] >= len(response.display_blocks)
+        assert selection["eligibleCount"] == selection["candidateCount"]
+        assert "按匹配度排序" in selection["tags"]
+
+
+def test_diet_recommendation_can_avoid_recent_candidates_with_context(database):
+    with database.session_factory() as db:
+        first = orchestrator(db).chat(
+            1,
+            ChatRequest(message="晚餐想吃清淡一点", source_mode=SourceMode.PUBLIC),
+        )
+        first_ids = {meal.id for meal in first.display_blocks}
+        second = orchestrator(db).chat(
+            1,
+            ChatRequest(
+                session_id=first.session_id,
+                message="晚餐想吃清淡一点",
+                source_mode=SourceMode.PUBLIC,
+                context={"selectionStrategy": "least_recent", "avoidRecentCount": 3},
+            ),
+        )
+        second_ids = {meal.id for meal in second.display_blocks}
+        selection = second.decision_state.domain_state["selection"]
+        assert selection["strategy"] == "least_recent"
+        assert selection["recentExcludedCount"] == min(3, selection["candidateCount"])
+        assert first_ids.isdisjoint(second_ids)
