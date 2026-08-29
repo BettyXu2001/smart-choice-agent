@@ -1,0 +1,2 @@
+"""Diet decision domain."""
+

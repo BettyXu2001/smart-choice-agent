@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Choice Agent V2 · 通用决策</title>
+    <link rel="stylesheet" href="./assets/css/app.css">
+</head>
+<body>
+<div class="app-shell">
+    <header class="topbar">
+        <a class="brand" href="#/" aria-label="回到 Choice Agent 首页">
+            <span class="brand-mark">C</span>
+            <span>
+                    <strong>Choice Agent V2</strong>
+                    <small>通用多 Agent 决策</small>
+                </span>
+        </a>
+        <nav class="nav-links" aria-label="主导航">
+            <a href="#/" data-nav="/">首页</a>
+            <a href="#/diet" data-nav="/diet">饮食模式</a>
+            <a href="#/admin/traces" data-nav="/admin/traces">Trace</a>
+            <a href="#/admin/evaluations" data-nav="/admin/evaluations">评估</a>
+        </nav>
+        <label class="user-field">
+            <span>用户 ID</span>
+            <input id="userIdInput" type="number" min="1" value="1">
+        </label>
+    </header>
+
+    <main id="app" class="page" tabindex="-1"></main>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="./assets/js/api.js"></script>
+<script src="./assets/js/app.js"></script>
+</body>
+</html>

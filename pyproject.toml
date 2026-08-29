@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "choice-agent-v2"
+version = "0.1.0"
+description = "Python multi-agent decision system with diet as the first domain"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.110,<1",
+  "pydantic>=2.6,<3",
+  "sqlalchemy>=2.0,<3",
+  "uvicorn>=0.29,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7,<9"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+choice_agent = ["static/**/*", "prompts/diet/*.txt", "domains/diet/data/*.sql"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
