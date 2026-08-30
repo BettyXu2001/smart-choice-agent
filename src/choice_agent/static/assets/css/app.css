@@ -477,6 +477,41 @@ button {
     line-height: 1.5;
 }
 
+.workflow-stats {
+    grid-template-columns: 1fr;
+}
+
+.decision-flow .card {
+    min-height: 164px;
+}
+
+.developer-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-top: 14px;
+    padding: 12px 2px 0;
+}
+
+.title-with-badge {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.domain-label {
+    white-space: nowrap;
+}
+
+.source-panel .button-row {
+    margin-top: 14px;
+}
+
+.source-panel .btn {
+    white-space: normal;
+}
 .general-home {
     grid-template-columns: minmax(0, 1.22fr) minmax(280px, 0.78fr);
 }

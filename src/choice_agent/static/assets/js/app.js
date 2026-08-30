@@ -33,15 +33,13 @@
         publicMeals: [],
         editingMeal: null,
         chat: {
+            domain: "DIET",
             sourceMode: "PERSONAL",
             sessionId: null,
             sending: false,
-            messages: [
-                {
-                    role: "assistant",
-                    text: "你好，我可以根据你的个人餐食库或公共餐食库推荐今天吃什么。可以试试问我：今晚想吃清淡一点，有什么推荐？"
-                }
-            ]
+            pendingPrompt: "",
+            autoSending: false,
+            messages: defaultChatMessages()
         },
         traces: {
             rows: [],
@@ -175,7 +173,12 @@
         location.hash = route;
     }
     function setActiveNav(route) {
-        const navRoute = route.startsWith("/diet") ? "/diet" : route;
+        let navRoute = route;
+        if (route.startsWith("/diet/meals")) {
+            navRoute = "/data";
+        } else if (route === "/diet/chat") {
+            navRoute = "/";
+        }
         document.querySelectorAll("[data-nav]").forEach((item) => {
             item.classList.toggle("active", item.dataset.nav === navRoute);
         });
@@ -186,7 +189,7 @@
         if (route === "/") {
             renderGeneralHome();
         } else if (route === "/diet") {
-            renderDietModeHome();
+            navigate("/diet/chat");
         } else if (route === "/diet/chat") {
             renderChat();
         } else if (route === "/diet/meals/personal") {
@@ -212,17 +215,16 @@
         app.innerHTML = `
             <section class="hero general-home">
                 <div class="hero-panel decision-entry">
-                    <span class="badge">通用决策入口</span>
+                    <span class="badge">Choice Agent</span>
                     <h1>把选择题想清楚</h1>
-                    <p>先说出你正在纠结的选择。系统会把问题拆成目标、约束、偏好、候选和取舍；当前完整可用的领域模式是饮食决策。</p>
+                    <p>说出你正在纠结的选择。系统会先理解目标和约束，再追问关键条件、比较取舍，并把能直接处理的场景带入对应决策能力。</p>
                     <form id="generalDecisionForm" class="decision-entry-form">
                         <label class="field full">
                             <span>你最近在纠结什么？</span>
-                            <textarea name="prompt" placeholder="比如：我在考虑换工作，但两个 Offer 各有优缺点，不知道怎么选。">${escapeHtml(state.home.generalPrompt)}</textarea>
+                            <textarea name="prompt" placeholder="比如：今晚不知道吃什么，想要清淡一点。">${escapeHtml(state.home.generalPrompt)}</textarea>
                         </label>
                         <div class="button-row">
                             <button class="btn primary" type="submit">开始决策</button>
-                            <a class="btn soft" href="#/diet">进入饮食模式</a>
                         </div>
                     </form>
                     ${state.home.notice ? `<div class="mode-notice">${escapeHtml(state.home.notice)}</div>` : ""}
@@ -230,16 +232,22 @@
                         ${examples.map((example) => `<button class="example-button" type="button" data-action="general-example" data-example="${escapeHtml(example)}">${escapeHtml(example)}</button>`).join("")}
                     </div>
                 </div>
-                <aside class="grid stats">
-                    ${statCard("当前完整模式", "饮食决策", "可进入聊天推荐、个人餐食库和公共餐食库")}
-                    ${statCard("决策流程", "理解 → 澄清 → 比较 → 建议", "用结构化状态承载选择过程")}
-                    ${statCard("当前用户", DietApi.getUserId(), "饮食模式请求会带上 X-User-Id")}
+                <aside class="grid stats workflow-stats">
+                    ${statCard("描述选择", "一句话开始", "把目标、候选和纠结点先放到同一个入口")}
+                    ${statCard("澄清条件", "补关键约束", "信息不足时先追问，不急着给结论")}
+                    ${statCard("比较取舍", "解释建议", "展示推荐理由、替代项和下一步")}
+                    ${statCard("已增强场景", "饮食决策", "吃什么类问题会直接进入决策助手")}
                 </aside>
             </section>
-            <section class="grid three" style="margin-top: 18px;">
-                ${featureCard("饮食模式", "当前完整可用模式。根据时间、心情、场景、健康目标、口味和便利程度推荐吃什么。", "#/diet")}
-                ${featureCard("Trace", "查看请求链路、Agent 运行和决策状态，适合调试多 Agent 流程。", "#/admin/traces")}
-                ${featureCard("评估", "基于已落库 Trace 生成规则评分、反馈归因和可选 LLM Judge。", "#/admin/evaluations")}
+            <section class="grid three decision-flow" style="margin-top: 18px;">
+                ${featureCard("描述选择", "输入正在纠结的问题，不需要先判断该进入哪个能力。", "#/")}
+                ${featureCard("澄清条件", "系统围绕目标、约束、偏好和场景补齐关键上下文。", "#/")}
+                ${featureCard("比较取舍", "对候选进行排序、解释理由，并保留可追踪的决策过程。", "#/")}
+            </section>
+            <section class="developer-links" aria-label="开发者入口">
+                <span class="muted">开发者入口</span>
+                <a class="btn ghost" href="#/admin/traces">Trace</a>
+                <a class="btn ghost" href="#/admin/evaluations">评估</a>
             </section>
         `;
     }
@@ -247,11 +255,11 @@
         app.innerHTML = `
             <section class="hero">
                 <div class="hero-panel">
-                    <span class="badge">饮食决策模式</span>
+                    <span class="badge">饮食决策</span>
                     <h1>决定今天吃什么</h1>
-                    <p>这是 Choice Agent V2 当前完整可用的领域模式。你可以维护个人餐食库，也可以从公共餐食库开始；助手会根据时间、心情、场景、健康目标、口味和便利程度给出推荐，并在信息不足时主动追问。</p>
+                    <p>这是 Choice Agent V2 当前已增强的决策场景。你可以维护个人餐食库，也可以从公共餐食库开始；助手会根据时间、心情、场景、健康目标、口味和便利程度给出推荐，并在信息不足时主动追问。</p>
                     <div class="hero-actions">
-                        <a class="btn primary" href="#/diet/chat">开始聊天推荐</a>
+                        <a class="btn primary" href="#/diet/chat">开始决策</a>
                         <a class="btn soft" href="#/diet/meals/personal">管理个人餐食</a>
                         <a class="btn ghost" href="#/diet/meals/public">查看公共餐食</a>
                     </div>
@@ -263,8 +271,8 @@
                 </aside>
             </section>
             <section class="grid three" style="margin-top: 18px;">
-                ${featureCard("聊天推荐", "按自然语言表达需求，页面会展示澄清问题、推荐卡片和反馈入口。", "#/diet/chat")}
-                ${featureCard("餐食维护", "用标签多选维护自己的常吃餐食，后续推荐会优先从个人库检索。", "#/diet/meals/personal")}
+                ${featureCard("决策助手", "按自然语言表达需求，页面会展示澄清问题、推荐卡片和反馈入口。", "#/diet/chat")}
+                ${featureCard("餐食维护", "用标签多选维护自己的常吃餐食，后续决策会优先参考。", "#/diet/meals/personal")}
                 ${featureCard("评测后台", "查看请求 Trace，标注预期结果，并生成批量评估报告。", "#/admin/evaluations")}
             </section>
         `;
@@ -306,25 +314,24 @@
                 personalCount: personal.length,
                 publicCount: publicMeals.length
             };
-            if (currentRoute() === "/diet") {
-                renderDietModeHome();
-            }
         } catch (error) {
             showToast(error.message || "首页数据加载失败", "error");
         }
     }
     function renderChat() {
+        const sourceLabel = state.chat.sourceMode === "PERSONAL" ? "优先用我的数据" : "使用公共数据";
         app.innerHTML = `
             <section class="chat-layout">
                 <div class="section chat-window">
                     <div class="card-title">
                         <div>
-                            <h2>聊天推荐</h2>
-                            <p>当前会话：${state.chat.sessionId ? escapeHtml(state.chat.sessionId) : "尚未创建，发送消息时自动创建"}</p>
+                            <div class="title-with-badge">
+                                <h2>决策助手</h2>
+                                <span class="badge domain-label">已识别：饮食决策</span>
+                            </div>
+                            <p>当前会话：${state.chat.sessionId ? escapeHtml(state.chat.sessionId) : "发送消息时自动创建"}</p>
                         </div>
                         <div class="inline-actions">
-                            <button class="btn ${state.chat.sourceMode === "PERSONAL" ? "soft" : "ghost"}" data-action="set-source" data-source="PERSONAL">个人库</button>
-                            <button class="btn ${state.chat.sourceMode === "PUBLIC" ? "soft" : "ghost"}" data-action="set-source" data-source="PUBLIC">公共库</button>
                             <button class="btn ghost" data-action="new-session">新会话</button>
                         </div>
                     </div>
@@ -346,18 +353,25 @@
                             ${["早餐想吃方便一点", "晚饭推荐清淡低脂的", "今天心情一般，想吃点热乎的", "换一批，不想吃刚才那些", "我胃不舒服，应该吃什么"].map((text) => `<button class="chip" data-action="quick-message" data-message="${escapeHtml(text)}">${escapeHtml(text)}</button>`).join("")}
                         </div>
                     </div>
-                    <div class="card">
-                        <h3>使用提示</h3>
-                        <p class="muted">PERSONAL 模式依赖你的个人餐食库；如果还没有数据，可以先去维护餐食，或切换到 PUBLIC 模式体验。</p>
+                    <div class="card source-panel">
+                        <div class="card-title">
+                            <div>
+                                <h3>决策数据</h3>
+                                <p>当前：${escapeHtml(sourceLabel)}</p>
+                            </div>
+                        </div>
+                        <p class="muted">默认优先参考你的常吃餐食。数据不足时可以临时使用公共餐食，添加常吃餐食会让结果更贴近你。</p>
                         <div class="button-row">
-                            <a class="btn soft" href="#/diet/meals/personal">维护餐食</a>
-                            <a class="btn ghost" href="#/diet/meals/public">看公共库</a>
+                            <button class="btn ${state.chat.sourceMode === "PERSONAL" ? "soft" : "ghost"}" data-action="set-source" data-source="PERSONAL">优先用我的数据</button>
+                            <button class="btn ${state.chat.sourceMode === "PUBLIC" ? "soft" : "ghost"}" data-action="set-source" data-source="PUBLIC">使用公共数据</button>
+                            <a class="btn ghost" href="#/diet/meals/personal">管理我的数据</a>
                         </div>
                     </div>
                 </aside>
             </section>
         `;
         scrollMessagesToBottom();
+        triggerPendingPrompt();
     }
     function renderMessage(message) {
         const mealCards = (message.meals || []).map((meal) => renderMealCard(meal, { feedback: true, sessionId: message.sessionId })).join("");
@@ -382,14 +396,12 @@
             messages.scrollTop = messages.scrollHeight;
         }
     }
-    async function submitChat(form) {
-        const messageInput = form.elements.message;
-        const message = messageInput.value.trim();
-        if (!message || state.chat.sending) {
+    async function sendChatMessage(message) {
+        const text = String(message || "").trim();
+        if (!text || state.chat.sending) {
             return;
         }
-        state.chat.messages.push({ role: "user", text: message });
-        messageInput.value = "";
+        state.chat.messages.push({ role: "user", text });
         state.chat.sending = true;
         renderChat();
         try {
@@ -399,7 +411,7 @@
             }
             const response = await DietApi.chat({
                 sessionId: state.chat.sessionId,
-                message,
+                message: text,
                 sourceMode: state.chat.sourceMode,
                 context: {}
             });
@@ -421,15 +433,53 @@
             renderChat();
         }
     }
-    function resetChat() {
-        state.chat.sessionId = null;
-        state.chat.messages = [
+    async function submitChat(form) {
+        const messageInput = form.elements.message;
+        const message = messageInput.value.trim();
+        if (!message || state.chat.sending) {
+            return;
+        }
+        messageInput.value = "";
+        await sendChatMessage(message);
+    }
+    function defaultChatMessages() {
+        return [
             {
                 role: "assistant",
-                text: "已开启新会话。告诉我你的用餐时间、口味、场景或健康目标，我来推荐。"
+                text: "告诉我你的用餐时间、口味、场景或健康目标，我来帮你把这次选择想清楚。"
             }
         ];
+    }
+    function resetChat() {
+        state.chat.sessionId = null;
+        state.chat.pendingPrompt = "";
+        state.chat.autoSending = false;
+        state.chat.messages = defaultChatMessages();
         renderChat();
+    }
+    function prepareChatFromHome(prompt) {
+        state.chat.domain = "DIET";
+        state.chat.sourceMode = "PERSONAL";
+        state.chat.sessionId = null;
+        state.chat.sending = false;
+        state.chat.pendingPrompt = prompt;
+        state.chat.autoSending = false;
+        state.chat.messages = [];
+    }
+    function triggerPendingPrompt() {
+        if (!state.chat.pendingPrompt || state.chat.autoSending || state.chat.sending || currentRoute() !== "/diet/chat") {
+            return;
+        }
+        const prompt = state.chat.pendingPrompt;
+        state.chat.pendingPrompt = "";
+        state.chat.autoSending = true;
+        window.setTimeout(async () => {
+            try {
+                await sendChatMessage(prompt);
+            } finally {
+                state.chat.autoSending = false;
+            }
+        }, 0);
     }
     async function renderPersonalMeals() {
         if (!state.slotOptions) {
@@ -449,7 +499,7 @@
                     <div class="card-title">
                         <div>
                             <h2>个人餐食</h2>
-                            <p>维护常吃餐食，聊天推荐时可切换到个人库。</p>
+                            <p>维护常吃餐食，决策时会优先参考这些数据。</p>
                         </div>
                         <button class="btn primary" data-action="new-meal">新增餐食</button>
                     </div>
@@ -650,9 +700,9 @@
                 <div class="card-title">
                     <div>
                         <h2>公共餐食</h2>
-                        <p>系统预置餐食库，只读展示，可在聊天页切换到 PUBLIC 模式体验。</p>
+                        <p>系统预置餐食库，只读展示。需要快速体验时，可以在决策助手里临时使用公共数据。</p>
                     </div>
-                    <a class="btn primary" href="#/diet/chat">去聊天推荐</a>
+                    <a class="btn primary" href="#/diet/chat">去决策助手</a>
                 </div>
                 <div id="publicMealList">${renderMealList(state.publicMeals, {})}</div>
             </section>
@@ -1065,16 +1115,24 @@
             selectTrace(target.dataset.traceId);
         }
     }
+    function isDietPrompt(prompt) {
+        return ["吃", "饭", "餐", "早餐", "午餐", "晚餐", "夜宵", "饮食", "清淡", "低脂", "热乎", "胃不舒服"].some((word) => prompt.includes(word));
+    }
     function submitGeneralDecision(form) {
         const prompt = String(new FormData(form).get("prompt") || "").trim();
         state.home.generalPrompt = prompt;
         if (!prompt) {
             state.home.notice = "先写下一个正在纠结的选择，再开始。";
-        } else if (["吃", "饭", "餐", "早餐", "午餐", "晚餐", "饮食"].some((word) => prompt.includes(word))) {
-            state.home.notice = "这看起来是饮食相关选择。当前可以进入饮食模式继续处理。";
-        } else {
-            state.home.notice = "通用决策入口已预留；当前完整可用的是饮食决策模式。";
+            renderGeneralHome();
+            return;
         }
+        if (isDietPrompt(prompt)) {
+            state.home.notice = "";
+            prepareChatFromHome(prompt);
+            navigate("/diet/chat");
+            return;
+        }
+        state.home.notice = "这个场景还在接入中。现在可以先把目标、约束和候选写清楚；吃什么类问题已经可以直接进入决策助手。";
         renderGeneralHome();
     }
     function handleSubmit(event) {
