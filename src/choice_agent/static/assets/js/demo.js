@@ -138,22 +138,150 @@
         }
     };
 
+    const defaultConstraintDrafts = {
+        career: [
+            { label: "更看重长期发展", kind: "soft", value: "成长和方向优先" },
+            { label: "薪酬不能明显低于当前预期", kind: "hard", value: "薪酬达标" }
+        ],
+        learning: [
+            { label: "每周学习时间有限", kind: "hard", value: "每周 6 小时以内" },
+            { label: "希望有实际项目练习", kind: "soft", value: "实践优先" }
+        ],
+        shopping: [
+            { label: "适合高频通勤", kind: "hard", value: "轻便和续航优先" },
+            { label: "预算需要可控", kind: "soft", value: "性价比优先" }
+        ],
+        generic: [
+            { label: "先满足核心目标", kind: "hard", value: "目标匹配" },
+            { label: "风险尽量可控", kind: "soft", value: "低风险" }
+        ]
+    };
+
+    function stableId(prefix, index) {
+        return `${prefix}-${Date.now().toString(36)}-${index}`;
+    }
+
+    function constraintDraftFromConstraint(constraint, index) {
+        return {
+            id: `constraint-draft-${constraint.key || index}`,
+            sourceConstraintKey: constraint.key || "",
+            label: constraint.label || "",
+            kind: constraint.kind || "hard",
+            value: constraint.value === undefined || constraint.value === null ? "" : String(constraint.value)
+        };
+    }
+
+    function blankConstraintDraft(index) {
+        return { id: stableId("constraint-draft", index), sourceConstraintKey: "", label: "", kind: "hard", value: "" };
+    }
+
+    function fixtureConstraintDrafts(domain, constraints) {
+        if (Array.isArray(constraints) && constraints.length) {
+            return constraints.map(constraintDraftFromConstraint);
+        }
+        const defaults = defaultConstraintDrafts[domain] || defaultConstraintDrafts.generic;
+        return defaults.map((item, index) => ({
+            id: stableId("constraint-draft", index),
+            sourceConstraintKey: "",
+            label: item.label,
+            kind: item.kind,
+            value: item.value
+        }));
+    }
+
+    function traceForStage(stage) {
+        return [
+            { id: "understand", label: "理解目标", detail: "根据输入识别决策领域和候选结构。", status: "done" },
+            { id: "constraints", label: "确认约束", detail: "让用户确认硬条件和重要偏好。", status: stage === "constraint_input" ? "current" : "done" },
+            { id: "collect", label: "准备候选", detail: "让用户确认、补充或编辑候选项。", status: stage === "constraint_input" ? "todo" : stage === "candidate_input" ? "current" : "done" },
+            { id: "compare", label: "比较候选", detail: "使用演示属性和权重进行稳定排序。", status: stage === "compare" ? "current" : "todo" },
+            { id: "decide", label: "生成建议", detail: "在用户确认或调整权重后生成结论。", status: "todo" }
+        ];
+    }
+
+    function applyConstraintInputStage(state, prompt, candidates) {
+        const promptItems = promptDrafts(prompt, candidates);
+        state.stage = "constraint_input";
+        state.status = "collecting_constraints";
+        state.candidateState = "draft";
+        state.nextAction = "collect_constraints";
+        state.constraintInput = {
+            prefilledFrom: Array.isArray(state.constraints) && state.constraints.length ? "fixture" : "domain_default",
+            items: fixtureConstraintDrafts(state.domain, state.constraints)
+        };
+        state.candidateInput = {
+            prefilledFrom: promptItems.length ? "prompt" : "fixture",
+            items: promptItems.length ? promptItems : fixtureDrafts(candidates)
+        };
+        state.trace = traceForStage("constraint_input");
+        return state;
+    }
+    function draftId(index) {
+        return stableId("draft", index);
+    }
+
+    function blankDraft(index) {
+        return { id: draftId(index), sourceCandidateId: "", name: "", summary: "" };
+    }
+
+    function draftFromCandidate(candidate, index) {
+        return {
+            id: `draft-${candidate.id || index}`,
+            sourceCandidateId: candidate.id || "",
+            name: candidate.name || "",
+            summary: candidate.summary || ""
+        };
+    }
+
+    function promptDrafts(prompt, candidates) {
+        const names = candidateNames(prompt);
+        if (names.length < 2) {
+            return [];
+        }
+        return names.map((name, index) => {
+            const source = candidates[index] || {};
+            return {
+                id: draftId(index),
+                sourceCandidateId: source.id || "",
+                name,
+                summary: source.summary || "等待你补充更多信息，当前先按演示维度比较。"
+            };
+        });
+    }
+
+    function fixtureDrafts(candidates) {
+        const source = Array.isArray(candidates) && candidates.length ? candidates : [
+            demoCandidate("generic-1", "方案 A", "等待你补充更多信息，当前先按演示维度比较。", {}, "这是用于展示结构化比较的演示属性，不代表真实外部数据。", "fit"),
+            demoCandidate("generic-2", "方案 B", "等待你补充更多信息，当前先按演示维度比较。", {}, "这是用于展示结构化比较的演示属性，不代表真实外部数据。", "fit")
+        ];
+        return source.map(draftFromCandidate);
+    }
+
+    function applyCandidateInputStage(state, prompt, candidates, prefilledFrom) {
+        const promptItems = promptDrafts(prompt, candidates);
+        state.stage = "candidate_input";
+        state.status = "collecting_candidates";
+        state.candidateState = "draft";
+        state.nextAction = "collect_candidates";
+        state.candidateInput = {
+            prefilledFrom: promptItems.length ? "prompt" : prefilledFrom,
+            items: promptItems.length ? promptItems : fixtureDrafts(candidates)
+        };
+        state.trace = traceForStage("candidate_input");
+        return state;
+    }
+
     function baseState(fixture, prompt) {
         const state = clone(fixture);
         const timestamp = nowIso();
         state.id = `${fixture.id}-${Date.now().toString(36)}`;
         state.goal = prompt || fixture.goal;
         state.assumptions = ["当前为通用演示数据，非实时搜索结果；用于展示 Choice Agent 如何维护目标、约束、权重、候选和证据。"];
-        state.trace = [
-            { id: "understand", label: "理解目标", detail: "根据输入识别决策领域和候选结构。", status: "done" },
-            { id: "compare", label: "比较候选", detail: "使用演示属性和权重进行稳定排序。", status: "current" },
-            { id: "decide", label: "生成建议", detail: "在用户确认或调整权重后生成结论。", status: "todo" }
-        ];
         state.recommendation = undefined;
         state.revision = 1;
         state.createdAt = timestamp;
         state.updatedAt = timestamp;
-        return state;
+        return applyConstraintInputStage(state, prompt, state.candidates);
     }
 
     function candidateNames(prompt) {
@@ -165,12 +293,13 @@
         const names = candidateNames(prompt);
         const cleanNames = names.length >= 2 ? names : ["方案 A", "方案 B"];
         const timestamp = nowIso();
-        return {
+        const state = {
             id: `demo-generic-${Date.now().toString(36)}`,
-            status: "comparing",
+            status: "collecting_candidates",
             domain: "generic",
-            candidateState: names.length >= 2 ? "complete" : "unknown",
-            nextAction: "compare",
+            stage: "candidate_input",
+            candidateState: "draft",
+            nextAction: "collect_candidates",
             goal: prompt || "比较已有选项，找出当前最值得优先选择的方案",
             constraints: [],
             criteria: [
@@ -189,14 +318,21 @@
             )),
             recommendation: undefined,
             assumptions: ["当前为通用结构演示，不含真实外部数据检索。"],
-            trace: [
-                { id: "understand", label: "理解目标", detail: "将开放式输入整理成可比较的候选结构。", status: "done" },
-                { id: "compare", label: "比较候选", detail: "使用演示属性和权重进行稳定排序。", status: "current" }
-            ],
+            trace: traceForStage("constraint_input"),
             revision: 1,
             createdAt: timestamp,
             updatedAt: timestamp
         };
+        state.candidateInput = {
+            prefilledFrom: names.length >= 2 ? "prompt" : "fixture",
+            items: cleanNames.map((name, index) => ({
+                id: draftId(index),
+                sourceCandidateId: `generic-${index + 1}`,
+                name,
+                summary: state.candidates[index].summary
+            }))
+        };
+        return state;
     }
 
     function detectDomain(prompt, explicitDomain) {
@@ -216,21 +352,33 @@
         if (domain === "generic") {
             return saveDecision(createGeneric(prompt));
         }
-        const state = baseState(fixtures[domain], prompt);
-        if (domain === "career") {
-            const names = candidateNames(prompt);
-            if (names.length >= 2) {
-                state.candidates = state.candidates.map((candidate, index) => {
-                    const name = names[index] || candidate.name;
-                    return {
-                        ...candidate,
-                        name,
-                        evidence: candidate.evidence.map((item) => ({ ...item, candidateId: candidate.id }))
-                    };
-                });
-            }
+        return saveDecision(baseState(fixtures[domain], prompt));
+    }
+
+    function normalizeDecision(decision) {
+        const next = clone(decision);
+        if (!next.stage) {
+            next.stage = Array.isArray(next.candidates) && next.candidates.length ? "compare" : "candidate_input";
         }
-        return saveDecision(state);
+        if (!next.constraintInput) {
+            next.constraintInput = {
+                prefilledFrom: Array.isArray(next.constraints) && next.constraints.length ? "fixture" : "domain_default",
+                items: fixtureConstraintDrafts(next.domain, next.constraints)
+            };
+        }
+        if (!Array.isArray(next.constraintInput.items) || !next.constraintInput.items.length) {
+            next.constraintInput.items = [blankConstraintDraft(0)];
+        }
+        if (!next.candidateInput) {
+            next.candidateInput = {
+                prefilledFrom: "fixture",
+                items: fixtureDrafts(next.candidates)
+            };
+        }
+        if (!Array.isArray(next.candidateInput.items) || !next.candidateInput.items.length) {
+            next.candidateInput.items = [blankDraft(0)];
+        }
+        return next;
     }
 
     function readStore() {
@@ -249,22 +397,212 @@
 
     function saveDecision(decision) {
         const store = readStore();
-        store[decision.id] = decision;
+        const normalized = normalizeDecision(decision);
+        store[normalized.id] = normalized;
         writeStore(store);
-        window.localStorage.setItem(LAST_ID_KEY, decision.id);
-        return decision;
+        window.localStorage.setItem(LAST_ID_KEY, normalized.id);
+        return normalized;
     }
 
     function loadDecision(id) {
         const store = readStore();
         if (id && store[id]) {
-            return store[id];
+            return normalizeDecision(store[id]);
         }
         const lastId = window.localStorage.getItem(LAST_ID_KEY);
         if (lastId && store[lastId]) {
-            return store[lastId];
+            return normalizeDecision(store[lastId]);
         }
         return createDecision(fixtures.travel.goal, "travel");
+    }
+
+    function constraintDrafts(decision) {
+        return normalizeDecision(decision).constraintInput.items;
+    }
+
+    function replaceConstraintDrafts(decision, items, prefilledFrom) {
+        return updateDecision(decision, (next) => {
+            next.constraintInput = {
+                prefilledFrom: prefilledFrom || "manual",
+                items: items.length ? items : [blankConstraintDraft(0)]
+            };
+            next.stage = "constraint_input";
+            next.status = "collecting_constraints";
+            next.nextAction = "collect_constraints";
+            next.candidateState = "draft";
+            next.recommendation = undefined;
+            next.trace = traceForStage("constraint_input");
+        });
+    }
+
+    function addConstraintDraft(decision) {
+        const items = constraintDrafts(decision);
+        return replaceConstraintDrafts(decision, [...items, blankConstraintDraft(items.length)], "manual");
+    }
+
+    function removeConstraintDraft(decision, draftIdToRemove) {
+        const items = constraintDrafts(decision).filter((item) => item.id !== draftIdToRemove);
+        return replaceConstraintDrafts(decision, items.length ? items : [blankConstraintDraft(0)], "manual");
+    }
+
+    function resetConstraintDrafts(decision) {
+        return replaceConstraintDrafts(decision, fixtureConstraintDrafts(decision.domain, fixtures[decision.domain] ? fixtures[decision.domain].constraints : decision.constraints), "fixture");
+    }
+
+    function clearConstraintDrafts(decision) {
+        return replaceConstraintDrafts(decision, [blankConstraintDraft(0)], "manual");
+    }
+
+    function constraintFromDraft(draft, index) {
+        const label = String(draft.label || "").trim();
+        return {
+            key: draft.sourceConstraintKey || `customConstraint${index + 1}`,
+            label,
+            kind: draft.kind === "soft" ? "soft" : "hard",
+            operator: "preference",
+            value: String(draft.value || "").trim() || label,
+            source: "user",
+            confidence: draft.kind === "soft" ? 0.85 : 1
+        };
+    }
+
+    function confirmConstraintDrafts(decision) {
+        const normalized = normalizeDecision(decision);
+        const valid = normalized.constraintInput.items
+            .map((item) => ({ ...item, label: String(item.label || "").trim(), value: String(item.value || "").trim() }))
+            .filter((item) => item.label);
+        const next = updateDecision(normalized, (draft) => {
+            draft.constraints = valid.map(constraintFromDraft);
+            draft.constraintInput = { prefilledFrom: normalized.constraintInput.prefilledFrom || "manual", items: valid.length ? valid : [blankConstraintDraft(0)] };
+            draft.stage = "candidate_input";
+            draft.status = "collecting_candidates";
+            draft.candidateState = "draft";
+            draft.nextAction = "collect_candidates";
+            draft.recommendation = undefined;
+            draft.trace = traceForStage("candidate_input");
+        });
+        return { decision: next, warning: valid.length ? null : "已跳过约束，接下来确认候选项。" };
+    }
+
+    function editConstraints(decision) {
+        return updateDecision(decision, (next) => {
+            next.stage = "constraint_input";
+            next.status = "collecting_constraints";
+            next.nextAction = "collect_constraints";
+            next.candidateState = "draft";
+            next.constraintInput = {
+                prefilledFrom: "manual",
+                items: fixtureConstraintDrafts(next.domain, next.constraints)
+            };
+            next.recommendation = undefined;
+            next.trace = traceForStage("constraint_input");
+        });
+    }
+    function candidateDrafts(decision) {
+        return normalizeDecision(decision).candidateInput.items;
+    }
+
+    function replaceCandidateDrafts(decision, items, prefilledFrom) {
+        return updateDecision(decision, (next) => {
+            next.candidateInput = {
+                prefilledFrom: prefilledFrom || "manual",
+                items: items.length ? items : [blankDraft(0)]
+            };
+            next.stage = "candidate_input";
+            next.candidateState = "draft";
+            next.nextAction = "collect_candidates";
+            next.status = "collecting_candidates";
+            next.recommendation = undefined;
+            next.trace = traceForStage("candidate_input");
+        });
+    }
+
+    function addCandidateDraft(decision) {
+        const items = candidateDrafts(decision);
+        return replaceCandidateDrafts(decision, [...items, blankDraft(items.length)], "manual");
+    }
+
+    function removeCandidateDraft(decision, draftIdToRemove) {
+        const items = candidateDrafts(decision).filter((item) => item.id !== draftIdToRemove);
+        return replaceCandidateDrafts(decision, items.length ? items : [blankDraft(0)], "manual");
+    }
+
+    function resetCandidateDrafts(decision) {
+        const fixture = fixtures[decision.domain];
+        const source = fixture ? fixture.candidates : decision.candidates;
+        return replaceCandidateDrafts(decision, fixtureDrafts(source), "fixture");
+    }
+
+    function clearCandidateDrafts(decision) {
+        return replaceCandidateDrafts(decision, [blankDraft(0)], "manual");
+    }
+
+    function defaultAttributes(criteria, index) {
+        return (criteria || []).reduce((result, criterion, criterionIndex) => {
+            const offset = (index * 7 + criterionIndex * 3) % 15;
+            result[criterion.key] = criterion.direction === "lower_better" ? 28 + offset : 82 - offset;
+            return result;
+        }, {});
+    }
+
+    function candidateFromDraft(decision, draft, index) {
+        const name = String(draft.name || "").trim();
+        const summary = String(draft.summary || "").trim() || "等待你补充更多信息，当前先按演示维度比较。";
+        const source = (decision.candidates || []).find((candidate) => candidate.id === draft.sourceCandidateId);
+        const id = source ? source.id : `custom-${String(draft.id || index).replace(/[^a-zA-Z0-9-]/g, "")}`;
+        if (source) {
+            const next = clone(source);
+            next.name = name;
+            next.summary = summary;
+            next.eliminated = false;
+            next.evidence = (next.evidence || []).map((item) => ({ ...item, candidateId: next.id }));
+            return next;
+        }
+        const strongest = (decision.criteria || [])[0] || { key: "fit", label: "匹配需求" };
+        return demoCandidate(
+            id,
+            name,
+            summary,
+            defaultAttributes(decision.criteria, index),
+            `「${name}」是你补充的演示候选，当前使用本地演示属性参与比较。`,
+            strongest.key
+        );
+    }
+
+    function confirmCandidateDrafts(decision) {
+        const normalized = normalizeDecision(decision);
+        const valid = normalized.candidateInput.items
+            .map((item) => ({ ...item, name: String(item.name || "").trim(), summary: String(item.summary || "").trim() }))
+            .filter((item) => item.name);
+        if (valid.length < 2) {
+            return { decision: normalized, error: "至少需要 2 个候选项，才能开始比较。" };
+        }
+        const next = updateDecision(normalized, (draft) => {
+            draft.candidates = valid.map((item, index) => candidateFromDraft(normalized, item, index));
+            draft.candidateInput = { prefilledFrom: normalized.candidateInput.prefilledFrom || "manual", items: valid };
+            draft.stage = "compare";
+            draft.status = "comparing";
+            draft.candidateState = "complete";
+            draft.nextAction = "compare";
+            draft.recommendation = undefined;
+            draft.trace = traceForStage("compare");
+        });
+        return { decision: next, error: null };
+    }
+
+    function editCandidates(decision) {
+        return updateDecision(decision, (next) => {
+            next.stage = "candidate_input";
+            next.status = "collecting_candidates";
+            next.candidateState = "draft";
+            next.nextAction = "collect_candidates";
+            next.candidateInput = {
+                prefilledFrom: "manual",
+                items: fixtureDrafts(next.candidates)
+            };
+            next.recommendation = undefined;
+            next.trace = traceForStage("candidate_input");
+        });
     }
 
     function normalize(value, direction) {
@@ -277,6 +615,9 @@
     }
 
     function rank(decision) {
+        if (!decision || !Array.isArray(decision.candidates) || !Array.isArray(decision.criteria)) {
+            return [];
+        }
         const totalWeight = decision.criteria.reduce((sum, criterion) => sum + Number(criterion.weight || 0), 0) || 1;
         return decision.candidates
             .map((candidate, index) => {
@@ -298,6 +639,9 @@
     }
 
     function explain(decision) {
+        if (decision.stage === "constraint_input" || decision.stage === "candidate_input" || decision.candidateState !== "complete") {
+            return { candidateId: null, conclusion: "先确认候选项，再生成演示结论。", reasons: [], tradeOffs: [] };
+        }
         const active = rank(decision).filter((item) => !item.candidate.eliminated);
         const top = active[0];
         if (!top) {
@@ -324,7 +668,7 @@
     }
 
     function updateDecision(decision, updater) {
-        const next = clone(decision);
+        const next = normalizeDecision(decision);
         updater(next);
         next.revision = Number(next.revision || 0) + 1;
         next.updatedAt = nowIso();
@@ -337,6 +681,22 @@
         loadDecision,
         saveDecision,
         updateDecision,
+        constraintDrafts,
+        replaceConstraintDrafts,
+        addConstraintDraft,
+        removeConstraintDraft,
+        resetConstraintDrafts,
+        clearConstraintDrafts,
+        confirmConstraintDrafts,
+        editConstraints,
+        candidateDrafts,
+        replaceCandidateDrafts,
+        addCandidateDraft,
+        removeCandidateDraft,
+        resetCandidateDrafts,
+        clearCandidateDrafts,
+        confirmCandidateDrafts,
+        editCandidates,
         rank,
         explain,
         detectDomain

@@ -33,9 +33,16 @@
             <a href="#/admin/evaluations" data-nav="/admin/evaluations">评估</a>
         </nav>
         <div class="topbar-actions">
-            <div id="themeSwitch" class="theme-switch" aria-label="界面皮肤">
-                <button type="button" data-action="set-theme" data-theme-value="mint" aria-pressed="true">清新绿</button>
-                <button type="button" data-action="set-theme" data-theme-value="pop" aria-pressed="false">活力橙</button>
+            <div id="themeMenu" class="theme-menu">
+                <button id="themeMenuButton" class="theme-menu-button" type="button" data-action="toggle-theme-menu" aria-label="选择界面皮肤" aria-haspopup="menu" aria-expanded="false">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path d="M8.5 4 10 6h4l1.5-2 4 2.4-2.2 4.1V20H6.7v-9.5L4.5 6.4 8.5 4Z" />
+                    </svg>
+                </button>
+                <div class="theme-menu-list hidden" role="menu" aria-label="选择界面皮肤">
+                    <button type="button" role="menuitemradio" data-action="set-theme" data-theme-value="mint" aria-label="清新绿" aria-checked="true"><span class="theme-swatch mint"></span></button>
+                    <button type="button" role="menuitemradio" data-action="set-theme" data-theme-value="pop" aria-label="活力橙" aria-checked="false"><span class="theme-swatch pop"></span></button>
+                </div>
             </div>
             <label class="user-field">
                 <span>用户 ID</span>

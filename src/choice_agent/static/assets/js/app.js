@@ -80,8 +80,28 @@
         document.body.dataset.theme = nextTheme;
         document.querySelectorAll('[data-action="set-theme"]').forEach((button) => {
             const active = button.dataset.themeValue === nextTheme;
-            button.setAttribute("aria-pressed", active ? "true" : "false");
+            button.setAttribute("aria-checked", active ? "true" : "false");
         });
+    }
+    function closeThemeMenu() {
+        const menu = document.querySelector(".theme-menu-list");
+        const button = document.getElementById("themeMenuButton");
+        if (menu) {
+            menu.classList.add("hidden");
+        }
+        if (button) {
+            button.setAttribute("aria-expanded", "false");
+        }
+    }
+    function toggleThemeMenu() {
+        const menu = document.querySelector(".theme-menu-list");
+        const button = document.getElementById("themeMenuButton");
+        if (!menu || !button) {
+            return;
+        }
+        const willOpen = menu.classList.contains("hidden");
+        menu.classList.toggle("hidden", !willOpen);
+        button.setAttribute("aria-expanded", willOpen ? "true" : "false");
     }
     function setTheme(theme) {
         if (!isKnownTheme(theme)) {
@@ -91,7 +111,8 @@
         state.theme = theme;
         const saved = saveTheme(theme);
         applyTheme(theme);
-        showToast(saved ? `已切换为${THEMES[theme]}` : `已切换为${THEMES[theme]}，但无法保存偏好`, saved ? undefined : "error");
+        showToast(saved ? "皮肤已切换" : "皮肤已切换，但无法保存偏好", saved ? undefined : "error");
+        closeThemeMenu();
     }
     function defaultRangeForm() {
         const end = new Date();
@@ -391,10 +412,36 @@
         }
         const decision = ChoiceAgentDemo.loadDecision(demoRouteId(route));
         state.demo.decision = decision;
-        const rankings = ChoiceAgentDemo.rank(decision);
+        const isConstraintInput = decision.stage === "constraint_input";
+        const isCandidateInput = decision.stage === "candidate_input";
+        const rankings = isConstraintInput || isCandidateInput ? [] : ChoiceAgentDemo.rank(decision);
         const activeRankings = rankings.filter((item) => !item.candidate.eliminated);
         const recommendation = decision.recommendation;
         const domainLabel = ChoiceAgentDemo.domainLabels[decision.domain] || decision.domain;
+        const headerActions = isConstraintInput || isCandidateInput
+            ? `<button class="btn ghost" data-action="demo-new">新建演示</button><a class="btn ghost" href="#/">返回首页</a>`
+            : `<button class="btn soft" data-action="demo-complete">生成结论</button><button class="btn ghost" data-action="demo-edit-constraints">返回编辑约束</button><button class="btn ghost" data-action="demo-edit-candidates">返回编辑候选</button><button class="btn ghost" data-action="demo-new">新建演示</button><a class="btn ghost" href="#/">返回首页</a>`;
+        const mainContent = isConstraintInput
+            ? renderDemoConstraintInput(decision)
+            : isCandidateInput
+                ? renderDemoCandidateInput(decision)
+                : `
+                    <section class="section">
+                        <div class="card-title">
+                            <div>
+                                <h3>候选比较</h3>
+                                <p>基于演示属性和当前权重即时排序。排除候选后不会被选为主推荐。</p>
+                            </div>
+                            <span class="badge">版本 ${escapeHtml(decision.revision)}</span>
+                        </div>
+                        <div class="demo-candidates">
+                            ${rankings.map((item, index) => renderDemoCandidate(item, index, decision)).join("")}
+                        </div>
+                    </section>
+                    <section class="section demo-recommendation">
+                        ${renderDemoRecommendation(decision, recommendation)}
+                    </section>
+                `;
         app.innerHTML = `
             <section class="demo-workbench">
                 <header class="section demo-header">
@@ -407,38 +454,120 @@
                         <p>${escapeHtml(decision.goal)}</p>
                     </div>
                     <div class="inline-actions">
-                        <button class="btn soft" data-action="demo-complete">生成结论</button>
-                        <button class="btn ghost" data-action="demo-new">新建演示</button>
-                        <a class="btn ghost" href="#/">返回首页</a>
+                        ${headerActions}
                     </div>
                 </header>
                 <div class="demo-grid">
                     <aside class="section demo-sidebar">
                         ${renderDemoState(decision, activeRankings)}
-                        ${renderDemoWeights(decision)}
+                        ${isConstraintInput || isCandidateInput ? renderDemoNextSteps(decision.stage) : renderDemoWeights(decision)}
                     </aside>
                     <div class="demo-main">
-                        <section class="section">
-                            <div class="card-title">
-                                <div>
-                                    <h3>候选比较</h3>
-                                    <p>基于演示属性和当前权重即时排序。排除候选后不会被选为主推荐。</p>
-                                </div>
-                                <span class="badge">版本 ${escapeHtml(decision.revision)}</span>
-                            </div>
-                            <div class="demo-candidates">
-                                ${rankings.map((item, index) => renderDemoCandidate(item, index, decision)).join("")}
-                            </div>
-                        </section>
-                        <section class="section demo-recommendation">
-                            ${renderDemoRecommendation(decision, recommendation)}
-                        </section>
+                        ${mainContent}
                     </div>
                 </div>
             </section>
         `;
     }
-    function renderDemoState(decision, activeRankings) {
+    function renderDemoConstraintInput(decision) {
+        const drafts = ChoiceAgentDemo.constraintDrafts(decision);
+        const prefilledLabel = decision.constraintInput && decision.constraintInput.prefilledFrom === "domain_default"
+            ? "这个场景没有真实约束输入，已放入领域示例约束；你可以改成自己的条件。"
+            : "已预填演示约束，可修改、删除或清空后重填。";
+        return `
+            <section class="section constraint-input-panel">
+                <div class="card-title">
+                    <div>
+                        <h3>约束准备</h3>
+                        <p>正式使用时，系统会先确认硬条件和重要偏好。演示模式先给一组可编辑示例，确认后再进入候选项准备。</p>
+                    </div>
+                    <span class="badge">版本 ${escapeHtml(decision.revision)}</span>
+                </div>
+                <div class="mode-notice">${escapeHtml(prefilledLabel)}</div>
+                <form id="demoConstraintForm" class="constraint-draft-list">
+                    ${drafts.map((draft, index) => `
+                        <div class="constraint-draft-row" data-draft-id="${escapeHtml(draft.id)}" data-source-constraint-key="${escapeHtml(draft.sourceConstraintKey || "")}">
+                            <label class="field">
+                                <span>约束 ${index + 1}</span>
+                                <input name="constraintLabel" value="${escapeHtml(draft.label)}" placeholder="例如：预算不超过 1500 元">
+                            </label>
+                            <label class="field">
+                                <span>类型</span>
+                                <select name="constraintKind">
+                                    <option value="hard" ${draft.kind !== "soft" ? "selected" : ""}>硬约束</option>
+                                    <option value="soft" ${draft.kind === "soft" ? "selected" : ""}>偏好</option>
+                                </select>
+                            </label>
+                            <label class="field">
+                                <span>取值 / 说明</span>
+                                <input name="constraintValue" value="${escapeHtml(draft.value)}" placeholder="例如：1500 元以内、成长优先">
+                            </label>
+                            <button class="btn ghost" type="button" data-action="demo-remove-constraint" data-draft-id="${escapeHtml(draft.id)}">删除</button>
+                        </div>
+                    `).join("")}
+                </form>
+                <div class="candidate-draft-actions">
+                    <button class="btn ghost" type="button" data-action="demo-add-constraint">新增约束</button>
+                    <button class="btn ghost" type="button" data-action="demo-reset-constraints">填入演示约束</button>
+                    <button class="btn ghost" type="button" data-action="demo-clear-constraints">清空</button>
+                    <button class="btn primary" type="button" data-action="demo-confirm-constraints">确认约束，继续候选项</button>
+                </div>
+            </section>
+        `;
+    }
+    function renderDemoCandidateInput(decision) {
+        const drafts = ChoiceAgentDemo.candidateDrafts(decision);
+        const prefilledLabel = decision.candidateInput && decision.candidateInput.prefilledFrom === "prompt"
+            ? "已从你的输入中识别候选项，可继续修正。"
+            : "已预填演示候选项，可修改、删除或清空后重填。";
+        return `
+            <section class="section candidate-input-panel">
+                <div class="card-title">
+                    <div>
+                        <h3>候选项准备</h3>
+                        <p>正式使用时，这里需要先补充要比较的候选项。演示模式会提供可编辑示例，确认后再进入比较。</p>
+                    </div>
+                    <span class="badge">版本 ${escapeHtml(decision.revision)}</span>
+                </div>
+                <div class="mode-notice">${escapeHtml(prefilledLabel)}</div>
+                <form id="demoCandidateForm" class="candidate-draft-list">
+                    ${drafts.map((draft, index) => `
+                        <div class="candidate-draft-row" data-draft-id="${escapeHtml(draft.id)}" data-source-candidate-id="${escapeHtml(draft.sourceCandidateId || "")}">
+                            <label class="field">
+                                <span>候选 ${index + 1}</span>
+                                <input name="candidateName" value="${escapeHtml(draft.name)}" placeholder="候选名称，例如 A 公司、莫干山、方案 A">
+                            </label>
+                            <label class="field candidate-summary-field">
+                                <span>一句话说明</span>
+                                <textarea name="candidateSummary" placeholder="补充你对这个候选的关键信息。">${escapeHtml(draft.summary)}</textarea>
+                            </label>
+                            <button class="btn ghost" type="button" data-action="demo-remove-candidate" data-draft-id="${escapeHtml(draft.id)}">删除</button>
+                        </div>
+                    `).join("")}
+                </form>
+                <div class="candidate-draft-actions">
+                    <button class="btn ghost" type="button" data-action="demo-add-candidate">新增候选</button>
+                    <button class="btn ghost" type="button" data-action="demo-reset-candidates">填入演示候选项</button>
+                    <button class="btn ghost" type="button" data-action="demo-clear-candidates">清空</button>
+                    <button class="btn primary" type="button" data-action="demo-confirm-candidates">确认候选，开始比较</button>
+                </div>
+            </section>
+        `;
+    }
+    function renderDemoNextSteps(stage) {
+        const constraintStatus = stage === "constraint_input" ? "current" : "done";
+        const candidateStatus = stage === "candidate_input" ? "current" : stage === "constraint_input" ? "todo" : "done";
+        return `
+            <div class="subtle-divider"></div>
+            <div class="card-title"><div><h3>下一步</h3><p>先确认约束和候选，再进入排序和结论。</p></div></div>
+            <div class="demo-list">
+                <div data-status="${constraintStatus}"><strong>1. 确认约束</strong><span>硬条件和重要偏好可以先写清楚。</span></div>
+                <div data-status="${candidateStatus}"><strong>2. 确认候选</strong><span>至少保留 2 个有效候选。</span></div>
+                <div><strong>3. 调整权重</strong><span>根据你更看重的维度重新排序。</span></div>
+                <div><strong>4. 生成结论</strong><span>用演示数据展示推荐理由和替代项。</span></div>
+            </div>
+        `;
+    }    function renderDemoState(decision, activeRankings) {
         const constraints = (decision.constraints || []).length
             ? `<div class="demo-list">${decision.constraints.map((item) => `<div><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.kind)} · ${escapeHtml(item.value)}</span></div>`).join("")}</div>`
             : `<div class="empty compact">暂无硬约束，当前先比较偏好维度。</div>`;
@@ -447,7 +576,7 @@
             ? `<div class="chips">${questions.flatMap((question) => question.options.map((option) => `<button class="chip" data-action="demo-answer-question" data-question-id="${escapeHtml(question.id)}" data-answer="${escapeHtml(option)}">${escapeHtml(option)}</button>`)).join("")}</div><p class="muted">${escapeHtml(questions[0].question)}</p>`
             : `<p class="muted">关键条件已足够进入演示比较。</p>`;
         return `
-            <div class="card-title"><div><h3>决策状态</h3><p>${escapeHtml(activeRankings.length)} 个可选候选</p></div></div>
+            <div class="card-title"><div><h3>决策状态</h3><p>${escapeHtml(decision.stage === "constraint_input" ? `${ChoiceAgentDemo.constraintDrafts(decision).filter((item) => String(item.label || "").trim()).length} 个约束草稿` : decision.stage === "candidate_input" ? `${ChoiceAgentDemo.candidateDrafts(decision).filter((item) => String(item.name || "").trim()).length} 个候选草稿` : `${activeRankings.length} 个可选候选`)}</p></div></div>
             <h4>约束</h4>
             ${constraints}
             <div class="subtle-divider"></div>
@@ -561,6 +690,10 @@
         if (!state.demo.decision) {
             return;
         }
+        if (state.demo.decision.stage === "constraint_input" || state.demo.decision.stage === "candidate_input" || state.demo.decision.candidateState !== "complete") {
+            showToast("先确认候选项，再生成结论。", "error");
+            return;
+        }
         state.demo.decision = ChoiceAgentDemo.updateDecision(state.demo.decision, (decision) => {
             decision.recommendation = ChoiceAgentDemo.explain(decision);
             decision.status = "decided";
@@ -577,6 +710,143 @@
             decision.unansweredQuestions = (decision.unansweredQuestions || []).map((question) => question.id === questionId ? { ...question, answered: true, answer } : question);
             decision.assumptions = [...(decision.assumptions || []), `你对澄清问题选择了：${answer}`];
         });
+        renderDemoWorkbench(currentRoute());
+    }
+    function collectDemoConstraintDrafts() {
+        return Array.from(document.querySelectorAll(".constraint-draft-row")).map((row) => {
+            const labelInput = row.querySelector('input[name="constraintLabel"]');
+            const kindInput = row.querySelector('select[name="constraintKind"]');
+            const valueInput = row.querySelector('input[name="constraintValue"]');
+            return {
+                id: row.dataset.draftId || "",
+                sourceConstraintKey: row.dataset.sourceConstraintKey || "",
+                label: labelInput ? labelInput.value.trim() : "",
+                kind: kindInput ? kindInput.value : "hard",
+                value: valueInput ? valueInput.value.trim() : ""
+            };
+        });
+    }
+    function syncDemoConstraintDrafts() {
+        if (!state.demo.decision || !document.getElementById("demoConstraintForm")) {
+            return;
+        }
+        state.demo.decision = ChoiceAgentDemo.replaceConstraintDrafts(state.demo.decision, collectDemoConstraintDrafts(), "manual");
+    }
+    function addDemoConstraintDraft() {
+        if (!state.demo.decision) {
+            return;
+        }
+        syncDemoConstraintDrafts();
+        state.demo.decision = ChoiceAgentDemo.addConstraintDraft(state.demo.decision);
+        renderDemoWorkbench(currentRoute());
+    }
+    function removeDemoConstraintDraft(draftId) {
+        if (!state.demo.decision) {
+            return;
+        }
+        syncDemoConstraintDrafts();
+        state.demo.decision = ChoiceAgentDemo.removeConstraintDraft(state.demo.decision, draftId);
+        renderDemoWorkbench(currentRoute());
+    }
+    function resetDemoConstraintDrafts() {
+        if (!state.demo.decision) {
+            return;
+        }
+        state.demo.decision = ChoiceAgentDemo.resetConstraintDrafts(state.demo.decision);
+        renderDemoWorkbench(currentRoute());
+    }
+    function clearDemoConstraintDrafts() {
+        if (!state.demo.decision) {
+            return;
+        }
+        state.demo.decision = ChoiceAgentDemo.clearConstraintDrafts(state.demo.decision);
+        renderDemoWorkbench(currentRoute());
+    }
+    function confirmDemoConstraintDrafts() {
+        if (!state.demo.decision) {
+            return;
+        }
+        syncDemoConstraintDrafts();
+        const result = ChoiceAgentDemo.confirmConstraintDrafts(state.demo.decision);
+        state.demo.decision = result.decision;
+        if (result.warning) {
+            showToast(result.warning);
+        }
+        renderDemoWorkbench(currentRoute());
+    }
+    function editDemoConstraintDrafts() {
+        if (!state.demo.decision) {
+            return;
+        }
+        state.demo.decision = ChoiceAgentDemo.editConstraints(state.demo.decision);
+        renderDemoWorkbench(currentRoute());
+    }    function collectDemoCandidateDrafts() {
+        return Array.from(document.querySelectorAll(".candidate-draft-row")).map((row) => {
+            const nameInput = row.querySelector('input[name="candidateName"]');
+            const summaryInput = row.querySelector('textarea[name="candidateSummary"]');
+            return {
+                id: row.dataset.draftId || "",
+                sourceCandidateId: row.dataset.sourceCandidateId || "",
+                name: nameInput ? nameInput.value.trim() : "",
+                summary: summaryInput ? summaryInput.value.trim() : ""
+            };
+        });
+    }
+    function syncDemoCandidateDrafts() {
+        if (!state.demo.decision || !document.getElementById("demoCandidateForm")) {
+            return;
+        }
+        state.demo.decision = ChoiceAgentDemo.replaceCandidateDrafts(state.demo.decision, collectDemoCandidateDrafts(), "manual");
+    }
+    function addDemoCandidateDraft() {
+        if (!state.demo.decision) {
+            return;
+        }
+        syncDemoCandidateDrafts();
+        state.demo.decision = ChoiceAgentDemo.addCandidateDraft(state.demo.decision);
+        renderDemoWorkbench(currentRoute());
+    }
+    function removeDemoCandidateDraft(draftId) {
+        if (!state.demo.decision) {
+            return;
+        }
+        syncDemoCandidateDrafts();
+        state.demo.decision = ChoiceAgentDemo.removeCandidateDraft(state.demo.decision, draftId);
+        renderDemoWorkbench(currentRoute());
+    }
+    function resetDemoCandidateDrafts() {
+        if (!state.demo.decision) {
+            return;
+        }
+        state.demo.decision = ChoiceAgentDemo.resetCandidateDrafts(state.demo.decision);
+        renderDemoWorkbench(currentRoute());
+    }
+    function clearDemoCandidateDrafts() {
+        if (!state.demo.decision) {
+            return;
+        }
+        state.demo.decision = ChoiceAgentDemo.clearCandidateDrafts(state.demo.decision);
+        renderDemoWorkbench(currentRoute());
+    }
+    function confirmDemoCandidateDrafts() {
+        if (!state.demo.decision) {
+            return;
+        }
+        syncDemoCandidateDrafts();
+        const result = ChoiceAgentDemo.confirmCandidateDrafts(state.demo.decision);
+        state.demo.decision = result.decision;
+        if (result.error) {
+            showToast(result.error, "error");
+            renderDemoWorkbench(currentRoute());
+            return;
+        }
+        renderDemoWorkbench(currentRoute());
+    }
+    function editDemoCandidateDrafts() {
+        if (!state.demo.decision) {
+            return;
+        }
+        state.demo.decision = ChoiceAgentDemo.editCandidates(state.demo.decision);
         renderDemoWorkbench(currentRoute());
     }
     function renderMessage(message) {
@@ -1330,6 +1600,30 @@
             navigate(`/demo/decision/${encodeURIComponent(decision.id)}`);
         } else if (action === "demo-answer-question") {
             answerDemoQuestion(target.dataset.questionId, target.dataset.answer);
+        } else if (action === "demo-add-constraint") {
+            addDemoConstraintDraft();
+        } else if (action === "demo-remove-constraint") {
+            removeDemoConstraintDraft(target.dataset.draftId);
+        } else if (action === "demo-reset-constraints") {
+            resetDemoConstraintDrafts();
+        } else if (action === "demo-clear-constraints") {
+            clearDemoConstraintDrafts();
+        } else if (action === "demo-confirm-constraints") {
+            confirmDemoConstraintDrafts();
+        } else if (action === "demo-edit-constraints") {
+            editDemoConstraintDrafts();
+        } else if (action === "demo-add-candidate") {
+            addDemoCandidateDraft();
+        } else if (action === "demo-remove-candidate") {
+            removeDemoCandidateDraft(target.dataset.draftId);
+        } else if (action === "demo-reset-candidates") {
+            resetDemoCandidateDrafts();
+        } else if (action === "demo-clear-candidates") {
+            clearDemoCandidateDrafts();
+        } else if (action === "demo-confirm-candidates") {
+            confirmDemoCandidateDrafts();
+        } else if (action === "demo-edit-candidates") {
+            editDemoCandidateDrafts();
         }
     }
     function isDietPrompt(prompt) {
@@ -1382,6 +1676,11 @@
             runEvaluation(form);
         }
     }
+    function closeThemeMenuOnOutsideClick(event) {
+        if (!event.target.closest(".theme-menu")) {
+            closeThemeMenu();
+        }
+    }
     function handleChange(event) {
         const target = event.target.closest("[data-action]");
         if (!target) {
@@ -1409,7 +1708,8 @@
         });
     }
     window.addEventListener("hashchange", render);
-    app.addEventListener("click", handleClick);
+    document.addEventListener("click", closeThemeMenuOnOutsideClick);
+    document.addEventListener("click", handleClick);
     app.addEventListener("change", handleChange);
     app.addEventListener("submit", handleSubmit);
     initTheme();

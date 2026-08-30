@@ -74,11 +74,11 @@
 
 在顶栏右侧用户 ID 附近加入主题切换控件：
 
-- 使用紧凑 segmented control；
+- 使用单个皮肤按钮，点击后展开下拉选项；
 - 文案使用“清新绿”、“活力橙”；
 - 使用 `data-action="set-theme"` 和 `data-theme-value` 供事件代理识别；
 - 保留用户 ID 输入，不改变其行为；
-- 控件应有 `aria-label` 和 `aria-pressed`。
+- 控件应有 `aria-haspopup`、`aria-expanded` 和选项 `aria-checked`。
 
 增加内联启动脚本：
 
@@ -104,7 +104,7 @@
 - 按钮和选中态：增加黑底白字或橙黑组合；
 - badge、chip、stat-card、message bubble、table header、json box 等主要组件补齐主题适配。
 
-新增主题控件样式：尺寸稳定、移动端可换行、选中态明显、不遮挡用户 ID。
+新增主题控件样式：按钮尺寸稳定、下拉层不遮挡主导航、移动端可占满宽度、选中态明显、不遮挡用户 ID。
 
 ### app.js
 
