@@ -3,6 +3,14 @@
 
     const API_BASE = "/api/v1/diet";
     const USER_ID_KEY = "diet.userId";
+    const MODEL_SETTINGS_KEY = "choiceAgentModelSettings";
+    const DEFAULT_MODEL_SETTINGS = {
+        enabled: false,
+        apiKey: "",
+        baseUrl: "https://api.openai.com/v1",
+        mainModel: "gpt-5",
+        lightModel: "gpt-5-mini"
+    };
 
     function getUserId() {
         return localStorage.getItem(USER_ID_KEY) || "1";
@@ -14,10 +22,62 @@
         return normalized;
     }
 
+    function normalizeModelSettings(settings) {
+        const source = settings && typeof settings === "object" ? settings : {};
+        return {
+            enabled: source.enabled === true,
+            apiKey: String(source.apiKey || "").trim(),
+            baseUrl: String(source.baseUrl || DEFAULT_MODEL_SETTINGS.baseUrl).trim() || DEFAULT_MODEL_SETTINGS.baseUrl,
+            mainModel: String(source.mainModel || DEFAULT_MODEL_SETTINGS.mainModel).trim() || DEFAULT_MODEL_SETTINGS.mainModel,
+            lightModel: String(source.lightModel || DEFAULT_MODEL_SETTINGS.lightModel).trim() || DEFAULT_MODEL_SETTINGS.lightModel
+        };
+    }
+
+    function getModelSettings() {
+        try {
+            const raw = localStorage.getItem(MODEL_SETTINGS_KEY);
+            if (!raw) {
+                return { ...DEFAULT_MODEL_SETTINGS };
+            }
+            return normalizeModelSettings(JSON.parse(raw));
+        } catch (error) {
+            return { ...DEFAULT_MODEL_SETTINGS };
+        }
+    }
+
+    function saveModelSettings(settings) {
+        const normalized = normalizeModelSettings(settings);
+        localStorage.setItem(MODEL_SETTINGS_KEY, JSON.stringify(normalized));
+        return normalized;
+    }
+
+    function clearModelSettings() {
+        localStorage.removeItem(MODEL_SETTINGS_KEY);
+        return { ...DEFAULT_MODEL_SETTINGS };
+    }
+
+    function hasConfiguredModel() {
+        const settings = getModelSettings();
+        return settings.enabled && Boolean(settings.apiKey);
+    }
+
+    function attachModelHeaders(headers) {
+        const settings = getModelSettings();
+        if (!settings.enabled || !settings.apiKey) {
+            return;
+        }
+        headers.set("X-Choice-Agent-Model-Enabled", "true");
+        headers.set("X-Choice-Agent-Model-Api-Key", settings.apiKey);
+        headers.set("X-Choice-Agent-Model-Base-Url", settings.baseUrl);
+        headers.set("X-Choice-Agent-Main-Model", settings.mainModel);
+        headers.set("X-Choice-Agent-Light-Model", settings.lightModel);
+    }
+
     async function request(path, options) {
         const config = options || {};
         const headers = new Headers(config.headers || {});
         headers.set("X-User-Id", getUserId());
+        attachModelHeaders(headers);
 
         if (config.body !== undefined && !(config.body instanceof FormData)) {
             headers.set("Content-Type", "application/json");
@@ -80,6 +140,10 @@
     window.DietApi = {
         getUserId,
         setUserId,
+        getModelSettings,
+        saveModelSettings,
+        clearModelSettings,
+        hasConfiguredModel,
         createSession: () => request("/sessions", { method: "POST" }),
         chat: (payload) => request("/chat", { method: "POST", body: payload }),
         listPersonalMeals: () => request("/meals/personal"),
@@ -96,5 +160,3 @@
         evaluate: (payload) => request("/evaluations", { method: "POST", body: payload })
     };
 })();
-
-

@@ -11,7 +11,7 @@ from choice_agent.agents.diet import EvaluationAgent
 from choice_agent.config import Settings
 from choice_agent.db_models import DecisionRecord, MealRecord, TraceRecord
 from choice_agent.orchestration.diet import DietOrchestrator
-from choice_agent.providers.model import ModelProvider
+from choice_agent.providers.model import ModelProvider, OpenAICompatibleProvider
 from choice_agent.repositories.diet_repository import DietRepository
 from choice_agent.schemas import (
     ChatRequest, ChatResponse, DecisionState, EvaluationRequest, FeedbackRequest,
@@ -33,6 +33,55 @@ def get_settings(request: Request) -> Settings:
 def get_provider(request: Request) -> ModelProvider:
     return request.app.state.provider
 
+
+
+
+def _truthy_header(value: str | None) -> bool:
+    return bool(value and value.strip().lower() in {"1", "true", "yes", "on"})
+
+
+def runtime_model_from_headers(
+    base_settings: Settings,
+    base_provider: ModelProvider,
+    model_enabled: str | None,
+    model_api_key: str | None,
+    model_base_url: str | None,
+    main_model: str | None,
+    light_model: str | None,
+) -> tuple[Settings, ModelProvider]:
+    api_key = (model_api_key or "").strip()
+    if not _truthy_header(model_enabled) or not api_key:
+        return base_settings, base_provider
+    runtime_settings = Settings(
+        database_url=base_settings.database_url,
+        model_api_key=api_key,
+        model_base_url=(model_base_url or base_settings.model_base_url).strip() or base_settings.model_base_url,
+        main_model=(main_model or base_settings.main_model).strip() or base_settings.main_model,
+        light_model=(light_model or base_settings.light_model).strip() or base_settings.light_model,
+        model_timeout_seconds=base_settings.model_timeout_seconds,
+        enable_llm=True,
+        debug=base_settings.debug,
+    )
+    return runtime_settings, OpenAICompatibleProvider(runtime_settings)
+
+
+def get_runtime_model(
+    request: Request,
+    model_enabled: str | None = Header(default=None, alias="X-Choice-Agent-Model-Enabled"),
+    model_api_key: str | None = Header(default=None, alias="X-Choice-Agent-Model-Api-Key"),
+    model_base_url: str | None = Header(default=None, alias="X-Choice-Agent-Model-Base-Url"),
+    main_model: str | None = Header(default=None, alias="X-Choice-Agent-Main-Model"),
+    light_model: str | None = Header(default=None, alias="X-Choice-Agent-Light-Model"),
+) -> tuple[Settings, ModelProvider]:
+    return runtime_model_from_headers(
+        request.app.state.settings,
+        request.app.state.provider,
+        model_enabled,
+        model_api_key,
+        model_base_url,
+        main_model,
+        light_model,
+    )
 
 def user_id(x_user_id: int = Header(default=1, alias="X-User-Id")) -> int:
     if x_user_id < 1:
@@ -85,9 +134,13 @@ def chat(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     provider: ModelProvider = Depends(get_provider),
+    runtime_model: tuple[Settings, ModelProvider] | None = Depends(get_runtime_model),
 ) -> ChatResponse:
+    active_settings, active_provider = (
+        runtime_model if isinstance(runtime_model, tuple) else (settings, provider)
+    )
     try:
-        return DietOrchestrator(db, settings, provider).chat(uid, body)
+        return DietOrchestrator(db, active_settings, active_provider).chat(uid, body)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -207,12 +260,16 @@ def evaluate(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     provider: ModelProvider = Depends(get_provider),
+    runtime_model: tuple[Settings, ModelProvider] | None = Depends(get_runtime_model),
 ) -> dict[str, Any]:
+    active_settings, active_provider = (
+        runtime_model if isinstance(runtime_model, tuple) else (settings, provider)
+    )
     if body.start_at >= body.end_at:
         raise HTTPException(status_code=400, detail="评估时间范围不合法")
     rows = DietRepository(db).traces(uid, body.start_at, body.end_at, False, body.limit)
     results: list[dict[str, Any]] = []
-    evaluator = EvaluationAgent(provider, settings.light_model)
+    evaluator = EvaluationAgent(active_provider, active_settings.light_model)
     for row in rows:
         context = AgentContext(
             session_id=row.session_id,
@@ -267,7 +324,7 @@ def evaluate(
         "avgScore": avg,
         "metricAverages": metric_averages,
         "traceResults": results,
-        "llmJudgeEnabled": body.include_llm_judge and provider.enabled,
+        "llmJudgeEnabled": body.include_llm_judge and active_provider.enabled,
     }
 
 

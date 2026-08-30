@@ -101,6 +101,12 @@ CHOICE_AGENT_DEBUG=true
 When model calls fail, intent and explanation agents fall back to local rule
 behavior so the deterministic decision engine can continue to work.
 
+The web UI also has a Settings page at `#/settings` for browser-side model
+configuration. Values saved there are stored in the current browser's
+localStorage and sent to the local backend as request headers for diet chat and
+evaluation requests. If no browser API key is configured, the home page shows demo
+mode and generic non-diet decisions continue to use the local demo workbench.
+
 ## Demo Mode
 
 The web UI includes a generic demo workbench for travel, career offer, learning path,
@@ -268,6 +274,7 @@ CHOICE_AGENT_DEBUG=true
 ```
 
 模型调用失败时，意图和解释 Agent 会回退到本地规则结果，不影响确定性决策引擎运行。
+Web UI 也提供 `#/settings` 设置页，可配置浏览器侧模型 API。该设置保存在当前浏览器的 `localStorage`，并随饮食聊天和评估请求通过请求头发送给本地后端。未配置浏览器 API Key 时，首页会显示演示模式，通用非饮食决策继续使用本地演示工作台。
 
 ## 演示模式
 

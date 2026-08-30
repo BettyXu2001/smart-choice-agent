@@ -27,6 +27,7 @@
     ];
     const state = {
         theme: getSavedTheme(),
+        settings: { model: DietApi.getModelSettings() },
         home: { loaded: false, personalCount: 0, publicCount: 0, generalPrompt: "", notice: "" },
         slotOptions: null,
         personalMeals: [],
@@ -226,12 +227,19 @@
             renderTraces();
         } else if (route === "/admin/evaluations") {
             renderEvaluations();
+        } else if (route === "/settings") {
+            renderSettings();
         } else {
             navigate("/");
         }
         app.focus({ preventScroll: true });
     }
     function renderGeneralHome() {
+        const modelConfigured = DietApi.hasConfiguredModel();
+        const modeTitle = modelConfigured ? "模型配置已启用" : "演示模式";
+        const modeDescription = modelConfigured
+            ? "饮食链路会尝试使用浏览器设置中的模型配置增强理解和解释；通用非饮食问题仍进入演示工作台。"
+            : "未配置浏览器模型 API。通用非饮食问题会使用本地演示数据，饮食助手仍可用本地规则链路。";
         const examples = [
             { text: "周末想出去走走，但不知道去哪里", domain: "travel" },
             { text: "A 公司和 B 公司两个 Offer 各有优缺点，应该怎么选", domain: "career" },
@@ -245,6 +253,11 @@
                     <span class="badge">Choice Agent</span>
                     <h1>把选择题想清楚</h1>
                     <p>说出你正在纠结的选择。系统会先理解目标和约束，再追问关键条件、比较取舍，并把能直接处理的场景带入对应决策能力。</p>
+                    <div class="mode-banner" data-mode="${modelConfigured ? "model" : "demo"}">
+                        <span>${escapeHtml(modeTitle)}</span>
+                        <p>${escapeHtml(modeDescription)}</p>
+                        <a class="btn ghost" href="#/settings">配置 API</a>
+                    </div>
                     <form id="generalDecisionForm" class="decision-entry-form">
                         <label class="field full">
                             <span>你最近在纠结什么？</span>
@@ -276,6 +289,58 @@
                 <span class="muted">开发者入口</span>
                 <a class="btn ghost" href="#/admin/traces">Trace</a>
                 <a class="btn ghost" href="#/admin/evaluations">评估</a>
+            </section>
+        `;
+    }
+    function renderSettings() {
+        const settings = DietApi.getModelSettings();
+        state.settings.model = settings;
+        const configured = settings.enabled && Boolean(settings.apiKey);
+        app.innerHTML = `
+            <section class="settings-layout">
+                <div class="section settings-panel">
+                    <div class="card-title">
+                        <div>
+                            <h2>设置</h2>
+                            <p>配置浏览器侧模型 API。未配置时，通用决策使用本地演示模式。</p>
+                        </div>
+                        <span class="settings-status" data-mode="${configured ? "model" : "demo"}">${configured ? "模型模式" : "演示模式"}</span>
+                    </div>
+                    <form id="modelSettingsForm" class="settings-form">
+                        <label class="toggle-row">
+                            <input type="checkbox" name="enabled" ${settings.enabled ? "checked" : ""}>
+                            <span>启用浏览器模型配置</span>
+                        </label>
+                        <label class="field full secret-field">
+                            <span>API Key</span>
+                            <input type="password" name="apiKey" value="${escapeHtml(settings.apiKey)}" autocomplete="off" placeholder="sk-...">
+                        </label>
+                        <label class="field full">
+                            <span>Base URL</span>
+                            <input type="url" name="baseUrl" value="${escapeHtml(settings.baseUrl)}" placeholder="https://api.openai.com/v1">
+                        </label>
+                        <div class="form-grid two">
+                            <label class="field">
+                                <span>主模型</span>
+                                <input type="text" name="mainModel" value="${escapeHtml(settings.mainModel)}" placeholder="gpt-5">
+                            </label>
+                            <label class="field">
+                                <span>轻量模型</span>
+                                <input type="text" name="lightModel" value="${escapeHtml(settings.lightModel)}" placeholder="gpt-5-mini">
+                            </label>
+                        </div>
+                        <p class="field-hint">API Key 只保存在当前浏览器的 localStorage 中，请不要在共享设备上保存个人密钥。前端设置会随饮食聊天和评估请求通过请求头发送给本地后端，不会写入请求 body。</p>
+                        <div class="button-row">
+                            <button class="btn primary" type="submit">保存设置</button>
+                            <button class="btn ghost" type="button" data-action="clear-model-settings">清除设置</button>
+                        </div>
+                    </form>
+                </div>
+                <aside class="grid settings-side">
+                    ${statCard("当前模式", configured ? "模型模式" : "演示模式", configured ? "饮食助手会尝试调用你配置的模型。" : "通用问题进入本地 demo，饮食助手使用本地规则。")}
+                    ${statCard("通用决策", "演示工作台", "旅行、Offer、学习和购物仍使用前端 fixture。")}
+                    ${statCard("服务端配置", ".env 保留", "后端环境变量仍可作为部署配置。")}
+                </aside>
             </section>
         `;
     }
@@ -1533,6 +1598,31 @@
             renderEvaluations();
         }
     }
+    function saveModelSettings(form) {
+        const formData = new FormData(form);
+        try {
+            state.settings.model = DietApi.saveModelSettings({
+                enabled: formData.get("enabled") === "on",
+                apiKey: formData.get("apiKey"),
+                baseUrl: formData.get("baseUrl"),
+                mainModel: formData.get("mainModel"),
+                lightModel: formData.get("lightModel")
+            });
+            showToast(DietApi.hasConfiguredModel() ? "模型设置已保存" : "设置已保存，当前为演示模式");
+            renderSettings();
+        } catch (error) {
+            showToast("模型设置保存失败", "error");
+        }
+    }
+    function clearModelSettings() {
+        try {
+            state.settings.model = DietApi.clearModelSettings();
+            showToast("模型设置已清除，当前为演示模式");
+            renderSettings();
+        } catch (error) {
+            showToast("模型设置清除失败", "error");
+        }
+    }
     async function saveFeedback(button) {
         await guard(async () => {
             await DietApi.saveFeedback({
@@ -1624,6 +1714,8 @@
             confirmDemoCandidateDrafts();
         } else if (action === "demo-edit-candidates") {
             editDemoCandidateDrafts();
+        } else if (action === "clear-model-settings") {
+            clearModelSettings();
         }
     }
     function isDietPrompt(prompt) {
@@ -1674,6 +1766,9 @@
         } else if (form.id === "evaluationForm") {
             event.preventDefault();
             runEvaluation(form);
+        } else if (form.id === "modelSettingsForm") {
+            event.preventDefault();
+            saveModelSettings(form);
         }
     }
     function closeThemeMenuOnOutsideClick(event) {
