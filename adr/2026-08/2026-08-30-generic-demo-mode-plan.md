@@ -166,11 +166,15 @@ CHANGELOG：需要在 `CHANGELOG.md` 的 `2026-08-30` 下追加一条用户可�
 
 ## Todo
 
-- [ ] 新增前端 demo fixture、领域识别、localStorage、排序和解释工具。
-- [ ] 在静态页面引入 demo 工具脚本。
-- [ ] 扩展首页示例和提交逻辑，让非饮食通用问题进入 demo 工作台，饮食问题保持真实链路。
-- [ ] 新增通用 demo 工作台渲染和交互：权重调整、排除候选、生成结论、返回首页。
-- [ ] 补充 demo 工作台样式并保持现有主题兼容。
-- [ ] 更新 README，说明通用 demo 与饮食真实规则链路的区别。
-- [ ] 更新 CHANGELOG。
-- [ ] 执行 diff 检查、compileall、pytest 和手动页面验证。
+- [x] 新增前端 demo fixture、领域识别、localStorage、排序和解释工具。
+- [x] 在静态页面引入 demo 工具脚本。
+- [x] 扩展首页示例和提交逻辑，让非饮食通用问题进入 demo 工作台，饮食问题保持真实链路。
+- [x] 新增通用 demo 工作台渲染和交互：权重调整、排除候选、生成结论、返回首页。
+- [x] 补充 demo 工作台样式并保持现有主题兼容。
+- [x] 更新 README，说明通用 demo 与饮食真实规则链路的区别。
+- [x] 更新 CHANGELOG。
+- [x] 执行 diff 检查、compileall、pytest 和替代页面验证。
+
+## 验证备注
+
+浏览器控制运行时初始化失败，当前项目也未安装 Playwright，因此未完成真实浏览器点击截图验证。已完成 `node --check`、`python -m compileall -q src scripts`、`python -m pytest`、本地 HTTP 资源/API 检查，以及 Node VM 对 demo 创建、排序、结论和 localStorage 行为的验证。

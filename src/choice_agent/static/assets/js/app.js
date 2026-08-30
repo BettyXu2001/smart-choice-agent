@@ -51,6 +51,9 @@
             report: null,
             loading: false,
             form: defaultRangeForm()
+        },
+        demo: {
+            decision: null
         }
     };
     function isKnownTheme(theme) {
@@ -176,7 +179,7 @@
         let navRoute = route;
         if (route.startsWith("/diet/meals")) {
             navRoute = "/data";
-        } else if (route === "/diet/chat") {
+        } else if (route === "/diet/chat" || route.startsWith("/demo")) {
             navRoute = "/";
         }
         document.querySelectorAll("[data-nav]").forEach((item) => {
@@ -192,6 +195,8 @@
             navigate("/diet/chat");
         } else if (route === "/diet/chat") {
             renderChat();
+        } else if (route === "/demo" || route.startsWith("/demo/decision/")) {
+            renderDemoWorkbench(route);
         } else if (route === "/diet/meals/personal") {
             renderPersonalMeals();
         } else if (route === "/diet/meals/public") {
@@ -207,10 +212,11 @@
     }
     function renderGeneralHome() {
         const examples = [
-            "周末想出去走走，但不知道去哪里",
-            "A 公司和 B 公司两个 Offer 各有优缺点，应该怎么选",
-            "想系统学 AI Agent，但不知道先选哪条学习路径",
-            "今晚不知道吃什么，想要清淡一点"
+            { text: "周末想出去走走，但不知道去哪里", domain: "travel" },
+            { text: "A 公司和 B 公司两个 Offer 各有优缺点，应该怎么选", domain: "career" },
+            { text: "想系统学 AI Agent，但不知道先选哪条学习路径", domain: "learning" },
+            { text: "想换一台适合通勤的轻便电脑", domain: "shopping" },
+            { text: "今晚不知道吃什么，想要清淡一点", domain: "diet" }
         ];
         app.innerHTML = `
             <section class="hero general-home">
@@ -229,20 +235,21 @@
                     </form>
                     ${state.home.notice ? `<div class="mode-notice">${escapeHtml(state.home.notice)}</div>` : ""}
                     <div class="example-grid" aria-label="决策示例">
-                        ${examples.map((example) => `<button class="example-button" type="button" data-action="general-example" data-example="${escapeHtml(example)}">${escapeHtml(example)}</button>`).join("")}
+                        ${examples.map((example) => `<button class="example-button" type="button" data-action="general-example" data-example="${escapeHtml(example.text)}" data-demo-domain="${escapeHtml(example.domain)}">${escapeHtml(example.text)}</button>`).join("")}
                     </div>
                 </div>
                 <aside class="grid stats workflow-stats">
                     ${statCard("描述选择", "一句话开始", "把目标、候选和纠结点先放到同一个入口")}
                     ${statCard("澄清条件", "补关键约束", "信息不足时先追问，不急着给结论")}
                     ${statCard("比较取舍", "解释建议", "展示推荐理由、替代项和下一步")}
-                    ${statCard("已增强场景", "饮食决策", "吃什么类问题会直接进入决策助手")}
+                    ${statCard("通用演示", "旅行 / Offer / 学习 / 购物", "非饮食问题会进入演示工作台，展示结构化比较")}
                 </aside>
             </section>
             <section class="grid three decision-flow" style="margin-top: 18px;">
                 ${featureCard("描述选择", "输入正在纠结的问题，不需要先判断该进入哪个能力。", "#/")}
                 ${featureCard("澄清条件", "系统围绕目标、约束、偏好和场景补齐关键上下文。", "#/")}
                 ${featureCard("比较取舍", "对候选进行排序、解释理由，并保留可追踪的决策过程。", "#/")}
+                ${featureCard("通用 Demo", "用固定演示数据体验旅行、Offer、学习路径和购物决策工作台。", "#/demo")}
             </section>
             <section class="developer-links" aria-label="开发者入口">
                 <span class="muted">开发者入口</span>
@@ -372,6 +379,205 @@
         `;
         scrollMessagesToBottom();
         triggerPendingPrompt();
+    }
+    function demoRouteId(route) {
+        const prefix = "/demo/decision/";
+        return route.startsWith(prefix) ? decodeURIComponent(route.slice(prefix.length)) : null;
+    }
+    function renderDemoWorkbench(route) {
+        if (!window.ChoiceAgentDemo) {
+            app.innerHTML = `<section class="section"><div class="empty">演示模块未加载。</div></section>`;
+            return;
+        }
+        const decision = ChoiceAgentDemo.loadDecision(demoRouteId(route));
+        state.demo.decision = decision;
+        const rankings = ChoiceAgentDemo.rank(decision);
+        const activeRankings = rankings.filter((item) => !item.candidate.eliminated);
+        const recommendation = decision.recommendation;
+        const domainLabel = ChoiceAgentDemo.domainLabels[decision.domain] || decision.domain;
+        app.innerHTML = `
+            <section class="demo-workbench">
+                <header class="section demo-header">
+                    <div>
+                        <div class="title-with-badge">
+                            <h2>Choice Agent Demo</h2>
+                            <span class="badge domain-label">${escapeHtml(domainLabel)}</span>
+                            <span class="badge demo-badge">演示数据 · 非实时</span>
+                        </div>
+                        <p>${escapeHtml(decision.goal)}</p>
+                    </div>
+                    <div class="inline-actions">
+                        <button class="btn soft" data-action="demo-complete">生成结论</button>
+                        <button class="btn ghost" data-action="demo-new">新建演示</button>
+                        <a class="btn ghost" href="#/">返回首页</a>
+                    </div>
+                </header>
+                <div class="demo-grid">
+                    <aside class="section demo-sidebar">
+                        ${renderDemoState(decision, activeRankings)}
+                        ${renderDemoWeights(decision)}
+                    </aside>
+                    <div class="demo-main">
+                        <section class="section">
+                            <div class="card-title">
+                                <div>
+                                    <h3>候选比较</h3>
+                                    <p>基于演示属性和当前权重即时排序。排除候选后不会被选为主推荐。</p>
+                                </div>
+                                <span class="badge">版本 ${escapeHtml(decision.revision)}</span>
+                            </div>
+                            <div class="demo-candidates">
+                                ${rankings.map((item, index) => renderDemoCandidate(item, index, decision)).join("")}
+                            </div>
+                        </section>
+                        <section class="section demo-recommendation">
+                            ${renderDemoRecommendation(decision, recommendation)}
+                        </section>
+                    </div>
+                </div>
+            </section>
+        `;
+    }
+    function renderDemoState(decision, activeRankings) {
+        const constraints = (decision.constraints || []).length
+            ? `<div class="demo-list">${decision.constraints.map((item) => `<div><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.kind)} · ${escapeHtml(item.value)}</span></div>`).join("")}</div>`
+            : `<div class="empty compact">暂无硬约束，当前先比较偏好维度。</div>`;
+        const questions = (decision.unansweredQuestions || []).filter((item) => !item.answered);
+        const questionHtml = questions.length
+            ? `<div class="chips">${questions.flatMap((question) => question.options.map((option) => `<button class="chip" data-action="demo-answer-question" data-question-id="${escapeHtml(question.id)}" data-answer="${escapeHtml(option)}">${escapeHtml(option)}</button>`)).join("")}</div><p class="muted">${escapeHtml(questions[0].question)}</p>`
+            : `<p class="muted">关键条件已足够进入演示比较。</p>`;
+        return `
+            <div class="card-title"><div><h3>决策状态</h3><p>${escapeHtml(activeRankings.length)} 个可选候选</p></div></div>
+            <h4>约束</h4>
+            ${constraints}
+            <div class="subtle-divider"></div>
+            <h4>澄清问题</h4>
+            ${questionHtml}
+            <div class="subtle-divider"></div>
+            <h4>假设</h4>
+            <div class="demo-list">${(decision.assumptions || []).map((item) => `<div><span>${escapeHtml(item)}</span></div>`).join("")}</div>
+            <div class="subtle-divider"></div>
+            <h4>Trace</h4>
+            <div class="demo-trace">${(decision.trace || []).map((item) => `<span data-status="${escapeHtml(item.status)}">${escapeHtml(item.label)}</span>`).join("")}</div>
+        `;
+    }
+    function renderDemoWeights(decision) {
+        return `
+            <div class="subtle-divider"></div>
+            <div class="card-title"><div><h3>偏好权重</h3><p>拖动后立即重排。</p></div></div>
+            <div class="weight-list">
+                ${(decision.criteria || []).map((criterion) => `
+                    <label class="weight-row">
+                        <span>${escapeHtml(criterion.label)}</span>
+                        <strong>${escapeHtml(criterion.weight)}</strong>
+                        <input type="range" min="0" max="60" value="${escapeHtml(criterion.weight)}" data-action="demo-weight" data-key="${escapeHtml(criterion.key)}">
+                    </label>
+                `).join("")}
+            </div>
+        `;
+    }
+    function renderDemoCandidate(item, index, decision) {
+        const candidate = item.candidate;
+        const attributes = Object.entries(candidate.attributes || {}).map(([key, value]) => {
+            const criterion = (decision.criteria || []).find((item) => item.key === key);
+            return `<span>${escapeHtml(criterion ? criterion.label : key)}：${escapeHtml(value)}</span>`;
+        }).join("");
+        const evidence = (candidate.evidence || []).length
+            ? candidate.evidence.map((item) => `<li>${escapeHtml(item.claim)}<span>${escapeHtml(item.sourceTitle || "演示数据")}</span></li>`).join("")
+            : `<li>暂无外部证据，当前只展示结构化比较。</li>`;
+        return `
+            <article class="demo-candidate ${candidate.eliminated ? "is-eliminated" : ""}">
+                <div class="demo-candidate-head">
+                    <div>
+                        <span class="rank">#${index + 1}</span>
+                        <h3>${escapeHtml(candidate.name)}</h3>
+                        <p>${escapeHtml(candidate.summary)}</p>
+                    </div>
+                    <div class="score-block"><strong>${escapeHtml(item.score)}</strong><span>分</span></div>
+                </div>
+                <div class="attribute-grid">${attributes}</div>
+                <ul class="evidence-list">${evidence}</ul>
+                <button class="btn ${candidate.eliminated ? "soft" : "ghost"}" data-action="demo-toggle-candidate" data-candidate-id="${escapeHtml(candidate.id)}">
+                    ${candidate.eliminated ? "恢复候选" : "排除候选"}
+                </button>
+            </article>
+        `;
+    }
+    function renderDemoRecommendation(decision, recommendation) {
+        if (!recommendation) {
+            return `
+                <div class="card-title">
+                    <div>
+                        <h3>推荐结论</h3>
+                        <p>调整权重或排除候选后，点击生成结论查看当前选择建议。</p>
+                    </div>
+                </div>
+                <div class="empty">尚未生成结论。</div>
+            `;
+        }
+        const candidate = (decision.candidates || []).find((item) => item.id === recommendation.candidateId);
+        const reasons = (recommendation.reasons || []).map((item) => `<li>${escapeHtml(item.text)}</li>`).join("");
+        const tradeoffs = (recommendation.tradeOffs || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+        return `
+            <div class="card-title">
+                <div>
+                    <h3>推荐结论</h3>
+                    <p>${escapeHtml(candidate ? candidate.name : "当前候选")}</p>
+                </div>
+                <span class="badge demo-badge">演示结论</span>
+            </div>
+            <p class="recommendation-copy">${escapeHtml(recommendation.conclusion)}</p>
+            <div class="grid two">
+                <div><h4>理由</h4><ul class="evidence-list">${reasons}</ul></div>
+                <div><h4>取舍</h4><ul class="evidence-list">${tradeoffs}</ul></div>
+            </div>
+            ${recommendation.alternative ? `<p class="muted">替代方案：${escapeHtml(recommendation.alternative.whenToChoose)}</p>` : ""}
+        `;
+    }
+    function updateDemoWeight(key, weight) {
+        if (!state.demo.decision) {
+            return;
+        }
+        state.demo.decision = ChoiceAgentDemo.updateDecision(state.demo.decision, (decision) => {
+            decision.criteria = decision.criteria.map((criterion) => criterion.key === key ? { ...criterion, weight } : criterion);
+            decision.recommendation = undefined;
+            decision.status = "comparing";
+            decision.nextAction = "compare";
+        });
+        renderDemoWorkbench(currentRoute());
+    }
+    function toggleDemoCandidate(candidateId) {
+        if (!state.demo.decision) {
+            return;
+        }
+        state.demo.decision = ChoiceAgentDemo.updateDecision(state.demo.decision, (decision) => {
+            decision.candidates = decision.candidates.map((candidate) => candidate.id === candidateId ? { ...candidate, eliminated: !candidate.eliminated } : candidate);
+            decision.recommendation = undefined;
+            decision.status = "comparing";
+        });
+        renderDemoWorkbench(currentRoute());
+    }
+    function completeDemoDecision() {
+        if (!state.demo.decision) {
+            return;
+        }
+        state.demo.decision = ChoiceAgentDemo.updateDecision(state.demo.decision, (decision) => {
+            decision.recommendation = ChoiceAgentDemo.explain(decision);
+            decision.status = "decided";
+            decision.nextAction = "done";
+            decision.trace = (decision.trace || []).map((item) => ({ ...item, status: "done" }));
+        });
+        renderDemoWorkbench(currentRoute());
+    }
+    function answerDemoQuestion(questionId, answer) {
+        if (!state.demo.decision) {
+            return;
+        }
+        state.demo.decision = ChoiceAgentDemo.updateDecision(state.demo.decision, (decision) => {
+            decision.unansweredQuestions = (decision.unansweredQuestions || []).map((question) => question.id === questionId ? { ...question, answered: true, answer } : question);
+            decision.assumptions = [...(decision.assumptions || []), `你对澄清问题选择了：${answer}`];
+        });
+        renderDemoWorkbench(currentRoute());
     }
     function renderMessage(message) {
         const mealCards = (message.meals || []).map((meal) => renderMealCard(meal, { feedback: true, sessionId: message.sessionId })).join("");
@@ -1082,6 +1288,8 @@
             renderGeneralHome();
             const input = document.querySelector("#generalDecisionForm textarea[name=prompt]");
             if (input) {
+                input.dataset.demoDomain = target.dataset.demoDomain || "";
+                input.dataset.demoPrompt = state.home.generalPrompt;
                 input.focus();
             }
         } else if (action === "set-source") {
@@ -1113,6 +1321,15 @@
             state.traces.filters.sessionId = "";
             navigate("/admin/traces");
             selectTrace(target.dataset.traceId);
+        } else if (action === "demo-toggle-candidate") {
+            toggleDemoCandidate(target.dataset.candidateId);
+        } else if (action === "demo-complete") {
+            completeDemoDecision();
+        } else if (action === "demo-new") {
+            const decision = ChoiceAgentDemo.createDecision("周末从上海出发，找一个两天一夜、轻松、人相对少的目的地", "travel");
+            navigate(`/demo/decision/${encodeURIComponent(decision.id)}`);
+        } else if (action === "demo-answer-question") {
+            answerDemoQuestion(target.dataset.questionId, target.dataset.answer);
         }
     }
     function isDietPrompt(prompt) {
@@ -1132,8 +1349,12 @@
             navigate("/diet/chat");
             return;
         }
-        state.home.notice = "这个场景还在接入中。现在可以先把目标、约束和候选写清楚；吃什么类问题已经可以直接进入决策助手。";
-        renderGeneralHome();
+        const input = form.querySelector("textarea[name=prompt]");
+        const explicitDomain = input && input.dataset.demoPrompt === prompt ? input.dataset.demoDomain : "";
+        const decision = ChoiceAgentDemo.createDecision(prompt, explicitDomain);
+        state.demo.decision = decision;
+        state.home.notice = "";
+        navigate(`/demo/decision/${encodeURIComponent(decision.id)}`);
     }
     function handleSubmit(event) {
         const form = event.target;
@@ -1161,6 +1382,15 @@
             runEvaluation(form);
         }
     }
+    function handleChange(event) {
+        const target = event.target.closest("[data-action]");
+        if (!target) {
+            return;
+        }
+        if (target.dataset.action === "demo-weight") {
+            updateDemoWeight(target.dataset.key, Number(target.value));
+        }
+    }
     function initTheme() {
         applyTheme(state.theme);
     }
@@ -1180,6 +1410,7 @@
     }
     window.addEventListener("hashchange", render);
     app.addEventListener("click", handleClick);
+    app.addEventListener("change", handleChange);
     app.addEventListener("submit", handleSubmit);
     initTheme();
     initUserField();

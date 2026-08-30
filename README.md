@@ -101,6 +101,16 @@ CHOICE_AGENT_DEBUG=true
 When model calls fail, intent and explanation agents fall back to local rule
 behavior so the deterministic decision engine can continue to work.
 
+## Demo Mode
+
+The web UI includes a generic demo workbench for travel, career offer, learning path,
+and shopping decisions. These demo decisions use local fixture data and are labeled as
+non-real-time examples so the general Choice Agent workflow can be shown without API
+keys, network access, or extra database setup.
+
+Diet requests still use the real local rule-agent flow and seeded meal data instead of
+the generic fixture workbench.
+
 ## Data
 
 The default database is `choice_agent.db` in the project root. The first startup
@@ -256,6 +266,12 @@ CHOICE_AGENT_DEBUG=true
 ```
 
 模型调用失败时，意图和解释 Agent 会回退到本地规则结果，不影响确定性决策引擎运行。
+
+## 演示模式
+
+Web UI 内置通用演示工作台，覆盖旅行、职业 Offer、学习路径和购物决策。通用 demo 使用本地 fixture 数据，并在页面中标注“演示数据 / 非实时”，用于在没有 API Key、网络或额外数据库配置时展示 Choice Agent 的通用决策流程。
+
+饮食类请求仍然使用真实的本地规则 Agent 链路和种子餐食数据，不会被通用 fixture 工作台替代。
 
 ## 数据
 
