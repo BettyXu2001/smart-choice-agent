@@ -135,6 +135,28 @@ class DietRepository:
         )
         self.db.commit()
 
+    def feedbacks(
+        self,
+        user_id: int,
+        session_ids: list[str],
+        start_at: datetime,
+        end_at: datetime,
+    ) -> list[FeedbackRecord]:
+        if not session_ids:
+            return []
+        return list(
+            self.db.scalars(
+                select(FeedbackRecord)
+                .where(
+                    FeedbackRecord.user_id == user_id,
+                    FeedbackRecord.session_id.in_(session_ids),
+                    FeedbackRecord.created_at >= start_at,
+                    FeedbackRecord.created_at < end_at,
+                )
+                .order_by(FeedbackRecord.created_at)
+            ).all()
+        )
+
     def save_trace(self, row: TraceRecord) -> None:
         self.db.add(row)
         self.db.commit()

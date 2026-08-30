@@ -18,7 +18,7 @@
 | 推荐反馈 | FeedbackRecord + 兼容 API | 已迁移 |
 | 请求 Trace | TraceScope + AgentRunRecord | 已迁移并扩展 |
 | Trace 人工标注 | Trace Label API 和原页面 | 已迁移 |
-| 评估报告 | 规则指标 + 可选 LLM Judge | 已迁移 |
+| 评估报告 | 完整规则指标 + 反馈归因 + 可选 LLM Judge | 已补齐核心指标 |
 | 静态管理页面 | FastAPI StaticFiles 托管 | 已迁移 |
 | 通用候选/证据/推荐 | DecisionState / Candidate / Evidence | 新增 |
 | 硬约束/软偏好 | Constraint + DecisionEngine | 新增 |

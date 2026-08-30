@@ -6,8 +6,12 @@ from choice_agent.api.routes import evaluate
 from choice_agent.config import Settings
 from choice_agent.orchestration.diet import DietOrchestrator
 from choice_agent.providers.model import DisabledProvider
+from choice_agent.db_models import TraceRecord
 from choice_agent.repositories.diet_repository import DietRepository
-from choice_agent.schemas import ChatRequest, EvaluationRequest, MealRequest, SourceMode
+from choice_agent.schemas import (
+    ChatRequest, ClarifyAction, EvaluationRequest, FeedbackRequest, Intent, MealRequest,
+    SlotBundle, SourceMode, TraceLabelRequest,
+)
 
 
 def orchestrator(db):
@@ -91,7 +95,26 @@ def test_personal_meal_crud_and_empty_source(database):
 
 def test_evaluation_report_aggregates_nested_metrics(database):
     with database.session_factory() as db:
-        orchestrator(db).chat(1, ChatRequest(message="晚餐想吃清淡一点"))
+        response = orchestrator(db).chat(1, ChatRequest(message="晚餐想吃清淡一点"))
+        repository = DietRepository(db)
+        repository.label_trace(
+            1,
+            response.trace_id,
+            TraceLabelRequest(
+                expected_intent=Intent.MEAL_RECOMMENDATION,
+                expected_slots=SlotBundle(meal_time=["晚餐"]),
+                expected_clarify_action=ClarifyAction.READY,
+            ),
+        )
+        repository.save_feedback(
+            1,
+            FeedbackRequest(
+                session_id=response.session_id,
+                item_id=response.display_blocks[0].id,
+                action="ADOPT",
+                rating=5,
+            ),
+        )
         now = datetime.now()
         report = evaluate(
             EvaluationRequest(
@@ -103,8 +126,61 @@ def test_evaluation_report_aggregates_nested_metrics(database):
             settings=Settings(),
             provider=DisabledProvider(),
         )
+        result = report["traceResults"][0]
         assert report["totalTraces"] == 1
+        assert report["labeledTraces"] == 1
         assert report["metricAverages"]["intentAccuracy"] == 1.0
+        assert report["metricAverages"]["slotAccuracy"] == 1.0
+        assert report["metricAverages"]["clarifyNecessityAccuracy"] == 1.0
+        assert result["userFeedbackScore"] == 1.0
+        assert result["detail"]["feedbackCount"] == 1
+        assert result["detail"]["predictedSlots"]["mealTime"] == ["晚餐"]
+
+
+def test_evaluation_report_scores_failed_trace_as_fallback(database):
+    with database.session_factory() as db:
+        now = datetime.now()
+        db.add(
+            TraceRecord(
+                trace_id="failed-trace",
+                session_id="failed-session",
+                user_id=1,
+                status="FAILED",
+                event_count=1,
+                duration_ms=42,
+                error_message="boom",
+                trace_json={
+                    "traceId": "failed-trace",
+                    "sessionId": "failed-session",
+                    "userId": 1,
+                    "status": "FAILED",
+                    "durationMs": 42,
+                    "events": [
+                        {
+                            "eventType": "REQUEST_FAILED",
+                            "phase": "ERROR",
+                            "outputPayload": "boom",
+                        }
+                    ],
+                },
+                created_at=now,
+            )
+        )
+        db.commit()
+        report = evaluate(
+            EvaluationRequest(
+                start_at=now - timedelta(minutes=5),
+                end_at=now + timedelta(minutes=5),
+            ),
+            uid=1,
+            db=db,
+            settings=Settings(),
+            provider=DisabledProvider(),
+        )
+        metrics = report["traceResults"][0]["metrics"]
+        assert metrics["fallbackRate"] == 1.0
+        assert metrics["fallbackScore"] == 0.0
+        assert metrics["safetyCompliance"] == 0.0
 
 
 def test_chat_expected_revision_rejects_stale_session(database):

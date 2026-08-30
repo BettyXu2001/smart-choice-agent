@@ -253,6 +253,49 @@ def label_trace(
     return Response(status_code=204)
 
 
+def _feedback_score(feedbacks: list[Any]) -> float | None:
+    scores: list[float] = []
+    for feedback in feedbacks:
+        if feedback.rating is not None:
+            scores.append(feedback.rating / 5)
+        elif feedback.action == "ADOPT":
+            scores.append(1.0)
+        elif feedback.action == "LIKE":
+            scores.append(0.8)
+        elif feedback.action == "DISLIKE":
+            scores.append(0.0)
+    if not scores:
+        return None
+    return round(sum(scores) / len(scores), 4)
+
+
+def _combined_score(
+    rule_score: float,
+    llm_judge: dict[str, Any] | None,
+    user_feedback_score: float | None,
+) -> float:
+    judge_score = None
+    if llm_judge and isinstance(llm_judge.get("score"), (int, float)):
+        judge_score = float(llm_judge["score"])
+    if judge_score is not None and user_feedback_score is not None:
+        return round(0.6 * rule_score + 0.1 * judge_score + 0.3 * user_feedback_score, 4)
+    if judge_score is not None:
+        return round(0.8 * rule_score + 0.2 * judge_score, 4)
+    if user_feedback_score is not None:
+        return round(0.7 * rule_score + 0.3 * user_feedback_score, 4)
+    return rule_score
+
+
+def _metric_averages(results: list[dict[str, Any]]) -> dict[str, float]:
+    buckets: dict[str, list[float]] = {}
+    for result in results:
+        for key, value in result["metrics"].items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            buckets.setdefault(key, []).append(float(value))
+    return {key: round(sum(values) / len(values), 4) for key, values in buckets.items()}
+
+
 @router.post("/api/v1/diet/evaluations")
 def evaluate(
     body: EvaluationRequest,
@@ -267,10 +310,17 @@ def evaluate(
     )
     if body.start_at >= body.end_at:
         raise HTTPException(status_code=400, detail="评估时间范围不合法")
-    rows = DietRepository(db).traces(uid, body.start_at, body.end_at, False, body.limit)
+    repository = DietRepository(db)
+    rows = repository.traces(uid, body.start_at, body.end_at, False, body.limit)
+    session_ids = list(dict.fromkeys(row.session_id for row in rows))
+    feedbacks_by_session: dict[str, list[Any]] = {session_id: [] for session_id in session_ids}
+    for feedback in repository.feedbacks(uid, session_ids, body.start_at, body.end_at):
+        feedbacks_by_session.setdefault(feedback.session_id, []).append(feedback)
+
     results: list[dict[str, Any]] = []
     evaluator = EvaluationAgent(active_provider, active_settings.light_model)
     for row in rows:
+        feedbacks = feedbacks_by_session.get(row.session_id, [])
         context = AgentContext(
             session_id=row.session_id,
             trace_id=row.trace_id,
@@ -280,30 +330,32 @@ def evaluate(
             data={
                 "trace": row.trace_json,
                 "expected_intent": row.expected_intent,
+                "expected_slots": row.expected_slots,
                 "expected_clarify_action": row.expected_clarify_action,
                 "include_llm_judge": body.include_llm_judge,
+                "feedbacks": feedbacks,
             },
         )
         metrics = evaluator.execute(context)
         llm_judge = metrics.pop("llmJudge", None)
-        rule_score = metrics["score"]
-        combined_score = (
-            round((rule_score + llm_judge["score"]) / 2, 4)
-            if llm_judge else rule_score
-        )
+        evaluation_detail = metrics.pop("evaluationDetail", {})
+        rule_score = metrics.pop("score")
+        user_feedback_score = _feedback_score(feedbacks)
+        combined_score = _combined_score(rule_score, llm_judge, user_feedback_score)
         results.append({
             "traceId": row.trace_id,
             "sessionId": row.session_id,
             "score": combined_score,
             "ruleScore": rule_score,
-            "llmJudgeScore": llm_judge["score"] if llm_judge else None,
-            "userFeedbackScore": None,
+            "llmJudgeScore": llm_judge["score"] if llm_judge and isinstance(llm_judge.get("score"), (int, float)) else None,
+            "userFeedbackScore": user_feedback_score,
             "metrics": metrics,
             "detail": {
+                **evaluation_detail,
                 "status": row.status,
                 "eventCount": row.event_count,
                 "llmJudgeRequested": body.include_llm_judge,
-                "llmJudgeAvailable": bool(llm_judge),
+                "llmJudgeAvailable": bool(llm_judge and isinstance(llm_judge.get("score"), (int, float))),
                 "llmJudge": llm_judge,
             },
         })
@@ -312,21 +364,16 @@ def evaluate(
         round(sum(result["score"] for result in results) / len(results), 4)
         if results else None
     )
-    metric_averages = {
-        key: round(sum(item["metrics"][key] for item in results) / len(results), 4)
-        for key in ("intentAccuracy", "clarifyAccuracy")
-    } if results else {}
     return {
         "startAt": body.start_at.isoformat(),
         "endAt": body.end_at.isoformat(),
         "totalTraces": len(rows),
         "labeledTraces": len(labeled),
         "avgScore": avg,
-        "metricAverages": metric_averages,
+        "metricAverages": _metric_averages(results),
         "traceResults": results,
         "llmJudgeEnabled": body.include_llm_judge and active_provider.enabled,
     }
-
 
 @router.get("/api/v1/decisions/{decision_id}", response_model=DecisionState)
 def get_decision(decision_id: str, db: Session = Depends(get_db)) -> DecisionState:

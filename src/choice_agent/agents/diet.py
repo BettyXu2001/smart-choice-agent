@@ -347,6 +347,17 @@ class RiskAgent(BaseAgent):
 
 class EvaluationAgent(BaseAgent):
     name = "EvaluationAgent"
+    rule_score_keys = (
+        "intentAccuracy",
+        "slotAccuracy",
+        "clarifyNecessityAccuracy",
+        "tokenCostScore",
+        "latencyScore",
+        "fallbackScore",
+        "safetyCompliance",
+        "hallucinationControl",
+        "multiTurnConsistency",
+    )
 
     def __init__(
         self, provider: ModelProvider | None = None, model_name: str | None = None
@@ -356,30 +367,42 @@ class EvaluationAgent(BaseAgent):
 
     def execute(self, context: AgentContext) -> dict[str, Any]:
         trace = context.data["trace"]
-        events = trace.get("events", [])
-        actual_intent = None
-        actual_clarify = None
-        for event in events:
-            if event.get("agentName") == "IntentAgent":
-                actual_intent = (event.get("outputPayload") or {}).get("intent")
-            if event.get("agentName") == "ClarificationAgent":
-                actual_clarify = (event.get("outputPayload") or {}).get("action")
+        snapshot = self._snapshot(trace)
         expected_intent = context.data.get("expected_intent")
+        expected_slots = context.data.get("expected_slots") or {}
         expected_clarify = context.data.get("expected_clarify_action")
-        intent_score = 1.0 if not expected_intent or expected_intent == actual_intent else 0.0
-        clarify_score = 1.0 if not expected_clarify or expected_clarify == actual_clarify else 0.0
-        safety = not any(
-            event.get("status") == "FAILED"
-            for event in events
-            if event.get("eventType") == "AGENT_CALL"
-        )
-        score = round((intent_score + clarify_score + (1.0 if safety else 0.0)) / 3, 4)
-        result = {
-            "score": score,
-            "intentAccuracy": intent_score,
-            "clarifyAccuracy": clarify_score,
-            "safetyCompliance": safety,
+        feedbacks = context.data.get("feedbacks", [])
+
+        metrics: dict[str, Any] = {
+            "intentAccuracy": self._exact_score(expected_intent, snapshot["intent"]),
+            "slotAccuracy": self._slot_accuracy(expected_slots, snapshot["slots"]),
+            "clarifyNecessityAccuracy": self._exact_score(expected_clarify, snapshot["clarify_action"]),
+            "clarifyAccuracy": self._exact_score(expected_clarify, snapshot["clarify_action"]),
+            "tokenCost": snapshot["token_cost"],
+            "tokenCostScore": self._cost_score(snapshot["token_cost"]),
+            "latencyMs": snapshot["latency_ms"],
+            "latencyScore": self._latency_score(snapshot["latency_ms"]),
+            "fallbackRate": 1.0 if snapshot["fallback_used"] else 0.0,
+            "fallbackScore": 0.0 if snapshot["fallback_used"] else 1.0,
+            "safetyCompliance": 0.0 if snapshot["fallback_used"] else 1.0,
+            "hallucinationControl": self._hallucination_control(
+                snapshot["ranked_ids"], snapshot["response_ids"]
+            ),
+            "multiTurnConsistency": self._multi_turn_consistency(
+                snapshot["excluded_ids"], snapshot["response_ids"]
+            ),
         }
+        metrics["score"] = self._rule_score(metrics)
+        metrics["evaluationDetail"] = {
+            "predictedIntent": snapshot["intent"],
+            "predictedSlots": snapshot["slots"],
+            "predictedClarifyAction": snapshot["clarify_action"],
+            "expectedIntent": expected_intent,
+            "expectedSlots": expected_slots,
+            "expectedClarifyAction": expected_clarify,
+            "feedbackCount": len(feedbacks),
+        }
+
         include_judge = bool(context.data.get("include_llm_judge"))
         if include_judge and self.provider and self.provider.enabled and self.model_name:
             try:
@@ -390,14 +413,183 @@ class EvaluationAgent(BaseAgent):
                 )
                 explanation = max(1.0, min(5.0, float(judged["explanationQuality"])))
                 naturalness = max(1.0, min(5.0, float(judged["naturalness"])))
-                result["llmJudge"] = {
+                metrics["llmJudge"] = {
                     "explanationQuality": explanation,
                     "naturalness": naturalness,
                     "reason": str(judged.get("reason", "")),
                     "score": round((explanation + naturalness) / 10, 4),
                 }
-            except (ValueError, KeyError, TypeError):
-                result["llmJudge"] = None
+            except (ValueError, KeyError, TypeError) as exc:
+                metrics["llmJudge"] = {"score": None, "error": str(exc)}
         else:
-            result["llmJudge"] = None
-        return result
+            metrics["llmJudge"] = None
+        return metrics
+
+    def _snapshot(self, trace: dict[str, Any]) -> dict[str, Any]:
+        events = trace.get("events", [])
+        actual_intent = None
+        actual_slots: dict[str, Any] = {}
+        actual_clarify = None
+        token_cost = 0
+        has_token = False
+        latency_ms = 0
+        has_latency = False
+        fallback_used = str(trace.get("status", "")).upper() == "FAILED"
+        ranked_ids: set[str] = set()
+        response_ids: set[str] = set()
+        excluded_ids: set[str] = set()
+
+        for event in events:
+            output = event.get("outputPayload") or {}
+            input_payload = event.get("inputPayload") or {}
+            output = output if isinstance(output, dict) else {}
+            input_payload = input_payload if isinstance(input_payload, dict) else {}
+            agent_name = event.get("agentName")
+            event_type = str(event.get("eventType", ""))
+            status = str(event.get("status", ""))
+
+            if event_type == "AGENT_CALL":
+                latency = event.get("latencyMs") or event.get("latency_ms")
+                if isinstance(latency, (int, float)):
+                    latency_ms += int(latency)
+                    has_latency = True
+                tokens = self._token_count(event)
+                if tokens is not None:
+                    token_cost += tokens
+                    has_token = True
+            if status.upper() == "FAILED" or "FAILED" in event_type.upper():
+                fallback_used = True
+            if event.get("errorMessage") or event.get("error_message"):
+                fallback_used = True
+
+            if agent_name == "IntentAgent":
+                actual_intent = output.get("intent")
+                actual_slots = self._merge_slots(actual_slots, output.get("slots") or {})
+            elif agent_name == "UnderstandingAgent":
+                actual_slots = self._merge_slots(actual_slots, output.get("slots") or {})
+            elif agent_name == "ClarificationAgent":
+                actual_clarify = output.get("action")
+            elif agent_name == "AdjustmentAgent":
+                excluded_ids.update(self._ids(output.get("excludeMealIds")))
+            elif agent_name == "CandidateAgent":
+                ranked_ids.update(self._ids(output.get("candidates")))
+            elif agent_name == "PlanningAgent":
+                ranked_ids.update(self._ids(output.get("plannedMeals")))
+            elif agent_name == "ExplanationAgent":
+                response_ids.update(self._ids(output.get("recommendations")))
+
+            excluded_ids.update(self._ids(input_payload.get("excludeIds")))
+            excluded_ids.update(self._ids(input_payload.get("exclude_ids")))
+
+        return {
+            "intent": actual_intent,
+            "slots": actual_slots,
+            "clarify_action": actual_clarify,
+            "token_cost": token_cost if has_token else None,
+            "latency_ms": latency_ms if has_latency else trace.get("durationMs"),
+            "fallback_used": fallback_used,
+            "ranked_ids": ranked_ids,
+            "response_ids": response_ids,
+            "excluded_ids": excluded_ids,
+        }
+
+    def _token_count(self, event: dict[str, Any]) -> int | None:
+        for key in ("totalTokens", "total_tokens", "tokenCost", "token_cost"):
+            value = event.get(key)
+            if isinstance(value, (int, float)):
+                return int(value)
+        usage = event.get("usage") or {}
+        for key in ("totalTokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, (int, float)):
+                return int(value)
+        return None
+
+    def _ids(self, value: Any) -> set[str]:
+        if value is None:
+            return set()
+        if isinstance(value, dict):
+            for key in ("id", "mealId", "itemId", "candidateId"):
+                if value.get(key) is not None:
+                    return {str(value[key])}
+            result: set[str] = set()
+            for item in value.values():
+                result.update(self._ids(item))
+            return result
+        if isinstance(value, list):
+            result: set[str] = set()
+            for item in value:
+                result.update(self._ids(item))
+            return result
+        if isinstance(value, (int, str)):
+            return {str(value)}
+        return set()
+
+    def _merge_slots(self, current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+        merged = {key: list(value) if isinstance(value, list) else value for key, value in current.items()}
+        for key, value in incoming.items():
+            if isinstance(value, list):
+                existing = merged.get(key, [])
+                existing_values = existing if isinstance(existing, list) else [existing]
+                merged[key] = list(dict.fromkeys([*existing_values, *value]))
+            elif value:
+                merged[key] = value
+        return merged
+
+    def _exact_score(self, expected: Any, actual: Any) -> float:
+        return 1.0 if not expected or expected == actual else 0.0
+
+    def _slot_accuracy(self, expected: dict[str, Any], actual: dict[str, Any]) -> float:
+        checks = []
+        for key, expected_value in expected.items():
+            expected_values = self._value_set(expected_value)
+            if not expected_values:
+                continue
+            actual_values = self._value_set(actual.get(key))
+            checks.append(1.0 if expected_values.issubset(actual_values) else 0.0)
+        if not checks:
+            return 1.0
+        return round(sum(checks) / len(checks), 4)
+
+    def _value_set(self, value: Any) -> set[str]:
+        if value is None:
+            return set()
+        if isinstance(value, list):
+            return {str(item) for item in value if item not in (None, "")}
+        if value == "":
+            return set()
+        return {str(value)}
+
+    def _cost_score(self, token_cost: int | None) -> float:
+        if token_cost is None or token_cost <= 1000:
+            return 1.0
+        if token_cost >= 3000:
+            return 0.0
+        return round((3000.0 - token_cost) / 2000.0, 4)
+
+    def _latency_score(self, latency_ms: int | None) -> float:
+        if latency_ms is None or latency_ms <= 1000:
+            return 1.0
+        if latency_ms >= 5000:
+            return 0.0
+        return round((5000.0 - latency_ms) / 4000.0, 4)
+
+    def _hallucination_control(self, ranked_ids: set[str], response_ids: set[str]) -> float:
+        if not ranked_ids or not response_ids:
+            return 1.0
+        return 1.0 if response_ids.issubset(ranked_ids) else 0.0
+
+    def _multi_turn_consistency(self, excluded_ids: set[str], response_ids: set[str]) -> float | None:
+        if not excluded_ids or not response_ids:
+            return None
+        return 0.0 if excluded_ids & response_ids else 1.0
+
+    def _rule_score(self, metrics: dict[str, Any]) -> float:
+        values = [
+            float(metrics[key])
+            for key in self.rule_score_keys
+            if isinstance(metrics.get(key), (int, float))
+        ]
+        if not values:
+            return 1.0
+        return round(sum(values) / len(values), 4)
