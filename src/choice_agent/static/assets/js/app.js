@@ -55,6 +55,10 @@
         },
         demo: {
             decision: null
+        },
+        generic: {
+            decision: null,
+            loading: false
         }
     };
     function isKnownTheme(theme) {
@@ -201,7 +205,7 @@
         let navRoute = route;
         if (route.startsWith("/diet/meals")) {
             navRoute = "/data";
-        } else if (route === "/diet/chat" || route.startsWith("/demo")) {
+        } else if (route === "/diet/chat" || route.startsWith("/demo") || route.startsWith("/decisions/")) {
             navRoute = "/";
         }
         document.querySelectorAll("[data-nav]").forEach((item) => {
@@ -219,6 +223,8 @@
             renderChat();
         } else if (route === "/demo" || route.startsWith("/demo/decision/")) {
             renderDemoWorkbench(route);
+        } else if (route.startsWith("/decisions/")) {
+            renderGenericDecision(route);
         } else if (route === "/diet/meals/personal") {
             renderPersonalMeals();
         } else if (route === "/diet/meals/public") {
@@ -238,8 +244,8 @@
         const modelConfigured = DietApi.hasConfiguredModel();
         const modeTitle = modelConfigured ? "模型配置已启用" : "演示模式";
         const modeDescription = modelConfigured
-            ? "饮食链路会尝试使用浏览器设置中的模型配置增强理解和解释；通用非饮食问题仍进入演示工作台。"
-            : "未配置浏览器模型 API。通用非饮食问题会使用本地演示数据，饮食助手仍可用本地规则链路。";
+            ? "饮食链路会尝试使用浏览器设置中的模型配置增强理解和解释；通用非饮食问题优先进入后端通用决策链路。"
+            : "未配置浏览器模型 API。通用非饮食问题优先使用后端 fixture 领域，失败时回退本地演示数据。";
         const examples = [
             { text: "周末想出去走走，但不知道去哪里", domain: "travel" },
             { text: "A 公司和 B 公司两个 Offer 各有优缺点，应该怎么选", domain: "career" },
@@ -469,6 +475,90 @@
     function demoRouteId(route) {
         const prefix = "/demo/decision/";
         return route.startsWith(prefix) ? decodeURIComponent(route.slice(prefix.length)) : null;
+    }
+    function genericRouteId(route) {
+        return decodeURIComponent(route.replace("/decisions/", "").split("/")[0] || "");
+    }
+
+    async function renderGenericDecision(route) {
+        const decisionId = genericRouteId(route);
+        if (!decisionId) {
+            navigate("/");
+            return;
+        }
+        app.innerHTML = `<section class="section"><div class="empty">通用决策加载中...</div></section>`;
+        try {
+            state.generic.decision = await DecisionApi.get(decisionId);
+            renderGenericDecisionState(state.generic.decision);
+        } catch (error) {
+            showToast(error.message || "通用决策加载失败", "error");
+            navigate("/");
+        }
+    }
+
+    function renderGenericDecisionState(decision) {
+        const domainLabel = decision.domain === "travel" ? "旅行决策" : decision.domain;
+        const candidates = decision.candidates || [];
+        const recommendation = decision.recommendation || {};
+        app.innerHTML = `
+            <section class="demo-workbench">
+                <header class="demo-header">
+                    <div>
+                        <span class="badge demo-badge">后端通用决策</span>
+                        <h2>${escapeHtml(domainLabel)}</h2>
+                        <p>${escapeHtml(decision.userGoal || "")}</p>
+                    </div>
+                    <div class="inline-actions">
+                        <a class="btn ghost" href="#/">返回首页</a>
+                    </div>
+                </header>
+                <div class="demo-grid">
+                    <aside class="demo-sidebar">
+                        <div class="card-title"><div><h3>目标和约束</h3><p>Revision ${escapeHtml(decision.revision)}</p></div></div>
+                        <div class="demo-list">
+                            ${(decision.constraints || []).map((item) => `<div><strong>${escapeHtml(item.key)}</strong><span>${escapeHtml((item.values || []).join("、"))}</span></div>`).join("") || `<div><span>暂无约束</span></div>`}
+                        </div>
+                        <div class="subtle-divider"></div>
+                        <h4>数据来源</h4>
+                        <div class="demo-list">
+                            <div><strong>${escapeHtml(decision.domainState?.source?.label || "本地状态")}</strong><span>${decision.domainState?.source?.realTime === false ? "非实时 fixture" : "实时/持久化状态"}</span></div>
+                        </div>
+                    </aside>
+                    <main class="demo-main">
+                        <div class="card-title"><div><h3>候选排序</h3><p>${candidates.length} 个候选</p></div></div>
+                        <div class="demo-candidates">
+                            ${candidates.map(renderGenericCandidate).join("") || `<div class="empty">暂无候选</div>`}
+                        </div>
+                        <div class="demo-recommendation">
+                            <span class="badge demo-badge">推荐结论</span>
+                            <h4>${escapeHtml(recommendation.primaryCandidateId || "待定")}</h4>
+                            <p>${escapeHtml(recommendation.summary || "暂无结论")}</p>
+                            <div class="demo-list">
+                                ${(recommendation.tradeoffs || []).map((item) => `<div><span>${escapeHtml(item)}</span></div>`).join("")}
+                            </div>
+                        </div>
+                    </main>
+                </div>
+            </section>
+        `;
+    }
+
+    function renderGenericCandidate(candidate) {
+        const attrs = Object.entries(candidate.attributes || {}).filter(([key]) => key !== "summary");
+        return `
+            <article class="demo-candidate">
+                <div class="demo-candidate-head">
+                    <div>
+                        <h3>${escapeHtml(candidate.name)}</h3>
+                        <p>${escapeHtml(candidate.attributes?.summary || "")}</p>
+                    </div>
+                    <span class="score">${Math.round(Number(candidate.score || 0) * 100)}%</span>
+                </div>
+                <div class="attribute-grid">
+                    ${attrs.map(([key, value]) => `<span><strong>${escapeHtml(key)}</strong>${escapeHtml(value)}</span>`).join("")}
+                </div>
+            </article>
+        `;
     }
     function renderDemoWorkbench(route) {
         if (!window.ChoiceAgentDemo) {
@@ -1721,7 +1811,7 @@
     function isDietPrompt(prompt) {
         return ["吃", "饭", "餐", "早餐", "午餐", "晚餐", "夜宵", "饮食", "清淡", "低脂", "热乎", "胃不舒服"].some((word) => prompt.includes(word));
     }
-    function submitGeneralDecision(form) {
+    async function submitGeneralDecision(form) {
         const prompt = String(new FormData(form).get("prompt") || "").trim();
         state.home.generalPrompt = prompt;
         if (!prompt) {
@@ -1737,10 +1827,21 @@
         }
         const input = form.querySelector("textarea[name=prompt]");
         const explicitDomain = input && input.dataset.demoPrompt === prompt ? input.dataset.demoDomain : "";
-        const decision = ChoiceAgentDemo.createDecision(prompt, explicitDomain);
-        state.demo.decision = decision;
-        state.home.notice = "";
-        navigate(`/demo/decision/${encodeURIComponent(decision.id)}`);
+        const restore = setLoading(form.querySelector('button[type="submit"]'), "创建决策中...");
+        try {
+            const response = await DecisionApi.create({ message: prompt, domain: explicitDomain || null });
+            state.generic.decision = response.decisionState;
+            state.home.notice = "";
+            navigate(`/decisions/${encodeURIComponent(response.decisionState.decisionId)}`);
+        } catch (error) {
+            const decision = ChoiceAgentDemo.createDecision(prompt, explicitDomain);
+            state.demo.decision = decision;
+            state.home.notice = "通用后端暂不可用，已切换到本地演示工作台。";
+            showToast(error.message || "通用后端不可用，已回退演示", "error");
+            navigate(`/demo/decision/${encodeURIComponent(decision.id)}`);
+        } finally {
+            restore();
+        }
     }
     function handleSubmit(event) {
         const form = event.target;

@@ -200,6 +200,24 @@ class DecisionState(ApiModel):
     domain_state: dict[str, Any] = Field(default_factory=dict)
 
 
+class GenericDecisionRequest(ApiModel):
+    message: str
+    domain: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class GenericDecisionMessageRequest(ApiModel):
+    message: str
+    expected_revision: int | None = Field(default=None, ge=0)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
+class GenericDecisionResponse(ApiModel):
+    decision_state: DecisionState
+    trace_id: str
+    speech_text: str
+    display_blocks: list[dict[str, Any]] = Field(default_factory=list)
+
 class ChatRequest(ApiModel):
     session_id: str | None = None
     message: str

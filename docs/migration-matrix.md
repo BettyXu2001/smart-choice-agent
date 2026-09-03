@@ -22,7 +22,11 @@
 | 静态管理页面 | FastAPI StaticFiles 托管 | 已迁移 |
 | 通用候选/证据/推荐 | DecisionState / Candidate / Evidence | 新增 |
 | 硬约束/软偏好 | Constraint + DecisionEngine | 新增 |
-| 通用决策状态查询 | /api/v1/decisions/{decision_id} | 新增 |
+| 通用决策状态查询 | /api/v1/decisions/{decision_id} | 已迁移 |
+| 通用决策创建 API | POST /api/v1/decisions | 新增 |
+| 通用决策文本推进 API | POST /api/v1/decisions/{decision_id}/messages | 新增 |
+| Domain Plugin 注册表 | DomainRegistry + DietDomain + TravelDomain | 新增 |
+| 旅行 fixture 后端领域 | TravelDomain | 新增 |
 
 ## 兼容边界
 
@@ -30,4 +34,4 @@
 - 旧饮食 API 路径和主要请求响应字段保持兼容。
 - V2 会在聊天响应中额外返回 decisionState，旧前端会忽略该扩展字段。
 - 默认使用 SQLite；SQLAlchemy 模型保留切换 MySQL/PostgreSQL 的能力。
-- 第一阶段只实现饮食领域，不包含旅行、购物、职业等新领域。
+- 当前已包含完整饮食领域和后端旅行 fixture 领域；购物、职业、学习等仍保留为前端 demo/future domain。

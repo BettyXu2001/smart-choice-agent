@@ -2,6 +2,7 @@
     "use strict";
 
     const API_BASE = "/api/v1/diet";
+    const DECISION_API_BASE = "/api/v1/decisions";
     const USER_ID_KEY = "diet.userId";
     const MODEL_SETTINGS_KEY = "choiceAgentModelSettings";
     const DEFAULT_MODEL_SETTINGS = {
@@ -73,7 +74,7 @@
         headers.set("X-Choice-Agent-Light-Model", settings.lightModel);
     }
 
-    async function request(path, options) {
+    async function request(baseUrl, path, options) {
         const config = options || {};
         const headers = new Headers(config.headers || {});
         headers.set("X-User-Id", getUserId());
@@ -83,7 +84,7 @@
             headers.set("Content-Type", "application/json");
         }
 
-        const response = await fetch(`${API_BASE}${path}`, {
+        const response = await fetch(`${baseUrl}${path}`, {
             ...config,
             headers,
             body: config.body === undefined || config.body instanceof FormData
@@ -110,6 +111,14 @@
         } catch (error) {
             return text;
         }
+    }
+
+    async function dietRequest(path, options) {
+        return request(API_BASE, path, options);
+    }
+
+    async function decisionRequest(path, options) {
+        return request(DECISION_API_BASE, path, options);
     }
 
     async function readError(response) {
@@ -144,19 +153,25 @@
         saveModelSettings,
         clearModelSettings,
         hasConfiguredModel,
-        createSession: () => request("/sessions", { method: "POST" }),
-        chat: (payload) => request("/chat", { method: "POST", body: payload }),
-        listPersonalMeals: () => request("/meals/personal"),
-        createPersonalMeal: (payload) => request("/meals/personal", { method: "POST", body: payload }),
-        updatePersonalMeal: (mealId, payload) => request(`/meals/personal/${encodeURIComponent(mealId)}`, { method: "PUT", body: payload }),
-        deletePersonalMeal: (mealId) => request(`/meals/personal/${encodeURIComponent(mealId)}`, { method: "DELETE" }),
-        listPublicMeals: () => request("/meals/public"),
-        slotOptions: () => request("/slot-options"),
-        saveFeedback: (payload) => request("/feedback", { method: "POST", body: payload }),
-        listTraces: (params) => request(`/debug/traces${toQuery(params)}`),
-        getTrace: (traceId) => request(`/debug/traces/${encodeURIComponent(traceId)}`),
-        listSessionTraces: (sessionId, limit) => request(`/debug/sessions/${encodeURIComponent(sessionId)}/traces${toQuery({ limit })}`),
-        labelTrace: (traceId, payload) => request(`/debug/traces/${encodeURIComponent(traceId)}/label`, { method: "PUT", body: payload }),
-        evaluate: (payload) => request("/evaluations", { method: "POST", body: payload })
+        createSession: () => dietRequest("/sessions", { method: "POST" }),
+        chat: (payload) => dietRequest("/chat", { method: "POST", body: payload }),
+        listPersonalMeals: () => dietRequest("/meals/personal"),
+        createPersonalMeal: (payload) => dietRequest("/meals/personal", { method: "POST", body: payload }),
+        updatePersonalMeal: (mealId, payload) => dietRequest(`/meals/personal/${encodeURIComponent(mealId)}`, { method: "PUT", body: payload }),
+        deletePersonalMeal: (mealId) => dietRequest(`/meals/personal/${encodeURIComponent(mealId)}`, { method: "DELETE" }),
+        listPublicMeals: () => dietRequest("/meals/public"),
+        slotOptions: () => dietRequest("/slot-options"),
+        saveFeedback: (payload) => dietRequest("/feedback", { method: "POST", body: payload }),
+        listTraces: (params) => dietRequest(`/debug/traces${toQuery(params)}`),
+        getTrace: (traceId) => dietRequest(`/debug/traces/${encodeURIComponent(traceId)}`),
+        listSessionTraces: (sessionId, limit) => dietRequest(`/debug/sessions/${encodeURIComponent(sessionId)}/traces${toQuery({ limit })}`),
+        labelTrace: (traceId, payload) => dietRequest(`/debug/traces/${encodeURIComponent(traceId)}/label`, { method: "PUT", body: payload }),
+        evaluate: (payload) => dietRequest("/evaluations", { method: "POST", body: payload })
+    };
+
+    window.DecisionApi = {
+        create: (payload) => decisionRequest("", { method: "POST", body: payload }),
+        message: (decisionId, payload) => decisionRequest(`/${encodeURIComponent(decisionId)}/messages`, { method: "POST", body: payload }),
+        get: (decisionId) => decisionRequest(`/${encodeURIComponent(decisionId)}`)
     };
 })();

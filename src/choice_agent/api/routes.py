@@ -10,11 +10,14 @@ from choice_agent.agents.base import AgentContext
 from choice_agent.agents.diet import EvaluationAgent
 from choice_agent.config import Settings
 from choice_agent.db_models import DecisionRecord, MealRecord, TraceRecord
+from choice_agent.decision.state_machine import DecisionRevisionError
 from choice_agent.orchestration.diet import DietOrchestrator
+from choice_agent.orchestration.generic import GenericDecisionOrchestrator
 from choice_agent.providers.model import ModelProvider, OpenAICompatibleProvider
 from choice_agent.repositories.diet_repository import DietRepository
 from choice_agent.schemas import (
     ChatRequest, ChatResponse, DecisionState, EvaluationRequest, FeedbackRequest,
+    GenericDecisionMessageRequest, GenericDecisionRequest, GenericDecisionResponse,
     MealRequest, MealResponse, SlotBundle, SourceMode, TraceLabelRequest,
 )
 
@@ -119,6 +122,34 @@ def trace_response(row: TraceRecord) -> dict[str, Any]:
         "updatedAt": row.updated_at.isoformat(),
     }
 
+
+@router.post("/api/v1/decisions", response_model=GenericDecisionResponse)
+def create_decision(
+    body: GenericDecisionRequest,
+    uid: int = Depends(user_id),
+    db: Session = Depends(get_db),
+) -> GenericDecisionResponse:
+    try:
+        return GenericDecisionOrchestrator(db).create(uid, body)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/api/v1/decisions/{decision_id}/messages", response_model=GenericDecisionResponse)
+def message_decision(
+    decision_id: str,
+    body: GenericDecisionMessageRequest,
+    uid: int = Depends(user_id),
+    db: Session = Depends(get_db),
+) -> GenericDecisionResponse:
+    try:
+        return GenericDecisionOrchestrator(db).message(uid, decision_id, body)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except DecisionRevisionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 @router.post("/api/v1/diet/sessions")
 def create_session(

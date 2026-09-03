@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
