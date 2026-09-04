@@ -20,7 +20,10 @@ def test_generic_orchestrator_creates_persisted_travel_decision(database):
         assert decision.revision == 1
         assert decision.candidates
         assert decision.recommendation.primary_candidate_id == decision.candidates[0].candidate_id
-        assert decision.agent_runs[0].agent_name == "旅行决策PipelineAgent"
+        assert [run.agent_name for run in decision.agent_runs] == [
+            "IntentAgent", "UnderstandingAgent", "ClarificationAgent",
+            "CandidateAgent", "CriticAgent", "ExplanationAgent", "RiskAgent",
+        ]
         assert decision.domain_state["source"]["mode"] == "fixture"
         persisted = DecisionRepository(db).get(decision.decision_id)
         assert persisted is not None

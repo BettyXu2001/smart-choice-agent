@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from choice_agent.db_models import AgentRunRecord, TraceRecord
-from choice_agent.repositories.diet_repository import DietRepository
+from choice_agent.repositories.trace_repository import TraceRepository
 from choice_agent.schemas import AgentRun
 
 
@@ -26,7 +26,7 @@ def _jsonable(value: Any) -> Any:
 class TraceScope:
     def __init__(self, db: Session, trace_id: str, session_id: str, user_id: int):
         self.db = db
-        self.repository = DietRepository(db)
+        self.repository = TraceRepository(db)
         self.trace_id = trace_id
         self.session_id = session_id
         self.user_id = user_id
@@ -91,7 +91,7 @@ class TraceScope:
             "durationMs": duration_ms,
             "events": self.events,
         }
-        self.repository.save_trace(
+        self.repository.save(
             TraceRecord(
                 trace_id=self.trace_id,
                 session_id=self.session_id,

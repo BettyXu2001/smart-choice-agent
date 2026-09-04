@@ -9,14 +9,16 @@ from sqlalchemy.orm import Session
 from choice_agent.agents.base import AgentContext
 from choice_agent.agents.diet import EvaluationAgent
 from choice_agent.config import Settings
-from choice_agent.db_models import DecisionRecord, MealRecord, TraceRecord
+from choice_agent.db_models import MealRecord, TraceRecord
 from choice_agent.decision.state_machine import DecisionRevisionError
 from choice_agent.orchestration.diet import DietOrchestrator
 from choice_agent.orchestration.generic import GenericDecisionOrchestrator
 from choice_agent.providers.model import ModelProvider, OpenAICompatibleProvider
+from choice_agent.providers.search import SearchProviderError
+from choice_agent.repositories.decision_repository import DecisionRepository
 from choice_agent.repositories.diet_repository import DietRepository
 from choice_agent.schemas import (
-    ChatRequest, ChatResponse, DecisionState, EvaluationRequest, FeedbackRequest,
+    ChatRequest, ChatResponse, DietPanelCommand, DecisionCommandRequest, DecisionState, EvaluationRequest, FeedbackRequest,
     GenericDecisionMessageRequest, GenericDecisionRequest, GenericDecisionResponse,
     MealRequest, MealResponse, SlotBundle, SourceMode, TraceLabelRequest,
 )
@@ -64,6 +66,12 @@ def runtime_model_from_headers(
         model_timeout_seconds=base_settings.model_timeout_seconds,
         enable_llm=True,
         debug=base_settings.debug,
+        search_provider=base_settings.search_provider,
+        search_api_key=base_settings.search_api_key,
+        search_base_url=base_settings.search_base_url,
+        search_model=base_settings.search_model,
+        search_timeout_seconds=base_settings.search_timeout_seconds,
+        search_max_queries=base_settings.search_max_queries,
     )
     return runtime_settings, OpenAICompatibleProvider(runtime_settings)
 
@@ -128,9 +136,15 @@ def create_decision(
     body: GenericDecisionRequest,
     uid: int = Depends(user_id),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    provider: ModelProvider = Depends(get_provider),
+    runtime_model: tuple[Settings, ModelProvider] | None = Depends(get_runtime_model),
 ) -> GenericDecisionResponse:
+    active_settings, active_provider = runtime_model if isinstance(runtime_model, tuple) else (settings if isinstance(settings, Settings) else Settings(), provider if hasattr(provider, "enabled") else None)
     try:
-        return GenericDecisionOrchestrator(db).create(uid, body)
+        return GenericDecisionOrchestrator(db, settings=active_settings, provider=active_provider).create(uid, body)
+    except SearchProviderError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -141,13 +155,19 @@ def message_decision(
     body: GenericDecisionMessageRequest,
     uid: int = Depends(user_id),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    provider: ModelProvider = Depends(get_provider),
+    runtime_model: tuple[Settings, ModelProvider] | None = Depends(get_runtime_model),
 ) -> GenericDecisionResponse:
+    active_settings, active_provider = runtime_model if isinstance(runtime_model, tuple) else (settings if isinstance(settings, Settings) else Settings(), provider if hasattr(provider, "enabled") else None)
     try:
-        return GenericDecisionOrchestrator(db).message(uid, decision_id, body)
+        return GenericDecisionOrchestrator(db, settings=active_settings, provider=active_provider).message(uid, decision_id, body)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except DecisionRevisionError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except SearchProviderError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -172,6 +192,37 @@ def chat(
     )
     try:
         return DietOrchestrator(db, active_settings, active_provider).chat(uid, body)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except DecisionRevisionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except SearchProviderError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/api/v1/diet/sessions/{session_id}/state")
+def diet_state(session_id: str, uid: int = Depends(user_id), db: Session = Depends(get_db),
+               settings: Settings = Depends(get_settings), provider: ModelProvider = Depends(get_provider)):
+    try:
+        return DietOrchestrator(db, settings, provider).state(uid, session_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.post("/api/v1/diet/sessions/{session_id}/commands", response_model=ChatResponse)
+def diet_command(session_id: str, body: DietPanelCommand, uid: int = Depends(user_id),
+                 db: Session = Depends(get_db), settings: Settings = Depends(get_settings),
+                 provider: ModelProvider = Depends(get_provider),
+                 runtime_model: tuple[Settings, ModelProvider] | None = Depends(get_runtime_model)):
+    active_settings, active_provider = runtime_model if isinstance(runtime_model, tuple) else (settings if isinstance(settings, Settings) else Settings(), provider if hasattr(provider, "enabled") else None)
+    try:
+        return DietOrchestrator(db, active_settings, active_provider).command(uid, session_id, body)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except DecisionRevisionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -406,9 +457,47 @@ def evaluate(
         "llmJudgeEnabled": body.include_llm_judge and active_provider.enabled,
     }
 
+@router.post("/api/v1/decisions/{decision_id}/commands", response_model=GenericDecisionResponse)
+def command_decision(
+    decision_id: str,
+    body: DecisionCommandRequest,
+    uid: int = Depends(user_id),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    provider: ModelProvider = Depends(get_provider),
+    runtime_model: tuple[Settings, ModelProvider] | None = Depends(get_runtime_model),
+) -> GenericDecisionResponse:
+    active_settings, active_provider = runtime_model if isinstance(runtime_model, tuple) else (settings if isinstance(settings, Settings) else Settings(), provider if hasattr(provider, "enabled") else None)
+    try:
+        return GenericDecisionOrchestrator(db, settings=active_settings, provider=active_provider).command(uid, decision_id, body)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except DecisionRevisionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except SearchProviderError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @router.get("/api/v1/decisions/{decision_id}", response_model=DecisionState)
-def get_decision(decision_id: str, db: Session = Depends(get_db)) -> DecisionState:
-    row = db.get(DecisionRecord, decision_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Decision 不存在")
-    return DecisionState.model_validate(row.state_json)
+def get_decision(
+    decision_id: str,
+    uid: int = Depends(user_id),
+    db: Session = Depends(get_db),
+) -> DecisionState:
+    resolved_uid = uid if isinstance(uid, int) else 1
+    decision = DecisionRepository(db).get_for_user(decision_id, resolved_uid)
+    if decision is None:
+        raise HTTPException(status_code=404, detail="Decision 不存在或无权访问")
+    from choice_agent.decision.conversation import public_decision
+    return public_decision(decision)
+
+
+@router.post("/api/v1/decision-domains/resolve")
+def resolve_decision_domain(body: GenericDecisionRequest):
+    from choice_agent.domains.registry import DomainRegistry
+    try:
+        return DomainRegistry().identify(body.message, body.domain)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error

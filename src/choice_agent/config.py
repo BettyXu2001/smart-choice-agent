@@ -20,6 +20,12 @@ class Settings:
     model_timeout_seconds: float = 30.0
     enable_llm: bool = False
     debug: bool = True
+    search_provider: str = "fixture"
+    search_api_key: str = ""
+    search_base_url: str = "https://api.openai.com/v1"
+    search_model: str = "gpt-5-mini"
+    search_timeout_seconds: float = 20.0
+    search_max_queries: int = 2
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -32,4 +38,10 @@ class Settings:
             model_timeout_seconds=float(os.getenv("CHOICE_AGENT_MODEL_TIMEOUT_SECONDS", "30")),
             enable_llm=_as_bool(os.getenv("CHOICE_AGENT_ENABLE_LLM")),
             debug=_as_bool(os.getenv("CHOICE_AGENT_DEBUG"), True),
+            search_provider=os.getenv("CHOICE_AGENT_SEARCH_PROVIDER", "fixture").strip().lower(),
+            search_api_key=os.getenv("CHOICE_AGENT_SEARCH_API_KEY", ""),
+            search_base_url=os.getenv("CHOICE_AGENT_SEARCH_BASE_URL", cls.search_base_url),
+            search_model=os.getenv("CHOICE_AGENT_SEARCH_MODEL", cls.search_model),
+            search_timeout_seconds=float(os.getenv("CHOICE_AGENT_SEARCH_TIMEOUT_SECONDS", "20")),
+            search_max_queries=int(os.getenv("CHOICE_AGENT_SEARCH_MAX_QUERIES", "2")),
         )

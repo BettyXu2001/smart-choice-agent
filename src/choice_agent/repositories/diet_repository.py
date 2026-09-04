@@ -19,13 +19,20 @@ from choice_agent.schemas import FeedbackRequest, MealRequest, SourceMode, Trace
 
 
 class DietRepository:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, *, commit: bool = True):
         self.db = db
+        self.commit = commit
+
+    def _save(self):
+        if self.commit:
+            self.db.commit()
+        else:
+            self.db.flush()
 
     def create_session(self, user_id: int, source_mode: SourceMode = SourceMode.PUBLIC) -> SessionRecord:
         row = SessionRecord(id=uuid4().hex, user_id=user_id, source_mode=source_mode.value, slots={})
         self.db.add(row)
-        self.db.commit()
+        self._save()
         return row
 
     def get_session(self, session_id: str, user_id: int) -> SessionRecord | None:
@@ -39,7 +46,7 @@ class DietRepository:
         row.updated_at = datetime.now()
         row.revision += 1
         self.db.add(row)
-        self.db.commit()
+        self._save()
 
     def add_message(
         self, session_id: str, role: str, content: str, intent: str | None, trace_id: str
@@ -53,7 +60,7 @@ class DietRepository:
                 agent_trace_id=trace_id,
             )
         )
-        self.db.commit()
+        self._save()
 
     def recent_messages(self, session_id: str, limit: int = 10) -> list[MessageRecord]:
         rows = self.db.scalars(
@@ -78,7 +85,7 @@ class DietRepository:
             **request.slots().model_dump(),
         )
         self.db.add(row)
-        self.db.commit()
+        self._save()
         return row
 
     def update_meal(self, user_id: int, meal_id: int, request: MealRequest) -> MealRecord | None:
@@ -94,7 +101,7 @@ class DietRepository:
         row.name = request.name.strip()
         for key, value in request.slots().model_dump().items():
             setattr(row, key, value)
-        self.db.commit()
+        self._save()
         return row
 
     def delete_meal(self, user_id: int, meal_id: int) -> bool:
@@ -108,7 +115,7 @@ class DietRepository:
         if row is None:
             return False
         self.db.delete(row)
-        self.db.commit()
+        self._save()
         return True
 
     def slot_options(self) -> dict[str, list[str]]:
@@ -133,7 +140,7 @@ class DietRepository:
                 reason=request.reason,
             )
         )
-        self.db.commit()
+        self._save()
 
     def feedbacks(
         self,
@@ -159,7 +166,7 @@ class DietRepository:
 
     def save_trace(self, row: TraceRecord) -> None:
         self.db.add(row)
-        self.db.commit()
+        self._save()
 
     def trace(self, user_id: int, trace_id: str) -> TraceRecord | None:
         return self.db.scalar(
@@ -218,7 +225,7 @@ class DietRepository:
         row.label_note = request.label_note
         row.labeled_by = user_id
         row.labeled_at = datetime.now()
-        self.db.commit()
+        self._save()
         return row
 
     def save_decision(self, decision_id: str, session_id: str, state: dict) -> None:
@@ -237,4 +244,4 @@ class DietRepository:
             row.revision = state.get("revision", row.revision)
             row.state_json = state
         self.db.add(row)
-        self.db.commit()
+        self._save()

@@ -39,3 +39,29 @@ def test_generic_decision_api_rejects_stale_message(database):
                 db=db,
             )
         assert error.value.status_code == 409
+
+def test_generic_decision_api_command_and_owner(database):
+    from choice_agent.api.routes import command_decision
+    from choice_agent.schemas import DecisionCommandRequest
+
+    with database.session_factory() as db:
+        created = create_decision(
+            GenericDecisionRequest(message="周末从上海出发两天一夜", domain="travel"),
+            uid=1,
+            db=db,
+        )
+        updated = command_decision(
+            created.decision_state.decision_id,
+            DecisionCommandRequest(
+                command_id="api-weight",
+                type="set_criterion_weight",
+                expected_revision=created.decision_state.revision,
+                payload={"criterionKey": "travel_hours", "weight": 0},
+            ),
+            uid=1,
+            db=db,
+        )
+        assert updated.decision_state.revision == 2
+        with pytest.raises(HTTPException) as error:
+            get_decision(created.decision_state.decision_id, uid=2, db=db)
+        assert error.value.status_code == 404

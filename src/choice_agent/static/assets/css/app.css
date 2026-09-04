@@ -1480,3 +1480,169 @@ body[data-theme="pop"] .demo-trace span {
         width: max-content;
     }
 }
+
+.unified-workbench .weight-stack {
+    display: grid;
+    gap: 10px;
+}
+
+.unified-workbench .weight-row {
+    display: grid;
+    grid-template-columns: minmax(100px, 1fr) minmax(90px, 1fr) 34px;
+    gap: 8px;
+    align-items: center;
+}
+
+.unified-workbench .weight-row output {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.unified-workbench .inline-form {
+    display: grid;
+    grid-template-columns: minmax(140px, 1fr) minmax(160px, 1fr) auto;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.unified-workbench .score-block {
+    display: flex;
+    min-width: 120px;
+    min-height: 40px;
+    gap: 8px;
+    place-items: initial;
+    align-items: center;
+    padding: 0;
+    border-radius: 0;
+    color: var(--text);
+    background: transparent;
+}
+
+.unified-workbench .demo-candidate {
+    border-radius: 8px;
+}
+
+@media (max-width: 620px) {
+    .unified-workbench .inline-form,
+    .unified-workbench .weight-row {
+        grid-template-columns: 1fr;
+    }
+
+    .unified-workbench .score-block {
+        width: 100%;
+        justify-content: space-between;
+    }
+}
+
+/* Compact controls must not force the workbench wider than its grid track. */
+.unified-workbench .inline-form.compact { grid-template-columns: minmax(0, 1fr); }
+.unified-workbench .demo-sidebar, .unified-workbench .demo-main { min-width: 0; }
+.unified-workbench .inline-form input, .unified-workbench .inline-form select { min-width: 0; width: 100%; }
+.unified-workbench .demo-header h2 { overflow-wrap: anywhere; font-size: 24px; }
+.unified-workbench .demo-list span { overflow-wrap: anywhere; min-width: 0; }
+.unified-workbench button:disabled { opacity: 0.55; cursor: wait; }
+
+.unified-workbench .weight-row {
+    grid-template-columns: minmax(0, 1fr) 34px;
+    padding: 10px 0;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+}
+.unified-workbench .weight-row input { grid-column: 1; grid-row: 2; }
+.unified-workbench .weight-row output { grid-column: 2; grid-row: 2; }
+.unified-workbench .inline-form input,
+.unified-workbench .inline-form select {
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    background: var(--field-bg);
+    font: inherit;
+}
+.unified-workbench .score-block { box-shadow: none; height: auto; }
+.unified-workbench .attribute-grid strong { display: block; margin-bottom: 3px; }
+.unified-workbench .demo-candidate .demo-list > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 0;
+    border-radius: 0;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+}
+.unified-workbench .demo-candidate .demo-list > div strong { font-weight: 500; }
+
+
+/* Diet conversation: current, editable decision alongside the dialogue. */
+.diet-conversation { grid-template-columns: minmax(0, 1.9fr) minmax(310px, 1fr); align-items: start; }
+.diet-conversation .chat-window { min-height: 0; height: calc(100dvh - 158px); grid-template-rows: auto minmax(0, 1fr) auto; }
+.diet-panel { background: var(--surface, #fff); border: 1px solid var(--border, #dce5df); border-radius: 24px; padding: 24px; max-height: calc(100dvh - 158px); overflow: auto; min-width: 0; }
+.diet-panel h3, .diet-panel h4 { margin: 0; }
+.diet-panel-section { border-top: 1px solid var(--border, #dce5df); padding-top: 18px; margin-top: 18px; }
+.diet-panel .card-title { gap: 10px; }
+.diet-goal { font-size: 1.08rem; line-height: 1.7; overflow-wrap: anywhere; }
+.diet-field-row { display: flex; justify-content: space-between; gap: 16px; padding: 12px 0; font-size: .9rem; }
+.diet-field-row > div { text-align: right; max-width: 65%; overflow-wrap: anywhere; }
+.diet-field-row small { display: block; opacity: .65; margin-top: 4px; }
+.diet-pending, .diet-error { padding: 12px; border-radius: 12px; background: var(--surface-soft, #f2f5ee); font-size: .88rem; line-height: 1.7; }
+.diet-error { border: 1px solid #b87b57; margin-bottom: 8px; }
+.diet-option { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border, #dce5df); border-radius: 12px; padding: 7px 10px; font-size: .87rem; }
+.diet-option:has(input:checked) { background: var(--primary-soft); }
+.diet-option input { width: auto; margin: 0; }
+.diet-field-editor { margin-bottom: 12px; }
+.diet-field-editor .chips { margin: 10px 0; max-height: 180px; overflow: auto; }
+.diet-panel summary, .diet-history summary { cursor: pointer; font-size: .9rem; padding: 7px 0; }
+.diet-result-label { display: block; font-size: .8rem; margin: 12px 0 6px; opacity: .7; }
+.diet-panel .meal-card { margin-bottom: 12px; }
+.diet-panel .score { display: none; }
+.diet-panel .button-row { flex-wrap: wrap; margin-top: 12px; }
+.diet-plan-slot h4 { padding: 14px 0 8px; }
+.diet-composer-wrap { min-width: 0; }
+.diet-quick { margin-bottom: 10px; }
+.diet-conversation .composer { padding-top: 10px; }
+.diet-panel-toggle, .diet-panel-close, .diet-panel-backdrop { display: none; }
+.diet-history { max-width: 100%; }
+.diet-conversation .message { min-width: 0; }
+.diet-panel :focus-visible { outline: 2px solid var(--accent, #36785d); outline-offset: 3px; }
+@media (max-width: 980px) {
+    .diet-conversation { grid-template-columns: minmax(0, 1fr); }
+    .diet-conversation .chat-window { height: calc(100dvh - 175px); min-height: 440px; }
+    .diet-panel { display: none; }
+    .diet-panel.is-open { display: block; position: fixed; inset: 0 0 0 auto; width: min(92vw, 440px); max-height: 100dvh; height: 100dvh; z-index: 101; border-radius: 24px 0 0 24px; padding-bottom: 40px; }
+    .diet-panel-toggle, .diet-panel-close { display: inline-flex; }
+    .diet-panel-backdrop { display: block; position: fixed; inset: 0; z-index: 100; background: #182b2470; border: 0; border-radius: 0; }
+}
+@media (max-width: 620px) {
+    .diet-conversation .chat-window { padding: 16px; }
+    .diet-conversation .card-title { flex-wrap: wrap; }
+    .diet-conversation h2 { font-size: 1.3rem; }
+    .diet-conversation .composer { grid-template-columns: minmax(0, 1fr); }
+    .diet-quick .chip { font-size: .78rem; }
+}
+
+.page:has(.diet-conversation):focus { outline: none; }
+.diet-conversation textarea { width: 100%; min-height: 64px; resize: vertical; max-height: 170px; padding: 14px; border: 1px solid var(--border); border-radius: 16px; background: var(--field-bg); color: var(--text); }
+.diet-conversation textarea:focus { outline: 2px solid var(--primary-soft); border-color: var(--primary); }
+.diet-meal-reason { font-size: .9rem; line-height: 1.7; margin: 0; }
+.diet-panel .meal-card { padding: 16px; }
+.diet-panel .meal-card h3 { font-size: 1rem; }
+.diet-panel .meal-card .button-row { gap: 6px; }
+.diet-panel .meal-card .btn { font-size: .82rem; padding: 8px 12px; }
+.diet-conversation .eyebrow { font-size: .8rem; color: var(--muted); }
+
+/* Shared conversation panel: compact details remain secondary to the dialogue. */
+.general-choice { padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.general-choice p { margin: 5px 0; }
+.general-details .demo-grid { display: block; }
+.general-details .demo-header { display: block; padding: 12px 0; }
+.general-details .demo-header h2 { font-size: 17px; }
+.general-details .demo-sidebar, .general-details .demo-main { padding: 0; min-width: 0; }
+.general-details .demo-candidates, .general-details .attribute-grid { display: grid; grid-template-columns: 1fr; }
+.general-details .inline-form { display: flex; flex-direction: column; align-items: stretch; }
+.general-details input, .diet-field-row input, .diet-field-row select { min-width: 0; width: 100%; box-sizing: border-box; }
+.general-details .demo-candidate-head { flex-wrap: wrap; }
+.general-details .demo-workbench { padding: 0; }
+.diet-field-row small { display: block; line-height: 1.5; }
+.message .bubble { white-space: pre-wrap; }

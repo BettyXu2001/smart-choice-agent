@@ -94,7 +94,10 @@
 
         if (!response.ok) {
             const detail = await readError(response);
-            throw new Error(detail || `请求失败：${response.status}`);
+            const error = new Error(detail || `请求失败：${response.status}`);
+            error.status = response.status;
+            error.detail = detail;
+            throw error;
         }
 
         if (response.status === 204) {
@@ -129,7 +132,7 @@
 
         try {
             const payload = JSON.parse(text);
-            return payload.message || payload.error || text;
+            return typeof payload.detail === "string" ? payload.detail : payload.message || payload.error || text;
         } catch (error) {
             return text;
         }
@@ -153,6 +156,8 @@
         saveModelSettings,
         clearModelSettings,
         hasConfiguredModel,
+        state: (sessionId) => dietRequest(`/sessions/${encodeURIComponent(sessionId)}/state`),
+        command: (sessionId, payload) => dietRequest(`/sessions/${encodeURIComponent(sessionId)}/commands`, { method: "POST", body: payload }),
         createSession: () => dietRequest("/sessions", { method: "POST" }),
         chat: (payload) => dietRequest("/chat", { method: "POST", body: payload }),
         listPersonalMeals: () => dietRequest("/meals/personal"),
@@ -170,8 +175,10 @@
     };
 
     window.DecisionApi = {
+        resolve: (payload) => request("/api/v1/decision-domains", "/resolve", {method:"POST",body:payload}),
         create: (payload) => decisionRequest("", { method: "POST", body: payload }),
         message: (decisionId, payload) => decisionRequest(`/${encodeURIComponent(decisionId)}/messages`, { method: "POST", body: payload }),
+        command: (decisionId, payload) => decisionRequest(`/${encodeURIComponent(decisionId)}/commands`, { method: "POST", body: payload }),
         get: (decisionId) => decisionRequest(`/${encodeURIComponent(decisionId)}`)
     };
 })();

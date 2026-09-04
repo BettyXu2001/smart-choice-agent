@@ -42,11 +42,12 @@ debuggable, explainable, and stable.
 
 ```text
 FastAPI / Static Web
-  -> DietOrchestrator
-    -> Specialized Agents
-      -> Deterministic Decision Engine
-        -> Diet Domain Plugin
-          -> SQLAlchemy / SQLite
+  -> Diet / Generic API Facades
+    -> UnifiedDecisionOrchestrator + StageRunner (evolved from Diet)
+      -> DomainProfile: Diet / Travel / Shopping / Generic
+        -> Provider + EvidenceValidator + GenericRankingEngine
+          -> Optional Composition + Critic + Explanation + Safety
+            -> DecisionRepository / SQLAlchemy / SQLite
 ```
 
 The agents handle language, clarification, planning, review, and explanation.
@@ -85,7 +86,7 @@ python -m uvicorn choice_agent.main:app --host 127.0.0.1 --port 8000
 By default, LLM mode is disabled and the system runs with deterministic rule
 agents.
 
-Copy `.env.example` and configure the values you need:
+Set the environment variables listed in `.env.example` (`Settings` does not auto-load `.env`):
 
 ```env
 CHOICE_AGENT_DATABASE_URL=sqlite:///./choice_agent.db
@@ -104,8 +105,9 @@ behavior so the deterministic decision engine can continue to work.
 The web UI also has a Settings page at `#/settings` for browser-side model
 configuration. Values saved there are stored in the current browser's
 localStorage and sent to the local backend as request headers for diet chat and
-evaluation requests. If no browser API key is configured, the home page shows demo
-mode and generic non-diet decisions continue to use the local demo workbench.
+evaluation requests. Generic decisions now use the backend workbench even without
+an API key. Travel and Shopping default to explicitly labeled fixture data; unknown
+domains ask for manual candidates. Backend errors no longer silently create a demo.
 
 ## Demo Mode
 
@@ -219,11 +221,12 @@ Smart Choice Agent 可以把模糊需求转成候选项排序、约束分析、�
 
 ```text
 FastAPI / Static Web
-  -> DietOrchestrator
-    -> Specialized Agents
-      -> Deterministic Decision Engine
-        -> Diet Domain Plugin
-          -> SQLAlchemy / SQLite
+  -> Diet / Generic API Facades
+    -> UnifiedDecisionOrchestrator + StageRunner (evolved from Diet)
+      -> DomainProfile: Diet / Travel / Shopping / Generic
+        -> Provider + EvidenceValidator + GenericRankingEngine
+          -> Optional Composition + Critic + Explanation + Safety
+            -> DecisionRepository / SQLAlchemy / SQLite
 ```
 
 Agent 负责自然语言理解、澄清、计划、审查和解释；确定性引擎负责过滤、评分、排序、
@@ -260,7 +263,7 @@ python -m uvicorn choice_agent.main:app --host 127.0.0.1 --port 8000
 
 默认 `CHOICE_AGENT_ENABLE_LLM=false`，系统使用确定性规则 Agent 运行。
 
-复制 `.env.example` 并按需配置：
+按 `.env.example` 设置进程环境变量（当前不会自动读取 `.env` 文件）：
 
 ```env
 CHOICE_AGENT_DATABASE_URL=sqlite:///./choice_agent.db
@@ -274,7 +277,7 @@ CHOICE_AGENT_DEBUG=true
 ```
 
 模型调用失败时，意图和解释 Agent 会回退到本地规则结果，不影响确定性决策引擎运行。
-Web UI 也提供 `#/settings` 设置页，可配置浏览器侧模型 API。该设置保存在当前浏览器的 `localStorage`，并随饮食聊天和评估请求通过请求头发送给本地后端。未配置浏览器 API Key 时，首页会显示演示模式，通用非饮食决策继续使用本地演示工作台。
+Web UI 也提供 `#/settings` 设置页，可配置浏览器侧模型 API。该设置保存在当前浏览器的 `localStorage`，并随饮食聊天和评估请求通过请求头发送给本地后端。未配置浏览器 API Key 时，通用决策仍进入服务端工作台；旅行和购物使用明确标注的离线模拟数据，未知领域先澄清并收集手工候选。后端错误不再自动创建本地 demo。
 
 ## 演示模式
 
@@ -340,3 +343,43 @@ adr/                   Research 和 Plan 记录
 ## 许可证
 
 MIT
+
+
+## Unified Decision Workbench / 统一决策工作台
+
+Diet is the source of the shared lifecycle, not a separate pipeline migrated into
+an unrelated generic engine. Both API facades call the same StageRunner.
+Diet keeps its domain rules, database provider, plan composition and safety policies;
+Travel, Shopping and Generic reuse the shared comparison implementation.
+
+- Create: `POST /api/v1/decisions`; continue: `/{id}/messages`; edit: `/{id}/commands`.
+- Commands require `commandId`, `type`, `expectedRevision`, and optional `payload` / `context`.
+- Weight edits and exclusions reuse the candidate pool. Refresh preserves manual
+  candidates. Constraint operators include `lte`, `gte`, `eq`, `contains_any`, and `not_contains`.
+- Generic manual comparisons use user-entered 0-100 fit, cost and risk scores.
+  They are subjective inputs, not externally verified facts.
+- Owners are checked on reads and mutations. Concurrent stale writes fail with 409.
+  This JSON ownership compatibility layer is not a production authentication system.
+- `#/demo` remains an explicit offline example, not an automatic error fallback.
+
+Search configuration (independent of the browser model settings):
+
+```env
+CHOICE_AGENT_SEARCH_PROVIDER=fixture
+CHOICE_AGENT_SEARCH_API_KEY=
+CHOICE_AGENT_SEARCH_BASE_URL=https://api.openai.com/v1
+CHOICE_AGENT_SEARCH_MODEL=gpt-5-mini
+CHOICE_AGENT_SEARCH_TIMEOUT_SECONDS=20
+CHOICE_AGENT_SEARCH_MAX_QUERIES=2
+```
+
+`context.searchMode` accepts `fixture`, `web`, or `auto`. Explicit `web` failure
+returns 502; only `auto` may fall back with a warning. Search has at most two
+transport attempts; the tool-call limit applies per attempt.
+Source URLs are accepted only if returned by the search tool. A verified URL
+does not establish that every claim is true. Live search has not yet been
+validated with production credentials.
+
+当前已验证共享流程、Diet 回归、命令编辑及桌面/移动端基本交互。独立 Source/Evidence
+阶段 Trace、严格类型化 hook、完整证据冲突/时效/覆盖率策略和更多领域知识仍在 Plan
+的待办中，不应把当前实现视为全部计划已完成。

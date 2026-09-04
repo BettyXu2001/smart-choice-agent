@@ -677,6 +677,8 @@
 
     window.ChoiceAgentDemo = {
         domainLabels,
+        examples: () => Object.values(fixtures).map(clone),
+        findDecision: id => { const value = readStore()[id]; return value ? clone(value) : null; },
         createDecision,
         loadDecision,
         saveDecision,

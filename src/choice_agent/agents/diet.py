@@ -1,24 +1,27 @@
 from __future__ import annotations
 
 import json
+import logging
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
 from choice_agent.agents.base import AgentContext, BaseAgent
 from choice_agent.decision.engine import DecisionEngine, RankedMeal
-from choice_agent.decision.selector import SelectionCandidate, select_candidates
 from choice_agent.decision.state_machine import transition_decision
 from choice_agent.domains.diet.rules import (
     clarify, classify_intent, conservative_message, extract_slots, hard_exclusions, risk_reasons,
 )
 from choice_agent.providers.model import ModelProvider
 from choice_agent.repositories.diet_repository import DietRepository
+from choice_agent.domains.diet.state import understand_fields
 from choice_agent.schemas import (
-    CandidateState, Constraint, ConstraintKind, DecisionNextAction, DecisionStatus,
+    ClarifyAction, DecisionNextAction, DecisionStatus,
     Intent, MealResponse, Recommendation, SlotBundle, SourceMode, UnansweredQuestion,
 )
 
 
+logger = logging.getLogger(__name__)
 PROMPT_DIR = Path(__file__).parents[1] / "prompts" / "diet"
 
 
@@ -50,11 +53,17 @@ class IntentAgent(BaseAgent):
                     }, ensure_ascii=False),
                     self.model_name,
                 )
-                intent = Intent(parsed.get("intent", intent.value))
-                slots = slots.merged_with(SlotBundle.model_validate(parsed.get("slots", {})))
-                confidence = float(parsed.get("confidence", confidence))
+                model_intent = Intent(parsed.get("intent", intent.value))
+                model_slots = slots.merged_with(SlotBundle.model_validate(parsed.get("slots", {})))
+                model_confidence = float(parsed.get("confidence", confidence))
+                if not isfinite(model_confidence) or not 0 <= model_confidence <= 1:
+                    raise ValueError("Invalid intent confidence")
+                if intent != Intent.HEALTH_RISK:
+                    intent = model_intent
+                    confidence = model_confidence
+                slots = model_slots
             except (ValueError, KeyError, TypeError):
-                pass
+                logger.warning("Invalid model intent output; preserving rule-based intent and slots")
         context.decision.intent = intent
         context.data["incoming_slots"] = slots
         return {"intent": intent.value, "slots": slots.model_dump(by_alias=True), "confidence": confidence}
@@ -64,23 +73,13 @@ class UnderstandingAgent(BaseAgent):
     name = "UnderstandingAgent"
 
     def execute(self, context: AgentContext) -> dict[str, Any]:
-        current = SlotBundle.model_validate(context.data.get("current_slots", {}))
-        incoming = context.data["incoming_slots"]
-        merged = current.merged_with(incoming)
-        banned = hard_exclusions(context.message, context.data["slot_options"])
-        context.data["slots"] = merged
-        context.data["hard_exclusions"] = banned
+        patch = understand_fields(context)
+        merged = context.data["slots"]
+        banned = context.data["hard_exclusions"]
         context.decision.user_goal = context.message
-        context.decision.criteria = list(DecisionEngine.criteria)
-        context.decision.constraints = [
-            Constraint(key="diet_exclusion", kind=ConstraintKind.HARD, values=banned)
-        ] if banned else []
-        for key, values in merged.model_dump().items():
-            if values:
-                context.decision.constraints.append(
-                    Constraint(key=key, kind=ConstraintKind.SOFT, values=values)
-                )
-        context.decision.domain_state["slots"] = merged.model_dump(by_alias=True)
+        context.decision.criteria = [item.model_copy(deep=True) for item in DecisionEngine.criteria]
+        if patch and context.decision.intent == Intent.OTHER:
+            context.decision.intent = Intent.MEAL_RECOMMENDATION
         return {
             "slots": merged.model_dump(by_alias=True),
             "hardExclusions": banned,
@@ -93,6 +92,8 @@ class ClarificationAgent(BaseAgent):
 
     def execute(self, context: AgentContext) -> dict[str, Any]:
         action, question, missing = clarify(context.data["slots"])
+        if context.data.get("field_conflicts"):
+            action, question, missing = ClarifyAction.ASK, " ".join(context.data["field_conflicts"]), []
         context.data["clarify_action"] = action
         context.data["clarify_question"] = question
         context.data["missing_slots"] = missing
@@ -110,59 +111,6 @@ class ClarificationAgent(BaseAgent):
         return {"action": action.value, "questionToAsk": question, "missingSlots": missing}
 
 
-class CandidateAgent(BaseAgent):
-    name = "CandidateAgent"
-
-    def __init__(self, repository: DietRepository, engine: DecisionEngine):
-        self.repository = repository
-        self.engine = engine
-
-    def execute(self, context: AgentContext) -> dict[str, Any]:
-        source = SourceMode(context.data["source_mode"])
-        meals = self.repository.list_meals(source, context.user_id)
-        ranked = self.engine.rank(
-            meals, context.data["slots"], context.data.get("exclude_ids", []),
-            context.data.get("hard_exclusions", []),
-        )
-        selection = select_candidates(
-            [
-                SelectionCandidate(
-                    candidate_id=str(item.meal.id),
-                    name=item.meal.name,
-                    score=item.score,
-                    attributes={"sourceMode": item.meal.source_type},
-                )
-                for item in ranked
-            ],
-            context.data.get("selection_strategy", "ranked"),
-            context.data.get("recent_recommendation_ids", []),
-            context.data.get("avoid_recent_count", 0),
-        )
-        ranked_by_id = {str(item.meal.id): item for item in ranked}
-        ranked = [ranked_by_id[item_id] for item_id in selection.ordered_ids]
-        context.data["ranked"] = ranked
-        context.decision.domain_state["selection"] = selection.insights.as_dict()
-        context.decision.candidates = [self.engine.candidate(item) for item in ranked]
-        context.decision.candidate_state = {
-            candidate.candidate_id: CandidateState(status="active", updated_by=self.name)
-            for candidate in context.decision.candidates
-        }
-        context.decision.evidence = [
-            evidence for candidate in context.decision.candidates for evidence in candidate.evidence
-        ]
-        transition_decision(
-            context.decision, DecisionStatus.COMPARING, DecisionNextAction.COMPARE_CANDIDATES
-        )
-        return {
-            "sourceMode": source.value,
-            "candidateCount": len(ranked),
-            "candidates": [
-                {"id": item.meal.id, "name": item.meal.name, "score": item.score}
-                for item in ranked
-            ],
-        }
-
-
 class AdjustmentAgent(BaseAgent):
     name = "AdjustmentAgent"
 
@@ -171,53 +119,6 @@ class AdjustmentAgent(BaseAgent):
         context.data["exclude_ids"] = excluded
         context.decision.excluded_candidates = [str(item) for item in excluded]
         return {"excludeMealIds": excluded}
-
-
-class PlanningAgent(BaseAgent):
-    name = "PlanningAgent"
-    default_meal_times = ["早餐", "午餐", "晚餐"]
-
-    def __init__(self, repository: DietRepository, engine: DecisionEngine):
-        self.repository = repository
-        self.engine = engine
-
-    def execute(self, context: AgentContext) -> dict[str, Any]:
-        slots: SlotBundle = context.data["slots"]
-        requested = [value for value in slots.meal_time if value != "三餐"]
-        meal_times = requested if len(requested) >= 2 else self.default_meal_times
-        used: list[int] = []
-        planned: list[tuple[str, RankedMeal | None]] = []
-        source = SourceMode(context.data["source_mode"])
-        meals = self.repository.list_meals(source, context.user_id)
-        for meal_time in meal_times:
-            query = slots.model_copy(update={"meal_time": [meal_time]})
-            ranked = self.engine.rank(
-                meals, query, [*context.data.get("exclude_ids", []), *used],
-                context.data.get("hard_exclusions", []),
-            )
-            selected = ranked[0] if ranked else None
-            if selected:
-                used.append(selected.meal.id)
-            planned.append((meal_time, selected))
-        context.data["planned"] = planned
-        context.data["ranked"] = [item for _, item in planned if item is not None]
-        context.decision.candidates = [
-            self.engine.candidate(item) for item in context.data["ranked"]
-        ]
-        context.decision.candidate_state = {
-            candidate.candidate_id: CandidateState(status="active", updated_by=self.name)
-            for candidate in context.decision.candidates
-        }
-        transition_decision(
-            context.decision, DecisionStatus.COMPARING, DecisionNextAction.COMPARE_CANDIDATES
-        )
-        return {
-            "mealTimes": meal_times,
-            "plannedMeals": [
-                {"mealTime": meal_time, "mealId": item.meal.id if item else None}
-                for meal_time, item in planned
-            ],
-        }
 
 
 class CriticAgent(BaseAgent):
@@ -295,7 +196,7 @@ class ExplanationAgent(BaseAgent):
                     if meal_id in reasons and str(option.get("reason", "")).strip():
                         reasons[meal_id] = str(option["reason"]).strip()
             except (ValueError, KeyError, TypeError):
-                pass
+                logger.warning("Invalid model explanation output; preserving available rule-based reasons")
         blocks = [_meal_response(item, reasons[item.meal.id]) for item in selected]
         if context.decision.intent == Intent.MEAL_PLAN:
             lines = ["我为你安排了这几餐："]

@@ -35,12 +35,16 @@
         editingMeal: null,
         chat: {
             domain: "DIET",
+            mode: "diet",
+            routeId: null,
             sourceMode: "PERSONAL",
             sessionId: null,
             sending: false,
             pendingPrompt: "",
             autoSending: false,
-            messages: defaultChatMessages()
+            messages: defaultChatMessages(),
+            decision: null, draft: "", editFields: null, panelOpen: false,
+            initialized: false, generation: 0, retry: null, error: ""
         },
         traces: {
             rows: [],
@@ -220,7 +224,7 @@
         } else if (route === "/diet") {
             navigate("/diet/chat");
         } else if (route === "/diet/chat") {
-            renderChat();
+            conversation.enter("diet");
         } else if (route === "/demo" || route.startsWith("/demo/decision/")) {
             renderDemoWorkbench(route);
         } else if (route.startsWith("/decisions/")) {
@@ -244,8 +248,8 @@
         const modelConfigured = DietApi.hasConfiguredModel();
         const modeTitle = modelConfigured ? "模型配置已启用" : "演示模式";
         const modeDescription = modelConfigured
-            ? "饮食链路会尝试使用浏览器设置中的模型配置增强理解和解释；通用非饮食问题优先进入后端通用决策链路。"
-            : "未配置浏览器模型 API。通用非饮食问题优先使用后端 fixture 领域，失败时回退本地演示数据。";
+            ? "对话会使用已配置的模型辅助理解；你可以随时查看和修正当前条件。"
+            : "当前使用规则理解和离线示例。直接说出你的选择，我会整理条件和候选；示例价格和行程尚未核实。";
         const examples = [
             { text: "周末想出去走走，但不知道去哪里", domain: "travel" },
             { text: "A 公司和 B 公司两个 Offer 各有优缺点，应该怎么选", domain: "career" },
@@ -282,14 +286,14 @@
                     ${statCard("描述选择", "一句话开始", "把目标、候选和纠结点先放到同一个入口")}
                     ${statCard("澄清条件", "补关键约束", "信息不足时先追问，不急着给结论")}
                     ${statCard("比较取舍", "解释建议", "展示推荐理由、替代项和下一步")}
-                    ${statCard("通用演示", "旅行 / Offer / 学习 / 购物", "非饮食问题会进入演示工作台，展示结构化比较")}
+                    ${statCard("通用决策", "旅行 / 购物 / 自定义", "服务端决策工作台")}
                 </aside>
             </section>
             <section class="grid three decision-flow" style="margin-top: 18px;">
                 ${featureCard("描述选择", "输入正在纠结的问题，不需要先判断该进入哪个能力。", "#/")}
                 ${featureCard("澄清条件", "系统围绕目标、约束、偏好和场景补齐关键上下文。", "#/")}
                 ${featureCard("比较取舍", "对候选进行排序、解释理由，并保留可追踪的决策过程。", "#/")}
-                ${featureCard("通用 Demo", "用固定演示数据体验旅行、Offer、学习路径和购物决策工作台。", "#/demo")}
+                ${featureCard("通用 Demo", "用演示数据体验同一套对话与可编辑结果侧栏。", "#/demo")}
             </section>
             <section class="developer-links" aria-label="开发者入口">
                 <span class="muted">开发者入口</span>
@@ -308,7 +312,7 @@
                     <div class="card-title">
                         <div>
                             <h2>设置</h2>
-                            <p>配置浏览器侧模型 API。未配置时，通用决策使用本地演示模式。</p>
+                            <p>浏览器模型配置</p>
                         </div>
                         <span class="settings-status" data-mode="${configured ? "model" : "demo"}">${configured ? "模型模式" : "演示模式"}</span>
                     </div>
@@ -343,8 +347,8 @@
                     </form>
                 </div>
                 <aside class="grid settings-side">
-                    ${statCard("当前模式", configured ? "模型模式" : "演示模式", configured ? "饮食助手会尝试调用你配置的模型。" : "通用问题进入本地 demo，饮食助手使用本地规则。")}
-                    ${statCard("通用决策", "演示工作台", "旅行、Offer、学习和购物仍使用前端 fixture。")}
+                    ${statCard("当前模式", configured ? "模型模式" : "演示模式", configured ? "饮食助手会尝试调用你配置的模型。" : "本地规则与离线数据")}
+                    ${statCard("通用决策", "服务端工作台", "旅行、购物与自定义候选")}
                     ${statCard("服务端配置", ".env 保留", "后端环境变量仍可作为部署配置。")}
                 </aside>
             </section>
@@ -417,61 +421,6 @@
             showToast(error.message || "首页数据加载失败", "error");
         }
     }
-    function renderChat() {
-        const sourceLabel = state.chat.sourceMode === "PERSONAL" ? "优先用我的数据" : "使用公共数据";
-        app.innerHTML = `
-            <section class="chat-layout">
-                <div class="section chat-window">
-                    <div class="card-title">
-                        <div>
-                            <div class="title-with-badge">
-                                <h2>决策助手</h2>
-                                <span class="badge domain-label">已识别：饮食决策</span>
-                            </div>
-                            <p>当前会话：${state.chat.sessionId ? escapeHtml(state.chat.sessionId) : "发送消息时自动创建"}</p>
-                        </div>
-                        <div class="inline-actions">
-                            <button class="btn ghost" data-action="new-session">新会话</button>
-                        </div>
-                    </div>
-                    <div id="messages" class="messages">${state.chat.messages.map(renderMessage).join("")}</div>
-                    <form id="chatForm" class="composer">
-                        <textarea name="message" placeholder="例如：今晚想吃清淡一点，最好快手一点" required></textarea>
-                        <button class="btn primary" type="submit">${state.chat.sending ? "发送中..." : "发送"}</button>
-                    </form>
-                </div>
-                <aside class="grid">
-                    <div class="card">
-                        <div class="card-title">
-                            <div>
-                                <h3>快捷问题</h3>
-                                <p>点击后可直接填入输入框。</p>
-                            </div>
-                        </div>
-                        <div class="chips">
-                            ${["早餐想吃方便一点", "晚饭推荐清淡低脂的", "今天心情一般，想吃点热乎的", "换一批，不想吃刚才那些", "我胃不舒服，应该吃什么"].map((text) => `<button class="chip" data-action="quick-message" data-message="${escapeHtml(text)}">${escapeHtml(text)}</button>`).join("")}
-                        </div>
-                    </div>
-                    <div class="card source-panel">
-                        <div class="card-title">
-                            <div>
-                                <h3>决策数据</h3>
-                                <p>当前：${escapeHtml(sourceLabel)}</p>
-                            </div>
-                        </div>
-                        <p class="muted">默认优先参考你的常吃餐食。数据不足时可以临时使用公共餐食，添加常吃餐食会让结果更贴近你。</p>
-                        <div class="button-row">
-                            <button class="btn ${state.chat.sourceMode === "PERSONAL" ? "soft" : "ghost"}" data-action="set-source" data-source="PERSONAL">优先用我的数据</button>
-                            <button class="btn ${state.chat.sourceMode === "PUBLIC" ? "soft" : "ghost"}" data-action="set-source" data-source="PUBLIC">使用公共数据</button>
-                            <a class="btn ghost" href="#/diet/meals/personal">管理我的数据</a>
-                        </div>
-                    </div>
-                </aside>
-            </section>
-        `;
-        scrollMessagesToBottom();
-        triggerPendingPrompt();
-    }
     function demoRouteId(route) {
         const prefix = "/demo/decision/";
         return route.startsWith(prefix) ? decodeURIComponent(route.slice(prefix.length)) : null;
@@ -480,60 +429,74 @@
         return decodeURIComponent(route.replace("/decisions/", "").split("/")[0] || "");
     }
 
-    async function renderGenericDecision(route) {
-        const decisionId = genericRouteId(route);
-        if (!decisionId) {
-            navigate("/");
-            return;
-        }
-        app.innerHTML = `<section class="section"><div class="empty">通用决策加载中...</div></section>`;
-        try {
-            state.generic.decision = await DecisionApi.get(decisionId);
-            renderGenericDecisionState(state.generic.decision);
-        } catch (error) {
-            showToast(error.message || "通用决策加载失败", "error");
-            navigate("/");
-        }
-    }
+    function renderGenericDecision(route) { conversation.enter("general", genericRouteId(route)); }
 
-    function renderGenericDecisionState(decision) {
-        const domainLabel = decision.domain === "travel" ? "旅行决策" : decision.domain;
-        const candidates = decision.candidates || [];
+    function renderGeneralDetails(decision) {
+        const container = document.getElementById("generalDetails");
+        if (!container || !decision) return;
+        const labels = { diet: "饮食决策", travel: "旅行决策", shopping: "购物决策", generic: "通用决策" };
+        const domainLabel = labels[decision.domain] || decision.domain;
+        const activeCandidates = decision.candidates || [];
+        const excludedIds = new Set(decision.excludedCandidates || []);
+        const pool = decision.domainState?.candidatePool || [];
+        const excludedCandidates = pool.filter((item) => excludedIds.has(item.candidateId) && !activeCandidates.some((active) => active.candidateId === item.candidateId));
+        const candidates = [...activeCandidates, ...excludedCandidates];
         const recommendation = decision.recommendation || {};
-        app.innerHTML = `
-            <section class="demo-workbench">
+        const source = decision.domainState?.source || {};
+        container.innerHTML = `
+            <section class="demo-workbench unified-workbench">
                 <header class="demo-header">
                     <div>
-                        <span class="badge demo-badge">后端通用决策</span>
-                        <h2>${escapeHtml(domainLabel)}</h2>
-                        <p>${escapeHtml(decision.userGoal || "")}</p>
+                        <span class="badge demo-badge">${escapeHtml(domainLabel)}</span>
+                        <h2>${escapeHtml(decision.userGoal || "待补充目标")}</h2>
+                        <p>${escapeHtml(decision.intentKey || decision.status || "")} · Revision ${escapeHtml(decision.revision)}</p>
                     </div>
                     <div class="inline-actions">
+                        <button class="btn ghost" type="button" data-command="refresh_candidates">刷新候选</button>
+                        <button class="btn primary" type="button" data-command="generate_recommendation">重新推荐</button>
                         <a class="btn ghost" href="#/">返回首页</a>
                     </div>
                 </header>
                 <div class="demo-grid">
                     <aside class="demo-sidebar">
-                        <div class="card-title"><div><h3>目标和约束</h3><p>Revision ${escapeHtml(decision.revision)}</p></div></div>
+                        <div class="card-title"><div><h3>约束</h3><p>${(decision.constraints || []).length} 项</p></div></div>
                         <div class="demo-list">
-                            ${(decision.constraints || []).map((item) => `<div><strong>${escapeHtml(item.key)}</strong><span>${escapeHtml((item.values || []).join("、"))}</span></div>`).join("") || `<div><span>暂无约束</span></div>`}
+                            ${(decision.constraints || []).map((item) => `<div><strong>${escapeHtml(item.label || item.key)}</strong><span>${escapeHtml(item.value != null ? `${item.operator} ${item.value}` : (item.values || []).join("、"))}</span><button class="btn ghost" type="button" data-remove-constraint="${escapeHtml(item.constraintId || item.key)}">移除</button></div>`).join("") || `<div><span>暂无约束</span></div>`}
+                        </div>
+                        <form id="genericConstraintForm" class="inline-form compact">
+                            <input name="key" required placeholder="约束字段">
+                            <select name="operator" aria-label="约束条件"><option value="lte">不超过</option><option value="gte">不低于</option><option value="contains_any">包含</option><option value="not_contains">排除</option></select>
+                            <input name="value" required placeholder="约束值">
+                            <button class="btn ghost" type="submit">添加</button>
+                        </form>
+                        <div class="subtle-divider"></div>
+                        <h4>权重</h4>
+                        <div class="weight-stack">
+                            ${(decision.criteria || []).map((item) => `<label class="weight-row"><span>${escapeHtml(item.label)}</span><input type="range" min="0" max="3" step="0.1" value="${Number(item.weight || 0)}" data-weight="${escapeHtml(item.key)}"><output>${Number(item.weight || 0).toFixed(1)}</output></label>`).join("") || `<div class="muted">暂无评分标准</div>`}
                         </div>
                         <div class="subtle-divider"></div>
                         <h4>数据来源</h4>
                         <div class="demo-list">
-                            <div><strong>${escapeHtml(decision.domainState?.source?.label || "本地状态")}</strong><span>${decision.domainState?.source?.realTime === false ? "非实时 fixture" : "实时/持久化状态"}</span></div>
+                            <div><strong>${escapeHtml(source.label || "本地状态")}</strong><span>${source.realTime ? "实时搜索" : source.mode === "manual" ? "用户输入" : source.mode === "database" ? "餐食库" : "离线模拟数据"}</span></div>
+                            ${(source.warnings || []).map((warning) => `<div><span>${escapeHtml(warning)}</span></div>`).join("")}
                         </div>
                     </aside>
                     <main class="demo-main">
-                        <div class="card-title"><div><h3>候选排序</h3><p>${candidates.length} 个候选</p></div></div>
-                        <div class="demo-candidates">
-                            ${candidates.map(renderGenericCandidate).join("") || `<div class="empty">暂无候选</div>`}
-                        </div>
+                        ${decision.status === "clarifying" ? `<form id="genericAnswerForm" class="inline-form"><input name="answer" required placeholder="${escapeHtml((decision.clarifyingQuestions || [])[0] || "补充关键信息")}"><button class="btn primary" type="submit">提交</button></form>` : ""}
+                        <div class="card-title"><div><h3>候选比较</h3><p>${activeCandidates.length} 个可用</p></div></div>
+                        <div class="demo-candidates">${candidates.map((candidate) => renderGenericCandidate(candidate, decision)).join("") || `<div class="empty">暂无候选</div>`}</div>
+                        ${decision.domain !== "diet" ? `<form id="genericCandidateForm" class="inline-form">
+                            <input name="name" required placeholder="候选名称">
+                            <input name="summary" placeholder="简短说明">
+                            ${(decision.criteria || []).map((item) => `<label class="field"><span>${escapeHtml(item.label)}</span><input type="number" step="any" name="attribute:${escapeHtml(item.key)}" placeholder="${escapeHtml(item.unit || item.label)}"></label>`).join("")}
+                            <button class="btn ghost" type="submit">添加候选</button>
+                        </form>` : ""}
                         <div class="demo-recommendation">
                             <span class="badge demo-badge">推荐结论</span>
                             <h4>${escapeHtml(recommendation.primaryCandidateId || "待定")}</h4>
                             <p>${escapeHtml(recommendation.summary || "暂无结论")}</p>
                             <div class="demo-list">
+                                ${(recommendation.reasons || []).map((item) => `<div><span>${escapeHtml(item.text)}</span></div>`).join("")}
                                 ${(recommendation.tradeoffs || []).map((item) => `<div><span>${escapeHtml(item)}</span></div>`).join("")}
                             </div>
                         </div>
@@ -541,88 +504,96 @@
                 </div>
             </section>
         `;
+        container.querySelectorAll(".candidate-edit").forEach(form => form.addEventListener("submit", event => {
+            event.preventDefault(); sendGenericCommand("update_candidate", {candidateId:form.dataset.candidateId,summary:new FormData(form).get("summary")});
+        }));
+        document.querySelectorAll("[data-command]").forEach((button) => button.addEventListener("click", () => sendGenericCommand(button.dataset.command, {})));
+        document.querySelectorAll("[data-weight]").forEach((input) => {
+            input.addEventListener("input", () => { input.nextElementSibling.value = Number(input.value).toFixed(1); });
+            input.addEventListener("change", () => sendGenericCommand("set_criterion_weight", { criterionKey: input.dataset.weight, weight: Number(input.value) }));
+        });
+        document.querySelectorAll("[data-candidate-action]").forEach((button) => button.addEventListener("click", () => sendGenericCommand(button.dataset.candidateAction, { candidateId: button.dataset.candidateId })));
+        document.querySelectorAll("[data-remove-constraint]").forEach((button) => button.addEventListener("click", () => sendGenericCommand("remove_constraint", { constraintId: button.dataset.removeConstraint })));
+        document.getElementById("genericConstraintForm")?.addEventListener("submit", (event) => {
+            event.preventDefault();
+            const data = new FormData(event.currentTarget);
+            const operator = data.get("operator");
+            const value = ["lte", "gte"].includes(operator) ? Number(data.get("value")) : String(data.get("value")).trim();
+            if (typeof value === "number" && !Number.isFinite(value)) { showToast("约束值必须是数字", "error"); return; }
+            sendGenericCommand("set_constraint", { constraint: { key: data.get("key"), kind: "hard", operator, value, source: "user" } });
+        });
+        document.getElementById("genericAnswerForm")?.addEventListener("submit", (event) => {
+            event.preventDefault();
+            const answer = new FormData(event.currentTarget).get("answer");
+            sendGenericCommand("answer_question", { answer });
+        });
+        document.getElementById("genericCandidateForm")?.addEventListener("submit", (event) => {
+            event.preventDefault();
+            const data = new FormData(event.currentTarget);
+            const attributes = {};
+            for (const [key, value] of data.entries()) {
+                if (key.startsWith("attribute:") && String(value).trim()) {
+                    const numeric = Number(value);
+                    if (!Number.isFinite(numeric)) { showToast("评分必须是有效数字", "error"); return; }
+                    attributes[key.slice(10)] = numeric;
+                }
+            }
+            sendGenericCommand("add_candidate", { candidate: { name: data.get("name"), summary: data.get("summary"), attributes } });
+        });
     }
 
-    function renderGenericCandidate(candidate) {
-        const attrs = Object.entries(candidate.attributes || {}).filter(([key]) => key !== "summary");
+    function sendGenericCommand(type, payload) { return sendDietCommand(type, payload); }
+
+    function renderGenericCandidate(candidate, decision) {
+        const attrs = Object.entries(candidate.attributes || {});
+        const excluded = (decision.excludedCandidates || []).includes(candidate.candidateId);
+        const breakdown = candidate.scoreBreakdown || [];
+        const evidence = candidate.evidence || [];
         return `
-            <article class="demo-candidate">
+            <article class="demo-candidate${excluded ? " is-eliminated" : ""}">
                 <div class="demo-candidate-head">
-                    <div>
-                        <h3>${escapeHtml(candidate.name)}</h3>
-                        <p>${escapeHtml(candidate.attributes?.summary || "")}</p>
-                    </div>
-                    <span class="score">${Math.round(Number(candidate.score || 0) * 100)}%</span>
+                    <div><h3>${escapeHtml(candidate.name)}</h3><p>${escapeHtml(candidate.summary || "")}</p></div>
+                    <div class="score-block"><span class="score">${decision.domainState?.qualitative || !breakdown.some(p => p.rawValue != null) ? "待比较" : Math.round(Number(candidate.score || 0) * 100) + "%"}</span><button class="btn ghost" type="button" data-candidate-action="${excluded ? "restore_candidate" : "exclude_candidate"}" data-candidate-id="${escapeHtml(candidate.candidateId)}">${excluded ? "恢复" : "排除"}</button></div>
                 </div>
-                <div class="attribute-grid">
-                    ${attrs.map(([key, value]) => `<span><strong>${escapeHtml(key)}</strong>${escapeHtml(value)}</span>`).join("")}
-                </div>
+                <div class="attribute-grid">${attrs.map(([key, value]) => `<span><strong>${escapeHtml(key)}</strong>${escapeHtml(Array.isArray(value) ? value.join("、") : value)}</span>`).join("")}</div>
+                ${breakdown.length ? `<div class="demo-list">${breakdown.map((item) => `<div><strong>${escapeHtml(item.criterionKey)}</strong><span>${Math.round(Number(item.normalizedScore || 0))}</span></div>`).join("")}</div>` : ""}
+                ${candidate.origin === "manual" ? `<form class="candidate-edit inline-form" data-candidate-id="${escapeHtml(candidate.candidateId)}"><label>候选说明<input name="summary" value="${escapeHtml(candidate.summary || "")}" placeholder="优点与顾虑"></label><button class="btn ghost">保存说明</button></form>` : ""}
+                ${evidence.length ? `<div class="demo-list">${evidence.map((item) => `<div><strong>${escapeHtml(item.verificationStatus || "unverified")}</strong><span>${/^https?:\/\//i.test(item.sourceUrl || "") && item.verificationStatus === "verified" ? `<a href="${escapeHtml(item.sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(item.sourceTitle)}</a>` : escapeHtml(item.sourceTitle)}${item.freshness ? ` · ${escapeHtml(item.freshness)}` : ""}</span></div>`).join("")}</div>` : ""}
             </article>
         `;
     }
     function renderDemoWorkbench(route) {
-        if (!window.ChoiceAgentDemo) {
-            app.innerHTML = `<section class="section"><div class="empty">演示模块未加载。</div></section>`;
-            return;
-        }
-        const decision = ChoiceAgentDemo.loadDecision(demoRouteId(route));
-        state.demo.decision = decision;
-        const isConstraintInput = decision.stage === "constraint_input";
-        const isCandidateInput = decision.stage === "candidate_input";
-        const rankings = isConstraintInput || isCandidateInput ? [] : ChoiceAgentDemo.rank(decision);
-        const activeRankings = rankings.filter((item) => !item.candidate.eliminated);
-        const recommendation = decision.recommendation;
-        const domainLabel = ChoiceAgentDemo.domainLabels[decision.domain] || decision.domain;
-        const headerActions = isConstraintInput || isCandidateInput
-            ? `<button class="btn ghost" data-action="demo-new">新建演示</button><a class="btn ghost" href="#/">返回首页</a>`
-            : `<button class="btn soft" data-action="demo-complete">生成结论</button><button class="btn ghost" data-action="demo-edit-constraints">返回编辑约束</button><button class="btn ghost" data-action="demo-edit-candidates">返回编辑候选</button><button class="btn ghost" data-action="demo-new">新建演示</button><a class="btn ghost" href="#/">返回首页</a>`;
-        const mainContent = isConstraintInput
-            ? renderDemoConstraintInput(decision)
-            : isCandidateInput
-                ? renderDemoCandidateInput(decision)
-                : `
-                    <section class="section">
-                        <div class="card-title">
-                            <div>
-                                <h3>候选比较</h3>
-                                <p>基于演示属性和当前权重即时排序。排除候选后不会被选为主推荐。</p>
-                            </div>
-                            <span class="badge">版本 ${escapeHtml(decision.revision)}</span>
-                        </div>
-                        <div class="demo-candidates">
-                            ${rankings.map((item, index) => renderDemoCandidate(item, index, decision)).join("")}
-                        </div>
-                    </section>
-                    <section class="section demo-recommendation">
-                        ${renderDemoRecommendation(decision, recommendation)}
-                    </section>
-                `;
-        app.innerHTML = `
-            <section class="demo-workbench">
-                <header class="section demo-header">
-                    <div>
-                        <div class="title-with-badge">
-                            <h2>Choice Agent Demo</h2>
-                            <span class="badge domain-label">${escapeHtml(domainLabel)}</span>
-                            <span class="badge demo-badge">演示数据 · 非实时</span>
-                        </div>
-                        <p>${escapeHtml(decision.goal)}</p>
-                    </div>
-                    <div class="inline-actions">
-                        ${headerActions}
-                    </div>
-                </header>
-                <div class="demo-grid">
-                    <aside class="section demo-sidebar">
-                        ${renderDemoState(decision, activeRankings)}
-                        ${isConstraintInput || isCandidateInput ? renderDemoNextSteps(decision.stage) : renderDemoWeights(decision)}
-                    </aside>
-                    <div class="demo-main">
-                        ${mainContent}
-                    </div>
-                </div>
-            </section>
-        `;
+        const id = demoRouteId(route);
+        const legacy = id ? ChoiceAgentDemo.findDecision(id) : null;
+        const examples = legacy ? [legacy] : ChoiceAgentDemo.examples();
+        state.demo.examples = examples;
+        app.innerHTML = `<section class="section">
+            <div class="card-title"><div><span class="eyebrow">演示数据 · 非实时</span><h2>用一个示例，体验对话式决策</h2></div><a class="btn ghost" href="#/">返回首页</a></div>
+            <p>直接聊天，右侧同步整理条件和比较结果；看到不对的地方，随时修改。</p>
+            ${id ? `<p class="muted">${legacy ? "旧记录保留在本地。将使用原目标和候选说明开启新版对话，旧评分与约束不会自动迁移。" : "未找到这条本地旧记录，你可以选择下面的示例。"}</p>` : ""}
+            <div class="example-grid">${examples.map((item,index) => `<article class="section"><h3>${escapeHtml(ChoiceAgentDemo.domainLabels[item.domain] || "通用选择")}</h3><p>${escapeHtml(item.goal)}</p><button type="button" class="btn primary" data-action="start-demo-chat" data-index="${index}">${legacy ? "用此记录开启新版对话" : "开始对话体验"}</button></article>`).join("")}</div>
+            <p id="demoError" class="diet-error" role="alert" hidden></p>
+        </section>`;
+    }
+    async function startDemoChat(button) {
+        const example = state.demo.examples?.[Number(button.dataset.index)];
+        if (!example || state.home.creating) return;
+        const restore = setLoading(button, "准备示例…");
+        const errorBox = document.getElementById("demoError");
+        errorBox.hidden = true;
+        try {
+            const domain = ["travel", "shopping"].includes(example.domain) ? example.domain : "generic";
+            let message = example.goal;
+            if (domain === "generic") {
+                const candidates = example.candidateInput?.items?.length ? example.candidateInput.items : example.candidates || [];
+                const descriptions = candidates.filter(c => c.name?.trim()).map(c => `${c.name}：${c.summary || "优点和顾虑待补充"}`);
+                if (descriptions.length) message += "\n以下为演示候选：\n" + descriptions.join("；");
+            }
+            await conversation.startGeneral(message, domain, {context:{searchMode:"fixture",demoMode:true}});
+        } catch (error) {
+            errorBox.textContent = error.message || "示例加载失败，请重试。";
+            errorBox.hidden = false;
+        } finally { restore(); }
     }
     function renderDemoConstraintInput(decision) {
         const drafts = ChoiceAgentDemo.constraintDrafts(decision);
@@ -1005,7 +976,7 @@
         renderDemoWorkbench(currentRoute());
     }
     function renderMessage(message) {
-        const mealCards = (message.meals || []).map((meal) => renderMealCard(meal, { feedback: true, sessionId: message.sessionId })).join("");
+        const mealCards = (message.meals || []).map((meal) => renderMealCard(meal, { feedback: true, sessionId: message.sessionId })).join("") + (message.choices || []).map(c => `<article class="general-choice"><strong>${escapeHtml(c.name)}</strong><p>${escapeHtml(c.summary || "")}</p></article>`).join("");
         const missingSlots = message.missingSlots && message.missingSlots.length
             ? `<div class="chips">${message.missingSlots.map((slot) => `<span class="chip selected">${escapeHtml(SLOT_LABELS[slot] || slot)}</span>`).join("")}</div>`
             : "";
@@ -1016,8 +987,8 @@
             <article class="message ${message.role}">
                 <div class="bubble">${escapeHtml(message.text)}</div>
                 ${missingSlots}
-                ${mealCards ? `<div class="grid">${mealCards}</div>` : ""}
-                ${trace ? `<div class="message-meta">${trace}</div>` : ""}
+                ${mealCards ? `<details class="diet-history"><summary>查看当时推荐</summary><div class="grid">${mealCards}</div></details>` : ""}
+                ${trace ? `<details class="message-meta"><summary>本轮详情</summary>${trace}</details>` : ""}
             </article>
         `;
     }
@@ -1027,52 +998,6 @@
             messages.scrollTop = messages.scrollHeight;
         }
     }
-    async function sendChatMessage(message) {
-        const text = String(message || "").trim();
-        if (!text || state.chat.sending) {
-            return;
-        }
-        state.chat.messages.push({ role: "user", text });
-        state.chat.sending = true;
-        renderChat();
-        try {
-            if (!state.chat.sessionId) {
-                const session = await DietApi.createSession();
-                state.chat.sessionId = session.sessionId;
-            }
-            const response = await DietApi.chat({
-                sessionId: state.chat.sessionId,
-                message: text,
-                sourceMode: state.chat.sourceMode,
-                context: {}
-            });
-            state.chat.sessionId = response.sessionId || state.chat.sessionId;
-            state.chat.messages.push({
-                role: "assistant",
-                text: response.clarifyQuestion || response.speechText || "我已经处理完这轮请求。",
-                responseType: response.responseType,
-                meals: response.displayBlocks || [],
-                missingSlots: response.missingSlots || [],
-                traceId: response.traceId,
-                sessionId: response.sessionId || state.chat.sessionId
-            });
-        } catch (error) {
-            showToast(error.message || "聊天请求失败", "error");
-            state.chat.messages.push({ role: "assistant", text: "这轮请求失败了，请稍后重试。" });
-        } finally {
-            state.chat.sending = false;
-            renderChat();
-        }
-    }
-    async function submitChat(form) {
-        const messageInput = form.elements.message;
-        const message = messageInput.value.trim();
-        if (!message || state.chat.sending) {
-            return;
-        }
-        messageInput.value = "";
-        await sendChatMessage(message);
-    }
     function defaultChatMessages() {
         return [
             {
@@ -1081,67 +1006,7 @@
             }
         ];
     }
-    function resetChat() {
-        state.chat.sessionId = null;
-        state.chat.pendingPrompt = "";
-        state.chat.autoSending = false;
-        state.chat.messages = defaultChatMessages();
-        renderChat();
-    }
-    function prepareChatFromHome(prompt) {
-        state.chat.domain = "DIET";
-        state.chat.sourceMode = "PERSONAL";
-        state.chat.sessionId = null;
-        state.chat.sending = false;
-        state.chat.pendingPrompt = prompt;
-        state.chat.autoSending = false;
-        state.chat.messages = [];
-    }
-    function triggerPendingPrompt() {
-        if (!state.chat.pendingPrompt || state.chat.autoSending || state.chat.sending || currentRoute() !== "/diet/chat") {
-            return;
-        }
-        const prompt = state.chat.pendingPrompt;
-        state.chat.pendingPrompt = "";
-        state.chat.autoSending = true;
-        window.setTimeout(async () => {
-            try {
-                await sendChatMessage(prompt);
-            } finally {
-                state.chat.autoSending = false;
-            }
-        }, 0);
-    }
-    async function renderPersonalMeals() {
-        if (!state.slotOptions) {
-            app.innerHTML = `<section class="section"><div class="empty">标签字典加载中...</div></section>`;
-            await ensureSlotOptions();
-            if (currentRoute() !== "/diet/meals/personal") {
-                return;
-            }
-        }
-        await ensurePersonalMeals();
-        if (currentRoute() !== "/diet/meals/personal") {
-            return;
-        }
-        app.innerHTML = `
-            <section class="split">
-                <div class="section">
-                    <div class="card-title">
-                        <div>
-                            <h2>个人餐食</h2>
-                            <p>维护常吃餐食，决策时会优先参考这些数据。</p>
-                        </div>
-                        <button class="btn primary" data-action="new-meal">新增餐食</button>
-                    </div>
-                    <div id="personalMealList">${renderMealList(state.personalMeals, { editable: true })}</div>
-                </div>
-                <aside class="section">
-                    ${renderMealForm()}
-                </aside>
-            </section>
-        `;
-    }
+
     function renderMealForm() {
         const meal = state.editingMeal || emptyMeal();
         const title = meal.id ? "编辑餐食" : "新增餐食";
@@ -1213,16 +1078,19 @@
     function renderMealCard(meal, options) {
         const editable = options && options.editable;
         const feedback = options && options.feedback;
+        const compact = options && options.compact;
         return `
             <article class="meal-card">
                 <header>
                     <div>
                         <h3>${escapeHtml(meal.name)}</h3>
-                        <p class="muted">${escapeHtml(meal.sourceType || "")}</p>
+                        <p class="muted">${escapeHtml(compact ? (meal.sourceType === "PERSONAL" ? "你的餐食库" : "公共餐食库") : (meal.sourceType || ""))}</p>
                     </div>
                     ${meal.matchScore ? `<span class="score">匹配 ${Math.round(meal.matchScore * 100)}%</span>` : ""}
                 </header>
+                ${compact ? `<p class="diet-meal-reason">${escapeHtml(meal.reason || "根据当前条件筛选")}</p><details><summary>查看餐食标签</summary>` : ""}
                 <div class="chips">${mealTags(meal).map((tag) => `<span class="chip selected">${escapeHtml(tag)}</span>`).join("")}</div>
+                ${compact ? "</details>" : ""}
                 ${editable ? `
                     <div class="button-row">
                         <button class="btn soft" data-action="edit-meal" data-id="${escapeHtml(meal.id)}">编辑</button>
@@ -1725,12 +1593,16 @@
         }, "反馈已记录");
     }
     function handleClick(event) {
+        const dietTarget = event.target.closest("[data-diet-action]");
+        if (dietTarget) { handleDietAction(dietTarget).catch(error => showToast(error.message, "error")); return; }
         const target = event.target.closest("[data-action]");
         if (!target) {
             return;
         }
         const action = target.dataset.action;
-        if (action === "set-theme") {
+        if (action === "start-demo-chat") {
+            startDemoChat(target);
+        } else if (action === "set-theme") {
             setTheme(target.dataset.themeValue);
         } else if (action === "general-example") {
             state.home.generalPrompt = target.dataset.example || "";
@@ -1751,6 +1623,7 @@
             const input = document.querySelector("#chatForm textarea[name=message]");
             if (input) {
                 input.value = target.dataset.message;
+                state.chat.draft = input.value;
                 input.focus();
             }
         } else if (action === "feedback") {
@@ -1808,9 +1681,6 @@
             clearModelSettings();
         }
     }
-    function isDietPrompt(prompt) {
-        return ["吃", "饭", "餐", "早餐", "午餐", "晚餐", "夜宵", "饮食", "清淡", "低脂", "热乎", "胃不舒服"].some((word) => prompt.includes(word));
-    }
     async function submitGeneralDecision(form) {
         const prompt = String(new FormData(form).get("prompt") || "").trim();
         state.home.generalPrompt = prompt;
@@ -1819,26 +1689,15 @@
             renderGeneralHome();
             return;
         }
-        if (isDietPrompt(prompt)) {
-            state.home.notice = "";
-            prepareChatFromHome(prompt);
-            navigate("/diet/chat");
-            return;
-        }
         const input = form.querySelector("textarea[name=prompt]");
         const explicitDomain = input && input.dataset.demoPrompt === prompt ? input.dataset.demoDomain : "";
         const restore = setLoading(form.querySelector('button[type="submit"]'), "创建决策中...");
         try {
-            const response = await DecisionApi.create({ message: prompt, domain: explicitDomain || null });
-            state.generic.decision = response.decisionState;
+            await conversation.startGeneral(prompt, ["diet","travel","shopping","generic"].includes(explicitDomain) ? explicitDomain : null);
             state.home.notice = "";
-            navigate(`/decisions/${encodeURIComponent(response.decisionState.decisionId)}`);
         } catch (error) {
-            const decision = ChoiceAgentDemo.createDecision(prompt, explicitDomain);
-            state.demo.decision = decision;
-            state.home.notice = "通用后端暂不可用，已切换到本地演示工作台。";
-            showToast(error.message || "通用后端不可用，已回退演示", "error");
-            navigate(`/demo/decision/${encodeURIComponent(decision.id)}`);
+            state.home.notice = error.message || "创建决策失败，请重试。";
+            showToast(state.home.notice, "error");
         } finally {
             restore();
         }
@@ -1898,7 +1757,8 @@
             state.publicMeals = [];
             state.traces.rows = [];
             state.traces.selected = null;
-            resetChat();
+            state.chat.generation += 1;
+            Object.assign(state.chat, {sessionId: null, decision: null, messages: defaultChatMessages(), initialized: false, sending: false, retry: null, error: "", draft: "", editFields: null, panelOpen: false, pendingPrompt: "", autoSending: false});
             showToast("用户 ID 已切换");
             render();
         });
@@ -1906,8 +1766,36 @@
     window.addEventListener("hashchange", render);
     document.addEventListener("click", closeThemeMenuOnOutsideClick);
     document.addEventListener("click", handleClick);
+    app.addEventListener("input", event => {
+        if (event.target.id === "dietMessage") state.chat.draft = event.target.value;
+        const key = event.target.dataset.generalField;
+        if (key && state.chat.editFields) state.chat.editFields[key] = event.target.value === "" ? null : event.target.type === "number" ? Number(event.target.value) : event.target.value;
+    });
+    app.addEventListener("change", event => {
+        const general = event.target.dataset.generalField;
+        if (general && event.target.tagName === "SELECT" && state.chat.editFields) state.chat.editFields[general] = event.target.value || null;
+        const key = event.target.dataset.dietField;
+        if (key && state.chat.editFields) {
+            const values = new Set(state.chat.editFields[key] || []);
+            if (event.target.checked) values.add(event.target.value); else values.delete(event.target.value);
+            state.chat.editFields[key] = [...values];
+        }
+    });
+    document.addEventListener("keydown", event => {
+        if (!state.chat.panelOpen || !document.getElementById("dietPanel")) return;
+        if (event.key === "Escape") { event.preventDefault(); closeDietPanel(); }
+        if (event.key === "Tab" && window.matchMedia("(max-width: 980px)").matches) {
+            const panel = document.getElementById("dietPanel");
+            const focusable = [...panel.querySelectorAll("button:not([disabled]), a, input:not([disabled]), select:not([disabled]), summary")].filter(el => el.getClientRects().length);
+            const first = focusable[0], last = focusable[focusable.length - 1];
+            if (event.shiftKey && (document.activeElement === first || document.activeElement === panel)) { event.preventDefault(); last?.focus(); }
+            else if (!event.shiftKey && (document.activeElement === last || document.activeElement === panel)) { event.preventDefault(); first?.focus(); }
+        }
+    });
     app.addEventListener("change", handleChange);
     app.addEventListener("submit", handleSubmit);
+    const conversation = window.createConversation({state, app, currentRoute, navigate, showToast, ensureSlotOptions, SLOT_LABELS, defaultChatMessages, renderMessage, renderMealCard, escapeHtml, genericRouteId, renderGeneralDetails});
+    const {renderChat, closeDietPanel, sendDietCommand, handleDietAction, submitChat, resetChat, prepareChatFromHome} = conversation;
     initTheme();
     initUserField();
     if (!location.hash) {
