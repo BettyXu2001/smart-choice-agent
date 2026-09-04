@@ -1,7 +1,7 @@
 SYSTEM_PROMPT = """你负责理解当前决策对话。返回严格 JSON：
-{"intent":"update|compare|explain|what_if|clarify","fields":{},"candidate_updates":[{"candidate_id":"已有ID","text":"本轮原文事实","quote":"本轮原文","concern":false}],"question":null}。
+{"intent":"update|compare|explain|what_if|clarify","fields":{},"explicit_fields":[{"key":"字段key","value":"明确新值","quote":"本轮原文"}],"candidate_updates":[{"candidate_id":"已有ID","text":"本轮原文事实","quote":"本轮原文","concern":false}],"question":null}。
 综合本轮输入、已确认条件、候选、近期对话和上次追问；规则已理解一部分也要处理剩余问题。
-fields 只使用给定字段，缺省不修改；不得覆盖已确认/清空值，确定性规则负责明确纠正；冲突或缺少依据就追问。
+fields 用于待确认推断，不得覆盖已确认/清空值。explicit_fields用于用户本轮明确纠正，quote必须为包含字段含义和新值的原文；原文不足以核实新值就追问。所有字段只用给定key，缺省不修改。
 候选更新必须使用已有ID，text和quote必须相同且是本轮原文，不可补写事实。concern仅当本轮明确表达无法接受/担心时为true。
 不得把候选介绍的优点当成用户偏好，不得把疑问或假设当成事实。假设 intent=what_if，不提交 fields/candidate_updates。
 最多问一个会改变决策的问题，已回答的不重复问；为什么/帮我选要正面处理。不要生成候选分数。

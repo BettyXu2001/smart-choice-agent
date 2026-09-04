@@ -159,6 +159,8 @@ class GenericDecisionOrchestrator:
             if request.type == "update_fields":
                 current = decision.domain_state.get("conversationFields", {})
                 description += "：" + "、".join(f"{current[k]['label']}设为{v if v is not None else '不限 / 清空'}" for k,v in request.payload.get("fields",{}).items())
+            from choice_agent.decision.assistance import state as assistance_state
+            assistance_state(decision)["changes"] = [description]
             decision.messages.append(DecisionMessage(role="user",content=description))
         if mutation.message:
             decision.messages.append(DecisionMessage(role="user", content=mutation.message))

@@ -165,3 +165,53 @@ def test_model_candidate_update_requires_current_quote_and_known_id(database):
         service=GenericDecisionOrchestrator(db,provider=UpdateModel());result=start(service)
         assert not result.decision_state.domain_state["assistance"]["facts"]
         assert "模型理解不可用" in result.decision_state.domain_state["interpretationWarning"]
+
+
+def test_followup_answers_resolve_concern_and_do_not_repeat_question(database):
+    with database.session_factory() as db:
+        service=GenericDecisionOrchestrator(db);first=say(service,start(service),"稳定")
+        assert chosen_name(first)=="B 公司"
+        concern=say(service,first,"B 公司通勤两小时，我不太能接受")
+        answered=say(service,concern,"这是不能妥协的条件")
+        bid=next(c["candidateId"] for c in answered.decision_state.domain_state["manualCandidates"] if c["name"]=="B 公司")
+        assert bid in answered.decision_state.excluded_candidates
+        assert "只剩 A 公司" in answered.speech_text
+        assert analysis(answered)["question"]!=analysis(concern)["question"]
+
+
+def test_learning_followup_short_answer_is_understood(database):
+    with database.session_factory() as db:
+        service=GenericDecisionOrchestrator(db);first=start(service,LEARNING)
+        practice=say(service,first,"动手实践")
+        assert "有编程基础吗" in practice.speech_text
+        confirmed=say(service,practice,"有")
+        assert chosen_name(confirmed)=="开源项目实战"
+        assert "有编程基础吗" not in confirmed.speech_text
+
+
+def test_quoted_model_correction_can_update_confirmed_field(database):
+    class CorrectionModel(GroundedModel):
+        def complete_json(self,**kwargs):
+            data=json.loads(kwargs["user_prompt"])
+            if "source_catalog" not in data and "提高" in data["message"]:
+                return {"fields":{},"explicit_fields":[{"key":"budget","value":9000,"quote":"预算提高到 9000 元"}]}
+            return super().complete_json(**kwargs)
+    with database.session_factory() as db:
+        service=GenericDecisionOrchestrator(db,provider=CorrectionModel());first=start(service,"买电脑，预算 8000","shopping")
+        result=say(service,first,"我现在预算提高到 9000 元")
+        field=result.decision_state.domain_state["conversationFields"]["budget"]
+        assert field["value"]==9000 and field["confirmed"]
+
+
+def test_ungrounded_model_correction_cannot_override_confirmed_field(database):
+    class BadCorrection(GroundedModel):
+        def complete_json(self,**kwargs):
+            data=json.loads(kwargs["user_prompt"])
+            if "source_catalog" not in data:
+                return {"fields":{},"explicit_fields":[{"key":"budget","value":99999,"quote":data["message"]}]}
+            return super().complete_json(**kwargs)
+    with database.session_factory() as db:
+        service=GenericDecisionOrchestrator(db,provider=BadCorrection());first=start(service,"买电脑，预算 8000","shopping")
+        result=say(service,first,"再帮我比较")
+        assert result.decision_state.domain_state["conversationFields"]["budget"]["value"]==8000
+        assert "模型理解不可用" in result.decision_state.domain_state["interpretationWarning"]

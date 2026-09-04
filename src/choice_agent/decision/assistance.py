@@ -1,5 +1,4 @@
 """Grounded turn updates and bounded decision assistance, with optional model reasoning."""
-from copy import deepcopy
 import json
 import re
 from uuid import uuid4
@@ -51,7 +50,23 @@ def prepare_turn(context):
     context.data["turn_intent"] = "what_if" if hypothetical(text) else "explain" if any(w in text for w in ["为什么", "为何", "理由"]) else "compare"
     if hypothetical(text): return
     patch = {}
+    previous_question=info.get("analysis",{}).get("question") or info.get("lastQuestion","")
+    if previous_question and "这项顾虑" in previous_question:
+        pending=[f for f in info.get("facts",[]) if f.get("concern")]
+        if len(pending)==1 and re.search(r"不能妥协|不能交换|硬条件|必须排除",text):
+            fact=pending[0]
+            d.excluded_candidates=sorted(set([*d.excluded_candidates,fact["candidateId"]]))
+            fact.update(concern=False,resolution="excluded",resolvedRevision=d.revision+1)
+            info["changes"].append("按你的确认排除了有顾虑的候选")
+        elif len(pending)==1 and re.search(r"可以交换|可以接受|可以妥协",text):
+            pending[0].update(concern=False,resolution="accepted",resolvedRevision=d.revision+1)
+            info["changes"].append("你确认这项顾虑可以接受，已恢复比较")
     if d.domain == "generic":
+        if previous_question and "编程基础" in previous_question:
+            if text.strip("。！ ") in {"有","有的","会","是的"}: patch["background"]="已有编程基础"
+            elif text.strip("。！ ") in {"没有","不会","没有的"}: patch["background"]="零编程基础"
+        short_priority=re.fullmatch(r"(稳定|成长|成长方向|成本|日常成本|系统框架|动手实践|实践)(?:更重要|优先|最重要)?[。！]*",text)
+        if short_priority: patch["priority"]=short_priority[1]
         if re.search(r"零(?:编程)?基础|没有(?:编程)?基础|不会编程", text): patch["background"] = "零编程基础"
         elif re.search(r"(?:有|已有|会|掌握|学过).{0,8}(?:Python|python|编程).{0,4}(?:基础)?", text): patch["background"] = "已有 Python / 编程基础"
         hours = re.search(r"每周(?:只有|最多|能用|可用|有|投入|学习|大约|时间|是|为|\s)*(\d+(?:\.\d+)?|一|两|二|三|四|五|六|七|八|九|十)\s*(?:个)?小时", text)
@@ -63,7 +78,7 @@ def prepare_turn(context):
         info["changes"].extend(f"{fields(d)[k]['label']}：{v}" for k,v in patch.items())
     matches = matched_candidates(d,text)
     question = context.data["turn_intent"] == "explain" or bool(re.search(r"？|吗$|多少|是否|怎么样|能不能|是不是", text))
-    fact_cue = any(w in text for w in ["通勤", "薪资", "薪酬", "工资", "加班", "远程", "补充", "改成", "纠正"])
+    fact_cue = any(w in text for w in ["通勤", "薪资", "薪酬", "工资", "加班", "远程", "补充", "改成", "纠正", "担心", "不能接受", "不太能接受"])
     if len(matches) == 1:
         info["focusCandidateId"] = matches[0]["candidateId"]
     elif not matches and any(w in text for w in ["它", "那家", "这个选项"]):
@@ -83,9 +98,32 @@ def model_context(context):
     d=context.decision
     return {"message":context.message,"domain":d.domain,"fields":fields(d),
             "recent_messages":[{"role":m.role,"content":m.content[:2000]} for m in d.messages[-8:]],
-            "previous_question":state(d).get("analysis",{}).get("question"),
+            "previous_question":state(d).get("analysis",{}).get("question") or state(d).get("lastQuestion") or (d.clarifying_questions[0] if d.clarifying_questions else None),
             "candidates":[{"candidateId":c["candidateId"],"name":c["name"],"summary":c.get("summary","")[:1000],"origin":c.get("origin")} for c in (d.domain_state.get("manualCandidates") or d.domain_state.get("candidatePool",[]))[:12]],
             "facts":state(d).get("facts",[])[-24:],"rule_intent":context.data.get("turn_intent")}
+
+
+def explicit_patch(context, updates):
+    """Accept quoted corrections only when their field and value are locally checkable."""
+    current=fields(context.decision)
+    aliases={"budget":["预算"],"days":["天"],"maxTransitHours":["交通","车程","路程"],"weeklyHours":["每周"],"priority":["看重","在意","优先"],"category":["买","商品","换成","改成"],"departure":["出发","从"],"background":["基础","编程"],"usage":["用途","用来","用于"],"target":["目标"]}
+    patch={}
+    for update in updates:
+        if update.key not in current or update.quote not in context.message: raise ValueError("纠正缺少本轮字段原文")
+        if not any(word in update.quote for word in aliases.get(update.key,[])): raise ValueError("纠正字段含义不明确")
+        if update.value is None:
+            if not any(w in update.quote for w in ["清空","取消","不限","不限制"]): raise ValueError("没有明确清空意图")
+        elif current[update.key]["type"]=="number":
+            amounts=[float(n)*{"":1,"千":1000,"万":10000,"k":1000}[unit.lower()] for n,unit in re.findall(r"(\d+(?:\.\d+)?)\s*([千万kK]?)",update.quote)]
+            if isinstance(update.value,bool) or update.value not in amounts: raise ValueError("纠正数值缺少依据")
+        else:
+            value=str(update.value)
+            categories={"laptop":["电脑","笔记本"],"phone":["手机"],"headphones":["耳机"],"appliance":["家电"]}
+            if update.key=="category":
+                if not any(w in update.quote for w in categories.get(value,[value])): raise ValueError("商品类别缺少依据")
+            elif value not in update.quote: raise ValueError("纠正文本缺少依据")
+        patch[update.key]=update.value
+    return patch
 
 
 def model_understand(context):
@@ -108,7 +146,12 @@ def model_understand(context):
         # Validate the whole model patch on a copy before accepting any suggestion.
         shadow=d.model_copy(deep=True)
         patch_fields(shadow,parsed.fields,source="model",confirmed=False)
-        if parsed.fields: d.domain_state=shadow.domain_state
+        corrections=explicit_patch(context,parsed.explicit_fields)
+        if corrections: patch_fields(shadow,corrections,source="conversation",confirmed=True)
+        if parsed.fields or corrections:
+            d.domain_state=shadow.domain_state
+            if "target" in corrections: d.user_goal=shadow.user_goal
+        state(d)["changes"].extend(f"{fields(d)[k]['label']}：{v}" for k,v in corrections.items())
         for update in parsed.candidate_updates:
             if not any(f["candidateId"]==update.candidate_id and f["text"]==update.text for f in state(d).get("facts",[])):
                 add_fact(d,update.candidate_id,update.text,update.concern,source="conversation")
@@ -127,9 +170,10 @@ def candidate_text(decision,candidate):
 def catalog(decision):
     result={}
     for c in decision.candidates:
-        result[f"candidate:{c.candidate_id}:summary"]={"candidateId":c.candidate_id,"text":c.summary or "说明待补充","source": "demo" if decision.context.get("demoMode") or c.origin=="fixture" else c.origin}
+        trusted_summary=c.origin!="web"
+        if trusted_summary: result[f"candidate:{c.candidate_id}:summary"]={"candidateId":c.candidate_id,"text":c.summary or "说明待补充","source": "demo" if decision.context.get("demoMode") or c.origin=="fixture" else c.origin}
         for key,value in c.attributes.items():
-            if isinstance(value,(int,float)):
+            if isinstance(value,(int,float)) and (c.origin!="web" or any(p.criterion_key==key and p.raw_value is not None and p.evidence_ids for p in c.score_breakdown)):
                 result[f"candidate:{c.candidate_id}:{key}"]={"candidateId":c.candidate_id,"text":f"{key}：{value}","source":c.origin}
     valid={c.candidate_id for c in decision.candidates}
     for f in state(decision).get("facts",[]):
@@ -152,6 +196,9 @@ def rule_analysis(context, decision):
     chosen=None
     if measured:
         chosen=candidates[0]
+        if not any(p.raw_value is not None and p.weight>0 for p in chosen.score_breakdown):
+            result.update(summary="排序靠前的候选缺少可核验或用户提供的有效数值，暂不把缺失值当成优势。",question="可以补充它在关键比较维度上的信息吗？")
+            return result
         active={c.key:c for c in decision.criteria}
         for score in sorted(chosen.score_breakdown,key=lambda p:p.weight,reverse=True):
             if score.raw_value is None or score.weight<=0: continue
@@ -184,7 +231,7 @@ def rule_analysis(context, decision):
         elif any(w in priority for w in ["实践","实战"]) and "已有" in background:
             positive=["实践反馈快","项目实战","实践"]
             negative=["实践少"]
-        elif "零" in background or (current.get("weeklyHours",{}).get("value") or 100)>0 and (current.get("weeklyHours",{}).get("value") or 100)<=3:
+        elif "框架" in priority or "零" in background or 0 < (current.get("weeklyHours",{}).get("value") or 100) <= 3:
             positive=["路径完整","上手稳定","系统框架"]
             negative=["自行补齐","需要自行组织"]
         else: positive=[];negative=[]
@@ -194,7 +241,12 @@ def rule_analysis(context, decision):
         for c in candidates:
             if c!=chosen: result["tradeoffs"].append(point(c,f"{c.name}：{candidate_text(decision,c)}"))
         if not chosen:
-            result["question"]="你更希望先获得系统框架，还是通过动手项目学习？" if "学习" in decision.user_goal else "稳定、成长方向和日常成本中，哪一项最不能妥协？"
+            if "学习" in decision.user_goal:
+                result["question"]="你目前有编程基础吗？" if any(w in priority for w in ["实践","实战"]) and not background else "你更希望先获得系统框架，还是通过动手项目学习？"
+            elif len(candidates)==1:
+                result["question"]=f"排除其他选项后只剩 {candidates[0].name}。它的已知取舍可以接受吗，还是需要补充其他候选？"
+            else:
+                result["question"]="稳定、成长方向和日常成本中，哪一项最不能妥协？"
     concerns=[f for f in info.get("facts",[]) if f.get("concern") and any(c.candidate_id==f["candidateId"] for c in candidates)]
     if chosen and any(f["candidateId"]==chosen.candidate_id for f in concerns):
         name=chosen.name
@@ -239,16 +291,18 @@ def explain(context, profile):
     if analysis["hypothetical"] and "雨" in context.message:
         analysis.update(primaryCandidateId=None,summary="如果下雨，户外方案的适合程度需要重新确认。现有示例没有天气或室内备选资料，暂时不能据此改选。当前选择未改变。",question="遇到下雨，你愿意保留户外行程，还是更希望准备室内备选？")
     sources=catalog(target)
+    analysis["reasons"]=[r for r in analysis["reasons"] if r["sourceId"] in sources]
+    analysis["tradeoffs"]=[r for r in analysis["tradeoffs"] if r["sourceId"] in sources]
     provider=context.data.get("model_provider")
     analysis["mode"]="rules"
     if provider and provider.enabled and sources:
         from choice_agent.prompts.conversation import EXPLANATION_PROMPT
         measured=any(any(p.raw_value is not None for p in c.score_breakdown) for c in target.candidates)
         blocked={f["candidateId"] for f in state(target).get("facts",[]) if f.get("concern")}
-        allowed=[c.candidate_id for c in target.candidates if c.candidate_id not in blocked]
+        allowed=[c.candidate_id for c in target.candidates if c.candidate_id not in blocked and any(v["candidateId"]==c.candidate_id for v in sources.values())]
         if analysis["hypothetical"] and "雨" in context.message: allowed=[]
         if measured: allowed=[analysis["primaryCandidateId"]] if analysis["primaryCandidateId"] else []
-        payload={**model_context(context),"source_catalog":sources,"allowed_primary_ids":allowed,"rule_analysis":analysis}
+        payload={**model_context(context),"fields":fields(target),"saved_fields":fields(d),"hypothetical":analysis["hypothetical"],"source_catalog":sources,"allowed_primary_ids":allowed,"rule_analysis":analysis}
         try:
             parsed=AssistanceExplanation.model_validate(provider.complete_json(system_prompt=EXPLANATION_PROMPT,user_prompt=json.dumps(payload,ensure_ascii=False),model=context.data.get("main_model_name") or context.data.get("model_name")))
             if parsed.primary_candidate_id is not None and parsed.primary_candidate_id not in allowed: raise ValueError("推荐违反候选限制")
@@ -281,6 +335,7 @@ def explain(context, profile):
     if context.data.get("unhandled_turn") and analysis["mode"]!="model" and not info.get("changes"):
         question="这句话我还没整理成可比较的信息。你想修改哪个候选的哪一点，或最看重什么？"
     analysis["question"]=question
+    info["lastQuestion"]=question
     if question: speech+="\n"+question
     if not analysis["hypothetical"]:
         d.recommendation=Recommendation(primary_candidate_id=analysis["primaryCandidateId"],summary=analysis["summary"],ranking_method="grounded_qualitative" if d.domain_state.get("qualitative") else "weighted_sum",reasons=[RecommendationPoint(text=r["text"],candidate_id=r["candidateId"],evidence_ids=[r["sourceId"]]) for r in analysis["reasons"]],tradeoffs=[r["text"] for r in analysis["tradeoffs"]],generated_from_revision=d.revision)

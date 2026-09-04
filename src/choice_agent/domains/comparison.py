@@ -66,6 +66,9 @@ class ComparisonProfile(DomainProfile):
             context.data["speech_text"] = question
             context.data["display_blocks"] = []
             context.decision.recommendation = None
+            from choice_agent.decision.assistance import state
+            state(context.decision).pop("analysis", None)
+            state(context.decision)["lastQuestion"] = question
             return {"action": "ASK", "questionToAsk": question}
         context.decision.clarifying_questions = []
         context.decision.unanswered_questions = []

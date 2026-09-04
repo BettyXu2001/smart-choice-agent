@@ -453,10 +453,18 @@ class AssistanceCandidateUpdate(BaseModel):
     concern: bool = False
 
 
+class AssistanceFieldUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str
+    value: Any = None
+    quote: str = Field(min_length=1, max_length=1000)
+
+
 class AssistanceInterpretation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     intent: Literal["update", "compare", "explain", "what_if", "clarify"] = "compare"
     fields: dict[str, Any] = Field(default_factory=dict)
+    explicit_fields: list[AssistanceFieldUpdate] = Field(default_factory=list, max_length=8)
     candidate_updates: list[AssistanceCandidateUpdate] = Field(default_factory=list, max_length=8)
     question: str | None = Field(default=None, max_length=500)
 
