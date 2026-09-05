@@ -316,6 +316,39 @@ class DecisionState(ApiModel):
     composition: CompositionResult | None = None
 
 
+
+class SearchCapabilitiesResponse(ApiModel):
+    supported_domains: list[str] = Field(default_factory=list)
+    web_search_configured: bool = False
+    default_search_mode: str = "fixture"
+
+
+class CandidateSearchProgressCounts(ApiModel):
+    found: int = 0
+    user_excluded: int = 0
+    hard_constraint_excluded: int = 0
+    missing_data_excluded: int = 0
+    remaining: int = 0
+
+
+class DecisionProgressError(ApiModel):
+    code: str
+    message: str
+
+
+class DecisionProgressEvent(ApiModel):
+    request_id: str
+    command_id: str | None = None
+    sequence: int
+    type: Literal["progress", "final", "error"]
+    stage: str | None = None
+    message: str | None = None
+    counts: CandidateSearchProgressCounts | None = None
+    source_mode: str | None = None
+    warning: str | None = None
+    response: dict[str, Any] | None = None
+    error: DecisionProgressError | None = None
+
 class GenericDecisionRequest(ApiModel):
     request_id: str | None = Field(default=None, min_length=1, max_length=128)
     message: str

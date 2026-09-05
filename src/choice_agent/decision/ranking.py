@@ -71,20 +71,29 @@ class GenericRankingEngine:
         tie_breaker: Callable[[Candidate], Any] | None = None,
     ) -> list[Candidate]:
         excluded = set(decision.excluded_candidates)
+        counts = {
+            "considered": len(candidates),
+            "found": len(candidates),
+            "userExcluded": 0,
+            "hardConstraintExcluded": 0,
+            "missingDataExcluded": 0,
+            "remaining": 0,
+        }
         ranked: list[Candidate] = []
         for candidate in candidates:
             if candidate.candidate_id in excluded:
+                counts["userExcluded"] += 1
                 decision.candidate_state[candidate.candidate_id] = CandidateState(
                     status="excluded", reason="用户排除", updated_by="RankStage"
                 )
                 continue
             contributions: list[ScoreContribution] = []
-            eliminate = False
+            missing_excluded = False
             for criterion in decision.criteria:
                 contribution = evaluator.evaluate(criterion, candidate, decision)
                 if contribution is None:
                     if criterion.missing_policy == MissingValuePolicy.EXCLUDE:
-                        eliminate = True
+                        missing_excluded = True
                         break
                     missing_score = 0 if criterion.missing_policy == MissingValuePolicy.WORST else 50
                     contribution = ScoreContribution(
@@ -96,7 +105,21 @@ class GenericRankingEngine:
                     )
                 if contribution is not None:
                     contributions.append(contribution)
-            if eliminate or self._violates_hard_constraint(decision, candidate):
+            if missing_excluded:
+                counts["missingDataExcluded"] += 1
+                decision.candidate_state[candidate.candidate_id] = CandidateState(
+                    status="eliminated", reason="缺少必要数据", updated_by="RankStage"
+                )
+                continue
+            hard_failure = self._hard_constraint_failure(decision, candidate)
+            if hard_failure == "missing":
+                counts["missingDataExcluded"] += 1
+                decision.candidate_state[candidate.candidate_id] = CandidateState(
+                    status="eliminated", reason="缺少必要数据", updated_by="RankStage"
+                )
+                continue
+            if hard_failure == "violation":
+                counts["hardConstraintExcluded"] += 1
                 decision.candidate_state[candidate.candidate_id] = CandidateState(
                     status="eliminated", reason="不满足硬约束", updated_by="RankStage"
                 )
@@ -109,9 +132,14 @@ class GenericRankingEngine:
             )
         stable_key = tie_breaker or (lambda item: (item.name, item.candidate_id))
         ranked.sort(key=lambda item: (-item.score, stable_key(item)))
+        counts["remaining"] = len(ranked)
+        decision.domain_state["rankingCounts"] = counts
         return ranked
 
     def _violates_hard_constraint(self, decision: DecisionState, candidate: Candidate) -> bool:
+        return self._hard_constraint_failure(decision, candidate) is not None
+
+    def _hard_constraint_failure(self, decision: DecisionState, candidate: Candidate) -> str | None:
         flattened = {
             str(value)
             for raw in candidate.attributes.values()
@@ -123,14 +151,14 @@ class GenericRankingEngine:
             # Older Diet states encoded a cross-attribute deny list under this key.
             if constraint.key == "diet_exclusion":
                 if flattened.intersection(constraint.values):
-                    return True
+                    return "violation"
                 continue
             actual = candidate.attributes.get(constraint.key)
             expected = constraint.value if constraint.value is not None else constraint.values
             if actual is None:
                 if constraint.key == "commute_minutes":
                     continue
-                return True
+                return "missing"
             values = actual if isinstance(actual, list) else [actual]
             wanted = expected if isinstance(expected, list) else [expected]
             operator = constraint.operator
@@ -146,15 +174,15 @@ class GenericRankingEngine:
                 passed = actual != expected
             elif operator in {"lt", "lte", "gt", "gte"}:
                 if isinstance(actual, bool) or isinstance(expected, bool):
-                    return True
+                    return "violation"
                 if not isinstance(actual, (int, float)) or not isinstance(expected, (int, float)):
-                    return True
+                    return "violation"
                 if not isfinite(actual) or not isfinite(expected):
-                    return True
+                    return "violation"
                 passed = {"lt": actual < expected, "lte": actual <= expected,
                           "gt": actual > expected, "gte": actual >= expected}[operator]
             else:
                 raise ValueError(f"不支持的约束 operator：{operator}")
             if not passed:
-                return True
-        return False
+                return "violation"
+        return None

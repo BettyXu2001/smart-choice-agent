@@ -27,6 +27,7 @@ class StageRunner:
 
     def run(self, profile: DomainProfile, context: AgentContext, runtime: AgentRuntime) -> StageRunResult:
         runtime.run(ProfileStage("IntentAgent", profile.intent), context)
+        context.emit_progress("understanding_requirements", "正在理解你的需求")
         runtime.run(ProfileStage("UnderstandingAgent", profile.understand), context)
 
         if profile.should_run_pre_safety(context):

@@ -1639,9 +1639,9 @@ body[data-theme="pop"] .demo-trace span {
 
 
 /* Diet conversation: current, editable decision alongside the dialogue. */
-.diet-conversation { grid-template-columns: minmax(0, 1.9fr) minmax(310px, 1fr); align-items: start; }
+.diet-conversation { grid-template-columns: minmax(0, 1.9fr) minmax(310px, 1fr); align-items: stretch; min-height: calc(100dvh - 158px); }
 .diet-conversation .chat-window { min-height: 0; height: calc(100dvh - 158px); grid-template-rows: auto minmax(0, 1fr) auto; }
-.diet-panel { background: var(--surface, #fff); border: 1px solid var(--border, #dce5df); border-radius: 24px; padding: 24px; max-height: calc(100dvh - 158px); overflow: auto; min-width: 0; }
+.diet-panel { box-sizing: border-box; height: calc(100dvh - 158px); background: var(--surface, #fff); border: 1px solid var(--border, #dce5df); border-radius: 24px; padding: 24px; overflow: auto; min-width: 0; }
 .diet-panel h3, .diet-panel h4 { margin: 0; }
 .diet-panel-section { border-top: 1px solid var(--border, #dce5df); padding-top: 18px; margin-top: 18px; }
 .diet-panel .card-title { gap: 10px; }

@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import uuid4, uuid5, NAMESPACE_URL
 import hashlib
 import json
+from typing import Callable
 from sqlalchemy.exc import IntegrityError
 from choice_agent.decision.conversation import public_decision
 
@@ -55,10 +56,12 @@ class GenericDecisionOrchestrator:
         registry: DomainRegistry | None = None,
         settings: Settings | None = None,
         provider: ModelProvider | None = None,
+        progress: Callable[[dict[str, Any]], None] | None = None,
     ):
         self.db = db
         self.settings = settings or Settings()
         self.provider = provider or DisabledProvider()
+        self.progress = progress
         self.repository = DecisionRepository(db, commit=False)
         self.diet_repository = DietRepository(db, commit=False)
         web_provider = OpenAIWebSearchProvider(
@@ -190,6 +193,7 @@ class GenericDecisionOrchestrator:
                     message=message,
                     decision=decision,
                     data={**self._stage_data(decision), "official_baseline": baseline},
+                    progress=self.progress,
                 )
                 if mutation.mode == "full":
                     self.unified.run(profile, context, trace)
@@ -246,6 +250,7 @@ class GenericDecisionOrchestrator:
                     message=message,
                     decision=decision,
                     data={**self._stage_data(decision), "official_baseline": baseline},
+                    progress=self.progress,
                 )
                 from choice_agent.decision.assistance import hypothetical
                 is_hypothetical = hypothetical(message)

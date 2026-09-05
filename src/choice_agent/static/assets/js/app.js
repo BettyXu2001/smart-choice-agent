@@ -28,7 +28,7 @@
     const state = {
         theme: getSavedTheme(),
         settings: { model: DietApi.getModelSettings() },
-        home: { loaded: false, personalCount: 0, publicCount: 0, generalPrompt: "", notice: "" },
+        home: { loaded: false, personalCount: 0, publicCount: 0, generalPrompt: "", notice: "", searchCapabilities: null, capabilitiesLoading: false, realtimeSearch: true, progress: [] },
         slotOptions: null,
         personalMeals: [],
         publicMeals: [],
@@ -244,7 +244,39 @@
         }
         app.focus({ preventScroll: true });
     }
+    function renderHomeProgress() {
+        const events = state.home.progress || [];
+        if (!events.length) {
+            return "";
+        }
+        return `<div class="search-progress" role="status" aria-live="polite">${events.map((event, index) => `<div class="search-progress-row ${index === events.length - 1 ? "active" : ""}"><span></span><p>${escapeHtml(event.message || "正在处理")}</p></div>`).join("")}</div>`;
+    }
+    function loadSearchCapabilities() {
+        if (state.home.searchCapabilities || state.home.capabilitiesLoading) {
+            return;
+        }
+        state.home.capabilitiesLoading = true;
+        DecisionApi.searchCapabilities().then((capabilities) => {
+            state.home.searchCapabilities = capabilities;
+            if (!capabilities.webSearchConfigured) {
+                state.home.realtimeSearch = false;
+            }
+            if (currentRoute() === "/") renderGeneralHome();
+        }).catch(() => {
+            state.home.searchCapabilities = {supportedDomains:["shopping","travel"], webSearchConfigured:false, defaultSearchMode:"fixture"};
+            state.home.realtimeSearch = false;
+            if (currentRoute() === "/") renderGeneralHome();
+        }).finally(() => {
+            state.home.capabilitiesLoading = false;
+        });
+    }
+
     function renderGeneralHome() {
+        loadSearchCapabilities();
+        const searchCapabilities = state.home.searchCapabilities;
+        const searchConfigured = Boolean(searchCapabilities?.webSearchConfigured);
+        const realtimeChecked = searchConfigured && state.home.realtimeSearch !== false;
+        const searchHint = searchCapabilities ? (searchConfigured ? "购物和旅行场景会使用实时搜索；其他场景继续使用已有候选。" : "当前服务端未配置实时搜索，仍可使用演示候选体验流程。") : "正在检查实时搜索配置。";
         const flagshipExample = {
             text: "A 公司工作稳定、离家近，B 公司成长更快但每天通勤两小时，我应该怎么选？",
             domain: "career"
@@ -266,6 +298,12 @@
                             <span>你最近在纠结什么？</span>
                             <textarea name="prompt" placeholder="比如：我拿到了两个 Offer，一个稳定但成长慢，一个机会更多但通勤很远，我该怎么选？">${escapeHtml(state.home.generalPrompt)}</textarea>
                         </label>
+                        <label class="toggle-row realtime-search-toggle">
+                            <input type="checkbox" name="realTimeSearch" data-action="real-search-toggle" ${realtimeChecked ? "checked" : ""} ${searchConfigured ? "" : "disabled"}>
+                            <span>使用实时信息寻找候选</span>
+                            <small>${escapeHtml(searchHint)}</small>
+                        </label>
+                        ${renderHomeProgress()}
                         <div class="button-row">
                             <button class="btn primary" type="submit">开始决策</button>
                         </div>
@@ -1680,7 +1718,8 @@
         }
     }
     async function submitGeneralDecision(form) {
-        const prompt = String(new FormData(form).get("prompt") || "").trim();
+        const formData = new FormData(form);
+        const prompt = String(formData.get("prompt") || "").trim();
         state.home.generalPrompt = prompt;
         if (!prompt) {
             state.home.notice = "先写下一个正在纠结的选择，再开始。";
@@ -1689,10 +1728,16 @@
         }
         const input = form.querySelector("textarea[name=prompt]");
         const explicitDomain = input && input.dataset.demoPrompt === prompt ? input.dataset.demoDomain : "";
+        const realtime = formData.get("realTimeSearch") === "on" && Boolean(state.home.searchCapabilities?.webSearchConfigured);
         const restore = setLoading(form.querySelector('button[type="submit"]'), "创建决策中...");
+        state.home.progress = [];
         try {
-            await conversation.startGeneral(prompt, ["diet","travel","shopping","generic"].includes(explicitDomain) ? explicitDomain : null);
+            await conversation.startGeneral(prompt, ["diet","travel","shopping","generic"].includes(explicitDomain) ? explicitDomain : null, {searchMode: realtime ? "web" : "fixture", onProgress: (event) => {
+                state.home.progress = [...state.home.progress, event].slice(-6);
+                if (currentRoute() === "/") renderGeneralHome();
+            }});
             state.home.notice = "";
+            state.home.progress = [];
         } catch (error) {
             state.home.notice = error.message || "创建决策失败，请重试。";
             showToast(state.home.notice, "error");
@@ -1741,6 +1786,8 @@
         }
         if (target.dataset.action === "demo-weight") {
             updateDemoWeight(target.dataset.key, Number(target.value));
+        } else if (target.dataset.action === "real-search-toggle") {
+            state.home.realtimeSearch = target.checked;
         }
     }
     function initTheme() {

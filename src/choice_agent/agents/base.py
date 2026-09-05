@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 
 from choice_agent.schemas import AgentRun, DecisionState
 
@@ -28,6 +28,12 @@ class AgentContext:
     message: str
     decision: DecisionState
     data: dict[str, Any]
+    progress: Callable[[dict[str, Any]], None] | None = None
+
+    def emit_progress(self, stage: str, message: str, **payload: Any) -> None:
+        if self.progress is None:
+            return
+        self.progress({"stage": stage, "message": message, **payload})
 
 
 class BaseAgent(ABC):

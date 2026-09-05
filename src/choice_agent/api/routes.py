@@ -4,8 +4,11 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+
+from choice_agent.api.decision_stream import stream_command_decision, stream_create_decision, stream_message_decision
 from choice_agent.agents.base import AgentContext
 from choice_agent.agents.diet import EvaluationAgent
 from choice_agent.config import Settings
@@ -19,7 +22,7 @@ from choice_agent.repositories.decision_repository import DecisionRepository
 from choice_agent.repositories.diet_repository import DietRepository
 from choice_agent.schemas import (
     ChatRequest, ChatResponse, DietPanelCommand, DecisionCommandRequest, DecisionState, EvaluationRequest, FeedbackRequest,
-    GenericDecisionMessageRequest, GenericDecisionRequest, GenericDecisionResponse,
+    GenericDecisionMessageRequest, GenericDecisionRequest, GenericDecisionResponse, SearchCapabilitiesResponse,
     MealRequest, MealResponse, SlotBundle, SourceMode, TraceLabelRequest,
 )
 
@@ -94,6 +97,18 @@ def get_runtime_model(
         light_model,
     )
 
+@router.get("/api/v1/search/capabilities", response_model=SearchCapabilitiesResponse)
+def search_capabilities(settings: Settings = Depends(get_settings)) -> SearchCapabilitiesResponse:
+    default_mode = settings.search_provider
+    if default_mode == "openai":
+        default_mode = "web"
+    if default_mode not in {"fixture", "web", "auto"}:
+        default_mode = "fixture"
+    return SearchCapabilitiesResponse(
+        supported_domains=["shopping", "travel"],
+        web_search_configured=bool(settings.search_api_key.strip()),
+        default_search_mode=default_mode,
+    )
 def user_id(x_user_id: int = Header(default=1, alias="X-User-Id")) -> int:
     if x_user_id < 1:
         raise HTTPException(status_code=400, detail="X-User-Id 必须大于 0")
@@ -131,6 +146,45 @@ def trace_response(row: TraceRecord) -> dict[str, Any]:
     }
 
 
+@router.post("/api/v1/decisions/stream")
+def create_decision_stream(
+    request: Request,
+    body: GenericDecisionRequest,
+    uid: int = Depends(user_id),
+    settings: Settings = Depends(get_settings),
+    provider: ModelProvider = Depends(get_provider),
+    runtime_model: tuple[Settings, ModelProvider] | None = Depends(get_runtime_model),
+) -> StreamingResponse:
+    active_settings, active_provider = runtime_model if isinstance(runtime_model, tuple) else (settings, provider)
+    return stream_create_decision(request, uid, body, active_settings, active_provider)
+
+
+@router.post("/api/v1/decisions/{decision_id}/messages/stream")
+def message_decision_stream(
+    request: Request,
+    decision_id: str,
+    body: GenericDecisionMessageRequest,
+    uid: int = Depends(user_id),
+    settings: Settings = Depends(get_settings),
+    provider: ModelProvider = Depends(get_provider),
+    runtime_model: tuple[Settings, ModelProvider] | None = Depends(get_runtime_model),
+) -> StreamingResponse:
+    active_settings, active_provider = runtime_model if isinstance(runtime_model, tuple) else (settings, provider)
+    return stream_message_decision(request, uid, decision_id, body, active_settings, active_provider)
+
+
+@router.post("/api/v1/decisions/{decision_id}/commands/stream")
+def command_decision_stream(
+    request: Request,
+    decision_id: str,
+    body: DecisionCommandRequest,
+    uid: int = Depends(user_id),
+    settings: Settings = Depends(get_settings),
+    provider: ModelProvider = Depends(get_provider),
+    runtime_model: tuple[Settings, ModelProvider] | None = Depends(get_runtime_model),
+) -> StreamingResponse:
+    active_settings, active_provider = runtime_model if isinstance(runtime_model, tuple) else (settings, provider)
+    return stream_command_decision(request, uid, decision_id, body, active_settings, active_provider)
 @router.post("/api/v1/decisions", response_model=GenericDecisionResponse)
 def create_decision(
     body: GenericDecisionRequest,

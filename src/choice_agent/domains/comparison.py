@@ -80,9 +80,16 @@ class ComparisonProfile(DomainProfile):
     def source_and_rank(self, context: AgentContext) -> dict[str, Any]:
         if context.data.get("is_hypothetical"):
             return self.rerank(context)
+        mode = str(context.decision.context.get("searchMode", "fixture")).lower()
+        source_mode = "web" if mode == "web" else "fixture"
+        context.emit_progress("searching_candidates", "正在寻找候选", sourceMode=source_mode)
         result = self._search(context)
         manual = ManualCandidateProvider().search(context)
         result = CompositeCandidateProvider.merge([result, manual])
+        merged_count = len(result.candidates)
+        run_mode = result.run.mode if result.run else "manual"
+        context.emit_progress("candidates_found", f"找到 {merged_count} 个候选", counts={"found": merged_count}, sourceMode=run_mode)
+        context.emit_progress("validating_evidence", "正在校验证据来源", sourceMode=run_mode)
         candidates, evidence, validation_warnings = self.evidence_validator.validate(
             result.candidates, result.sources
         )
@@ -94,12 +101,15 @@ class ComparisonProfile(DomainProfile):
             item.model_dump(mode="json", by_alias=True) for item in candidates
         ]
         context.decision.domain_state["source"] = {
-            "mode": result.run.mode if result.run else "manual",
-            "label": result.sources[0].title if result.sources else "手工候选",
+            "mode": run_mode,
+            "label": self._source_label(run_mode, result.sources),
             "realTime": bool(result.run and result.run.mode == "web"),
             "warnings": [*result.warnings, *validation_warnings],
         }
         context.decision.candidates = self.ranking.rank(context.decision, candidates, self.evaluator)
+        counts = context.decision.domain_state.get("rankingCounts", {})
+        context.emit_progress("constraints_applied", f"基于硬约束排除 {counts.get('hardConstraintExcluded', 0)} 个", counts=counts, sourceMode=run_mode)
+        context.emit_progress("ranking_candidates", f"正在比较剩余 {counts.get('remaining', len(context.decision.candidates))} 个", counts=counts, sourceMode=run_mode)
         transition_decision(context.decision, DecisionStatus.COMPARING, DecisionNextAction.COMPARE_CANDIDATES)
         return {
             "provider": self.candidate_provider.name,
@@ -115,9 +125,12 @@ class ComparisonProfile(DomainProfile):
             Candidate.model_validate(item)
             for item in context.decision.domain_state.get("candidatePool", [])
         ]
+        context.emit_progress("ranking_candidates", f"正在比较剩余 {len(pool)} 个", sourceMode=context.decision.domain_state.get("source", {}).get("mode"))
         context.decision.candidates = self.ranking.rank(
             context.decision, pool, self.evaluator
         )
+        counts = context.decision.domain_state.get("rankingCounts", {})
+        context.emit_progress("comparison_ready", f"完成比较，保留 {counts.get('remaining', len(context.decision.candidates))} 个候选", counts=counts, sourceMode=context.decision.domain_state.get("source", {}).get("mode"))
         transition_decision(
             context.decision, DecisionStatus.COMPARING, DecisionNextAction.COMPARE_CANDIDATES
         )
@@ -155,6 +168,16 @@ class ComparisonProfile(DomainProfile):
             }
             for candidate in context.decision.candidates
         ]
+
+    @staticmethod
+    def _source_label(mode: str, sources: list[Any]) -> str:
+        if mode == "web":
+            return "实时 Web Search"
+        if mode == "manual":
+            return "手工候选"
+        if mode == "database":
+            return "本地数据库候选"
+        return "演示候选数据"
 
     def _search(self, context: AgentContext):
         mode = str(context.decision.context.get("searchMode", "fixture")).lower()

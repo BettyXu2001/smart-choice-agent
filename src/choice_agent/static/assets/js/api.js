@@ -123,6 +123,70 @@
     async function decisionRequest(path, options) {
         return request(DECISION_API_BASE, path, options);
     }
+    function normalizeStreamError(event) {
+        const detail = event?.error?.message || event?.message || "请求失败，请重试。";
+        const error = new Error(detail);
+        error.code = event?.error?.code || "stream_error";
+        return error;
+    }
+
+    async function streamRequest(baseUrl, path, body, options) {
+        const config = options || {};
+        const headers = new Headers(config.headers || {});
+        headers.set("X-User-Id", getUserId());
+        headers.set("Content-Type", "application/json");
+        attachModelHeaders(headers);
+        const response = await fetch(`${baseUrl}${path}`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: config.signal
+        });
+        if (!response.ok) {
+            const detail = await readError(response);
+            const error = new Error(detail || `请求失败：${response.status}`);
+            error.status = response.status;
+            error.detail = detail;
+            throw error;
+        }
+        if (!response.body) {
+            throw new Error("当前浏览器不支持流式响应");
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let finalResponse = null;
+        const handleLine = (line) => {
+            const text = line.trim();
+            if (!text) return;
+            let event;
+            try {
+                event = JSON.parse(text);
+            } catch (error) {
+                throw new Error("流式响应格式不合法");
+            }
+            if (config.onEvent) config.onEvent(event);
+            if (event.type === "error") throw normalizeStreamError(event);
+            if (event.type === "final") finalResponse = event.response;
+        };
+        while (true) {
+            const {value, done} = await reader.read();
+            buffer += decoder.decode(value || new Uint8Array(), {stream: !done});
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) handleLine(line);
+            if (done) break;
+        }
+        if (buffer.trim()) handleLine(buffer);
+        if (!finalResponse) {
+            throw new Error("请求未完成，请重试。");
+        }
+        return finalResponse;
+    }
+
+    function decisionStream(path, payload, options) {
+        return streamRequest(DECISION_API_BASE, path, payload, options);
+    }
 
     async function readError(response) {
         const text = await response.text();
@@ -176,9 +240,13 @@
 
     window.DecisionApi = {
         resolve: (payload) => request("/api/v1/decision-domains", "/resolve", {method:"POST",body:payload}),
+        searchCapabilities: () => request("/api/v1/search", "/capabilities"),
         create: (payload) => decisionRequest("", { method: "POST", body: payload }),
+        createStream: (payload, options) => decisionStream("/stream", payload, options),
         message: (decisionId, payload) => decisionRequest(`/${encodeURIComponent(decisionId)}/messages`, { method: "POST", body: payload }),
+        messageStream: (decisionId, payload, options) => decisionStream(`/${encodeURIComponent(decisionId)}/messages/stream`, payload, options),
         command: (decisionId, payload) => decisionRequest(`/${encodeURIComponent(decisionId)}/commands`, { method: "POST", body: payload }),
+        commandStream: (decisionId, payload, options) => decisionStream(`/${encodeURIComponent(decisionId)}/commands/stream`, payload, options),
         get: (decisionId) => decisionRequest(`/${encodeURIComponent(decisionId)}`)
     };
 })();
