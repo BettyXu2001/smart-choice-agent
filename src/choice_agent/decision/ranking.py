@@ -128,6 +128,8 @@ class GenericRankingEngine:
             actual = candidate.attributes.get(constraint.key)
             expected = constraint.value if constraint.value is not None else constraint.values
             if actual is None:
+                if constraint.key == "commute_minutes":
+                    continue
                 return True
             values = actual if isinstance(actual, list) else [actual]
             wanted = expected if isinstance(expected, list) else [expected]

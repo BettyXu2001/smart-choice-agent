@@ -126,7 +126,7 @@ window.createConversation = function(deps) {
         const focused = document.activeElement;
         const focusId = focused?.id;
         const selection = focused?.selectionStart;
-        app.innerHTML = `<section class="chat-layout diet-conversation">
+        app.innerHTML = `<section class="chat-layout diet-conversation ${isGeneral() ? "general-conversation" : ""}" data-mobile-pane="${isGeneral() ? (state.chat.mobilePane || "canvas") : ""}">${isGeneral() ? `<div class="general-mobile-tabs"><button class="btn soft" data-diet-action="general-pane" data-pane="canvas">决策</button><button class="btn ghost" data-diet-action="general-pane" data-pane="chat">对话</button></div>` : ""}
             <div class="section chat-window"><div class="card-title"><div><span class="eyebrow">${isGeneral() ? "从想法，走到适合你的选择" : "每一顿，都更合心意"}</span><h2>${isGeneral() ? "一起把选择想清楚" : "今天想怎么吃？"}</h2></div><div class="inline-actions"><button id="dietPanelToggle" class="btn soft diet-panel-toggle" data-diet-action="open" aria-expanded="${state.chat.panelOpen}">当前决策</button><button class="btn ghost" data-action="new-session">新会话</button></div></div>
             <div id="messages" class="messages">${state.chat.messages.map(renderMessage).join("")}${state.chat.sending ? '<p class="muted" role="status">正在整理你的选择…</p>' : ""}</div>
             <div class="diet-composer-wrap">${state.chat.error ? `<div class="diet-error" role="alert">${escapeHtml(state.chat.error)}<button class="btn ghost" data-diet-action="${state.chat.retry ? "retry" : "reload"}" ${state.chat.sending ? "disabled" : ""}>${state.chat.retry ? "重试这次操作" : "重新加载"}</button></div>` : ""}
@@ -205,11 +205,17 @@ window.createConversation = function(deps) {
         const action = target.dataset.dietAction;
         if (action === "open") { state.chat.panelOpen = true; renderChat(); document.getElementById("dietPanel")?.focus(); }
         else if (action === "close") closeDietPanel();
-        else if (action === "focus") { closeDietPanel(); document.getElementById("dietMessage")?.focus(); }
+        else if (action === "focus") { if (isGeneral()) state.chat.mobilePane = "chat"; closeDietPanel(); document.getElementById("dietMessage")?.focus(); }
         else if (action === "reload") { state.chat.error = ""; state.chat.initialized = false; renderChat(); }
         else if (action === "retry") await runDietOperation(state.chat.retry);
+        else if (action === "general-pane") { state.chat.mobilePane = target.dataset.pane || "canvas"; state.chat.panelOpen = false; renderChat(); }
         else if (!state.chat.sending && !state.chat.retry) {
-            if (action === "edit") { state.chat.editFields = structuredClone(dietFieldValues()); renderChat(); }
+            if (action === "what-if") {
+                const input = document.getElementById("generalWhatIfInput");
+                const prompt = String(target.dataset.prompt || input?.value || "").trim();
+                if (prompt) await runDietOperation({kind: "chat", body: {requestId: crypto.randomUUID(), message: prompt, sourceMode: state.chat.sourceMode, expectedRevision: state.chat.decision?.revision || 0, context: {analysisMode: "what_if", scenarioId: target.dataset.scenarioId || "custom"}}});
+            }
+            else if (action === "edit") { state.chat.editFields = structuredClone(dietFieldValues()); renderChat(); }
             else if (action === "cancel") { state.chat.editFields = null; renderChat(); }
             else if (action === "clear") { state.chat.editFields[target.dataset.field] = isGeneral() ? null : []; renderChat(); }
             else if (action === "save") {
@@ -343,7 +349,7 @@ window.createConversation = function(deps) {
         const busy = state.chat.sending || state.chat.retry ? "disabled" : "";
         const all = d?.domainState?.conversationFields || {};
         const labels = {travel:"旅行",shopping:"购物",generic:"通用"};
-        const displayValue = v => ({laptop:"电脑 / 笔记本",phone:"手机",headphones:"耳机",appliance:"家电"}[v] || v);
+        const displayValue = v => ({laptop:"电脑 / 笔记本",phone:"手机",headphones:"耳机",appliance:"家电",daily:"每日往返",one_way:"单程"}[v] || v);
         const goal = d?.domain === "shopping" ? `选择适合你的${displayValue(all.category?.value) || "商品"}` : d?.domain === "travel" ? `${all.departure?.value || "待定地点"}出发${all.days?.value ? ` · ${all.days.value} 天旅行` : "的旅行"}` : all.target?.value || d?.userGoal;
         const rows = Object.entries(all).filter(([key,field]) => !["background","weeklyHours"].includes(key) || field.value != null || /学习|课程|编程/.test(d?.userGoal || "")).map(([key, field]) => {
             const value = state.chat.editFields ? state.chat.editFields[key] : field.value;
@@ -354,21 +360,37 @@ window.createConversation = function(deps) {
         const suggestion = d?.domainState?.suggestedDomain;
         const source = d?.domainState?.source;
         const assistance = d?.domainState?.assistance || {};
-        const analysis = assistance.analysis;
+        const current = assistance.currentAnalysis || (assistance.analysis && !assistance.analysis.hypothetical ? assistance.analysis : null);
+        const whatIf = assistance.whatIfAnalysis;
+        const scenarios = assistance.whatIfScenarios || [];
         const blocks = d?.status === "clarifying" ? [] : d?.domainState?.displayBlocks || [];
-        const dialog = state.chat.panelOpen && window.matchMedia("(max-width: 980px)").matches;
-        return `<aside id="dietPanel" class="diet-panel ${state.chat.panelOpen ? "is-open" : ""}" tabindex="-1" aria-label="当前决策" ${dialog ? 'role="dialog" aria-modal="true"' : ''}>
-            <div class="card-title"><div><span class="eyebrow">${labels[d?.domain] || "通用"}决策${d?.context?.demoMode ? " · 演示数据" : ""}</span><h3>当前决策</h3></div><button class="btn ghost diet-panel-close" data-diet-action="close">关闭</button></div>
+        const candidateName = id => (blocks.find(b => b.id === id)?.name || (d?.candidates || []).find(c => c.candidateId === id)?.name || id);
+        const primaryId = current?.primaryCandidateId || d?.recommendation?.primaryCandidateId;
+        const currentLabel = primaryId ? `当前更推荐 ${candidateName(primaryId)}。` : "当前还不适合给确定推荐。";
+        const keyReasons = (current?.keyReasons || current?.reasons || d?.recommendation?.reasons || []).slice(0, 4);
+        const tradeoffs = (current?.tradeoffs || d?.recommendation?.tradeoffs?.map(text => ({text})) || []).slice(0, 4);
+        const missing = (current?.missingInfo || (current?.question ? [current.question] : [])).slice(0, 3);
+        const change = assistance.lastOfficialChange || current?.lastChange;
+        const sourceNote = source?.mode === "fixture" ? " · 离线模拟数据，未核验实际价格、出发路线和行程费用" : source?.mode === "manual" ? " · 由你提供，未经外部核实" : "";
+        const renderPoints = (items, empty) => items.length ? `<ul>${items.map(item => `<li>${escapeHtml(item.text || item)}</li>`).join("")}</ul>` : `<p class="muted">${escapeHtml(empty)}</p>`;
+        return `<aside id="dietPanel" class="diet-panel decision-canvas ${state.chat.panelOpen ? "is-open" : ""}" tabindex="-1" aria-label="Decision Canvas">
+            <div class="card-title"><div><span class="eyebrow">${labels[d?.domain] || "通用"}决策${d?.context?.demoMode ? " · 演示数据" : ""}</span><h3>Decision Canvas</h3></div><button class="btn ghost diet-panel-close" data-diet-action="close">关闭</button></div>
             <p class="diet-goal">${escapeHtml(goal || "一起想清楚这次选择")}</p>
             ${d?.context?.demoMode ? '<p class="muted">正在体验演示数据，候选说明与属性不代表真实情况。<a href="#/demo">换个示例</a></p>' : ""}
             ${suggestion ? `<section class="diet-pending"><p>这次想切换到${labels[suggestion.domain] || "饮食"}场景吗？会新建会话，保留当前选择。</p><button class="btn soft" data-diet-action="switch" ${busy}>新建${labels[suggestion.domain] || "饮食"}决策</button></section>` : ""}
-            ${analysis ? `<section class="diet-panel-section"><span class="eyebrow">${analysis.mode === "model" ? "模型辅助" : analysis.mode === "rules_fallback" ? "规则辅助 · 模型暂不可用" : "规则辅助"}</span><h4>${analysis.hypothetical ? "假设分析 · 未修改当前选择" : "当前取舍"}</h4><p>${escapeHtml(analysis.summary)}</p>${analysis.changes?.length ? `<details open><summary>这轮更新了什么</summary>${analysis.changes.map(t=>`<p>${escapeHtml(t)}</p>`).join("")}</details>` : ""}${[["reasons","依据"],["tradeoffs","需要接受的代价"]].map(([key,label])=>analysis[key]?.length ? `<details open><summary>${label}</summary>${analysis[key].map(r=>`<p>${escapeHtml(r.text)}<small>${escapeHtml(analysis.sources?.[r.sourceId]?.source === "demo" || d.context?.demoMode ? "依据演示数据" : "依据已有候选信息")}</small></p>`).join("")}</details>` : "").join("")}${analysis.question ? `<p><strong>还需想清楚：</strong>${escapeHtml(analysis.question)}</p>` : ""}</section>` : ""}
+            <section class="canvas-block canvas-advice"><span class="eyebrow">当前建议</span><h4>${escapeHtml(currentLabel)}</h4>${current?.summary ? `<p>${escapeHtml(current.summary)}</p>` : `<p class="muted">随着对话补充，我会更新这里的比较。</p>`}</section>
+            <section class="canvas-block"><h4>为什么</h4>${renderPoints(keyReasons, "还没有足够依据提炼关键理由。")}</section>
+            <section class="canvas-block"><h4>选择它的代价</h4>${renderPoints(tradeoffs, "当前还没有明确代价；继续补充候选差异后会更新。")}</section>
+            <section class="canvas-block"><h4>当前结论为什么发生变化</h4><p>${escapeHtml(change?.reason || "本轮没有改变当前倾向。")}</p></section>
+            <section class="canvas-block"><h4>还缺什么关键信息</h4>${renderPoints(missing, "暂时没有必须追问的信息。")}</section>
+            <section class="canvas-block what-if-block"><div class="card-title"><h4>什么会改变我的决定？</h4></div>${scenarios.length ? `<div class="what-if-list">${scenarios.map(item => `<button class="what-if-option" type="button" data-diet-action="what-if" data-scenario-id="${escapeHtml(item.id)}" data-prompt="${escapeHtml(item.prompt)}"><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.impact || "假设比较")}</small></button>`).join("")}</div>` : `<p class="muted">还缺少可比较的数据，暂时无法生成可靠的决策边界。</p>`}<div class="what-if-custom"><input id="generalWhatIfInput" type="text" placeholder="例如：假设我可以接受两小时通勤" ${busy}><button class="btn soft" data-diet-action="what-if" ${busy}>分析假设</button></div></section>
+            ${whatIf ? `<section class="canvas-block what-if-result"><span class="eyebrow">假设结果${whatIf.stale ? " · 已过期" : ""}</span><h4>${escapeHtml(whatIf.summary || "已完成假设比较")}</h4><p class="muted">${escapeHtml(whatIf.notice || "这是一次假设比较，没有修改当前保存的正式条件。")}</p>${renderPoints((whatIf.keyReasons || whatIf.reasons || []).slice(0, 3), "这次假设没有足够依据改变判断。")}</section>` : ""}
             ${assistance.warning ? `<p class="diet-error">${escapeHtml(assistance.warning)}</p>` : ""}
             <section class="diet-panel-section"><div class="card-title"><h4>我理解的条件</h4>${!state.chat.editFields ? `<button class="btn soft" data-diet-action="edit" ${busy} ${!d ? "disabled" : ""}>编辑条件</button>` : ""}</div>${rows}
             ${state.chat.editFields ? `<div class="button-row"><button class="btn primary" data-diet-action="save" ${busy}>保存并更新</button><button class="btn ghost" data-diet-action="cancel" ${busy}>取消</button></div>` : pending ? `<button class="btn soft" data-diet-action="confirm" ${busy}>确认这些条件</button>` : ""}</section>
             ${d?.status === "clarifying" ? `<section class="diet-panel-section"><h4>还需补充</h4><p>${escapeHtml((d.clarifyingQuestions || []).join(" "))}</p><button class="btn soft" data-diet-action="focus">补充一下</button></section>` : ""}
-            <section class="diet-panel-section" aria-busy="${state.chat.sending}"><h4>当前比较 ${state.chat.sending ? "· 更新中…" : ""}</h4><p>${escapeHtml(d?.recommendation?.summary || "随着对话补充，我会更新这里的比较。")}</p>${blocks.map(b => `<article class="general-choice"><strong>${escapeHtml(b.name)}</strong><p>${escapeHtml(b.summary || "")}</p>${(b.facts || []).map(f=>`<p class="muted">你补充：${escapeHtml(f.text)}</p>`).join("")}</article>`).join("")}</section>
-            <p class="muted">${escapeHtml(source?.label || "等待补充信息")}${source?.mode === "fixture" ? " · 离线模拟数据，未核验实际价格、出发路线和行程费用" : source?.mode === "manual" ? " · 由你提供，未经外部核实" : ""}</p>
+            <section class="diet-panel-section" aria-busy="${state.chat.sending}"><h4>当前比较 ${state.chat.sending ? "· 更新中…" : ""}</h4>${blocks.map(b => `<article class="general-choice"><strong>${escapeHtml(b.name)}</strong><p>${escapeHtml(b.summary || "")}</p>${(b.facts || []).map(f=>`<p class="muted">你补充：${escapeHtml(f.text)}</p>`).join("")}</article>`).join("") || `<p class="muted">暂无候选。</p>`}</section>
+            <p class="muted">${escapeHtml(source?.label || "等待补充信息")}${sourceNote}</p>
             ${d?.domainState?.interpretationWarning ? `<p class="diet-error">${escapeHtml(d.domainState.interpretationWarning)}</p>` : ""}
             <details class="diet-panel-section general-details"><summary>详细比较与候选编辑</summary><div id="generalDetails"></div></details>
         </aside>`;

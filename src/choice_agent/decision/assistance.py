@@ -19,6 +19,38 @@ def hypothetical(text):
     return bool(re.search(r"如果|假如|假设|要是", text))
 
 
+_NUMBERS = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def _number(value):
+    return float(value) if re.fullmatch(r"\d+(?:\.\d+)?", value) else float(_NUMBERS[value])
+
+
+def commute_measure(text):
+    if "通勤" not in text:
+        return None
+    match = re.search(r"(?P<basis>每天|每日|单程|来回|往返)?[^，。；]{0,10}(?P<value>\d+(?:\.\d+)?|一|两|二|三|四|五|六|七|八|九|十)\s*(?P<unit>小时|分钟)", text)
+    if not match:
+        return None
+    minutes = int(_number(match.group("value")) * (60 if match.group("unit") == "小时" else 1))
+    basis_text = match.group("basis") or "每天"
+    return {"minutes": minutes, "basis": "one_way" if basis_text == "单程" else "daily"}
+
+
+def _apply_fact_attributes(decision, candidate_id, kind, measure):
+    if kind != "commute" or not measure:
+        return
+    for collection in [decision.domain_state.get("manualCandidates", []), decision.domain_state.get("candidatePool", [])]:
+        for item in collection:
+            if item.get("candidateId") == candidate_id:
+                item.setdefault("attributes", {})["commute_minutes"] = measure["minutes"]
+                item.setdefault("attributes", {})["commute_basis"] = measure["basis"]
+    for candidate in decision.candidates:
+        if candidate.candidate_id == candidate_id:
+            candidate.attributes["commute_minutes"] = measure["minutes"]
+            candidate.attributes["commute_basis"] = measure["basis"]
+
+
 def matched_candidates(decision, text):
     compact = text.replace(" ", "")
     pool = decision.domain_state.get("manualCandidates") or decision.domain_state.get("candidatePool", [])
@@ -36,7 +68,14 @@ def add_fact(decision, candidate_id, text, concern=False, source="conversation")
     kind = "commute" if "通勤" in text else "salary" if any(w in text for w in ["薪资", "薪酬", "工资"]) else "description"
     existing = info.setdefault("facts", [])
     existing[:] = [f for f in existing if not (f["candidateId"] == candidate_id and (f["kind"] == kind if kind != "description" else f["text"] == text))]
-    existing.append({"id":"fact:"+uuid4().hex,"candidateId":candidate_id,"text":text,"quote":text,"kind":kind,"concern":concern,"source":source,"confirmed":True,"revision":decision.revision+1})
+    measure = commute_measure(text) if kind == "commute" else None
+    fact = {"id":"fact:"+uuid4().hex,"candidateId":candidate_id,"text":text,"quote":text,"kind":kind,"concern":concern,"source":source,"confirmed":True,"revision":decision.revision+1}
+    if measure:
+        fact["value"] = measure["minutes"]
+        fact["unit"] = "分钟"
+        fact["basis"] = measure["basis"]
+    existing.append(fact)
+    _apply_fact_attributes(decision, candidate_id, kind, measure)
     info["changes"].append("补充候选信息："+text)
 
 
@@ -50,7 +89,7 @@ def prepare_turn(context):
     context.data["turn_intent"] = "what_if" if hypothetical(text) else "explain" if any(w in text for w in ["为什么", "为何", "理由"]) else "compare"
     if hypothetical(text): return
     patch = {}
-    previous_question=info.get("analysis",{}).get("question") or info.get("lastQuestion","")
+    previous_question=info.get("currentAnalysis",{}).get("question") or info.get("analysis",{}).get("question") or info.get("lastQuestion","")
     if previous_question and "这项顾虑" in previous_question:
         pending=[f for f in info.get("facts",[]) if f.get("concern")]
         if len(pending)==1 and re.search(r"不能妥协|不能交换|硬条件|必须排除",text):
@@ -98,7 +137,7 @@ def model_context(context):
     d=context.decision
     return {"message":context.message,"domain":d.domain,"fields":fields(d),
             "recent_messages":[{"role":m.role,"content":m.content[:2000]} for m in d.messages[-8:]],
-            "previous_question":state(d).get("analysis",{}).get("question") or state(d).get("lastQuestion") or (d.clarifying_questions[0] if d.clarifying_questions else None),
+            "previous_question":state(d).get("currentAnalysis",{}).get("question") or state(d).get("analysis",{}).get("question") or state(d).get("lastQuestion") or (d.clarifying_questions[0] if d.clarifying_questions else None),
             "candidates":[{"candidateId":c["candidateId"],"name":c["name"],"summary":c.get("summary","")[:1000],"origin":c.get("origin")} for c in (d.domain_state.get("manualCandidates") or d.domain_state.get("candidatePool",[]))[:12]],
             "facts":state(d).get("facts",[])[-24:],"rule_intent":context.data.get("turn_intent")}
 
@@ -237,7 +276,11 @@ def rule_analysis(context, decision):
         else: positive=[];negative=[]
         supported=[c for c in candidates if any(w in c.summary for w in positive) and not any(w in c.summary for w in negative)]
         if len(supported)==1: chosen=supported[0]
-        if chosen: result["reasons"].append(point(chosen,f"{chosen.name}的已有说明是：{chosen.summary}。这与{'你的基础和可用时间' if background or current.get('weeklyHours',{}).get('value') else '你表达的优先项'}更吻合。"))
+        if not chosen and len(candidates)==1: chosen=candidates[0]
+        if chosen and len(candidates)==1:
+            result["reasons"].append(point(chosen,f"排除其他选项后只剩 {chosen.name}；它的已知取舍需要继续核对。"))
+        elif chosen:
+            result["reasons"].append(point(chosen,f"{chosen.name}的已有说明是：{chosen.summary}。这与{'你的基础和可用时间' if background or current.get('weeklyHours',{}).get('value') else '你表达的优先项'}更吻合。"))
         for c in candidates:
             if c!=chosen: result["tradeoffs"].append(point(c,f"{c.name}：{candidate_text(decision,c)}"))
         if not chosen:
@@ -326,7 +369,8 @@ def explain(context, profile):
     elif analysis["mode"]=="model" and (d.context.get("demoMode") or any(c.origin=="fixture" for c in target.candidates)):
         analysis["summary"]+="以上依据演示数据，不代表真实情况。"
     analysis["sources"]=sources
-    info["analysis"]=analysis
+    analysis["keyReasons"] = analysis.get("reasons", [])[:4]
+    from choice_agent.decision.what_if import missing_info, official_change, scenarios
     speech=analysis["summary"]
     for key,label in [("reasons","依据"),("tradeoffs","取舍")]:
         lines=[r["text"] for r in analysis[key]][:2]
@@ -335,9 +379,22 @@ def explain(context, profile):
     if context.data.get("unhandled_turn") and analysis["mode"]!="model" and not info.get("changes"):
         question="这句话我还没整理成可比较的信息。你想修改哪个候选的哪一点，或最看重什么？"
     analysis["question"]=question
+    analysis["missingInfo"] = missing_info(d, analysis)
     info["lastQuestion"]=question
     if question: speech+="\n"+question
-    if not analysis["hypothetical"]:
+    if analysis["hypothetical"]:
+        analysis["notice"] = "这是一次假设比较，没有修改当前保存的正式条件。"
+        info["whatIfAnalysis"] = analysis
+        info["analysis"] = analysis
+    else:
+        change = official_change(d, context.data.get("official_baseline"), analysis)
+        analysis["lastChange"] = change
+        info["lastOfficialChange"] = change
+        info["currentAnalysis"] = analysis
+        info["analysis"] = analysis
+        if isinstance(info.get("whatIfAnalysis"), dict):
+            info["whatIfAnalysis"]["stale"] = True
+        info["whatIfScenarios"] = scenarios(d, analysis)
         d.recommendation=Recommendation(primary_candidate_id=analysis["primaryCandidateId"],summary=analysis["summary"],ranking_method="grounded_qualitative" if d.domain_state.get("qualitative") else "weighted_sum",reasons=[RecommendationPoint(text=r["text"],candidate_id=r["candidateId"],evidence_ids=[r["sourceId"]]) for r in analysis["reasons"]],tradeoffs=[r["text"] for r in analysis["tradeoffs"]],generated_from_revision=d.revision)
     context.data["speech_text"]=speech
     transition_decision(d,DecisionStatus.DECIDED,DecisionNextAction.WAIT_USER)

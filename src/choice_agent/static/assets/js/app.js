@@ -245,55 +245,53 @@
         app.focus({ preventScroll: true });
     }
     function renderGeneralHome() {
-        const modelConfigured = DietApi.hasConfiguredModel();
-        const modeTitle = modelConfigured ? "模型配置已启用" : "演示模式";
-        const modeDescription = modelConfigured
-            ? "对话会使用已配置的模型辅助理解；你可以随时查看和修正当前条件。"
-            : "当前使用规则理解和离线示例。直接说出你的选择，我会整理条件和候选；示例价格和行程尚未核实。";
+        const flagshipExample = {
+            text: "A 公司工作稳定、离家近，B 公司成长更快但每天通勤两小时，我应该怎么选？",
+            domain: "career"
+        };
         const examples = [
-            { text: "周末想出去走走，但不知道去哪里", domain: "travel" },
-            { text: "A 公司和 B 公司两个 Offer 各有优缺点，应该怎么选", domain: "career" },
-            { text: "想系统学 AI Agent，但不知道先选哪条学习路径", domain: "learning" },
-            { text: "想换一台适合通勤的轻便电脑", domain: "shopping" },
-            { text: "今晚不知道吃什么，想要清淡一点", domain: "diet" }
+            { label: "规划一次不累的周末旅行", text: "周末想出去走走，但不想太累，应该去哪里？", domain: "travel" },
+            { label: "挑一台通勤电脑", text: "想换一台适合通勤的轻便电脑，预算有限，应该怎么选？", domain: "shopping" },
+            { label: "选择 AI Agent 学习路径", text: "想系统学 AI Agent，但不知道先选哪条学习路径。", domain: "learning" },
+            { label: "决定今晚吃什么", text: "今晚不知道吃什么，想要清淡一点。", domain: "diet" }
         ];
         app.innerHTML = `
             <section class="hero general-home">
                 <div class="hero-panel decision-entry">
                     <span class="badge">Choice Agent</span>
                     <h1>把选择题想清楚</h1>
-                    <p>说出你正在纠结的选择。系统会先理解目标和约束，再追问关键条件、比较取舍，并把能直接处理的场景带入对应决策能力。</p>
-                    <div class="mode-banner" data-mode="${modelConfigured ? "model" : "demo"}">
-                        <span>${escapeHtml(modeTitle)}</span>
-                        <p>${escapeHtml(modeDescription)}</p>
-                        <a class="btn ghost" href="#/settings">配置 API</a>
-                    </div>
+                    <p>说出你正在纠结的选择。Choice Agent 会帮你补齐关键条件、整理候选、过滤硬约束、比较取舍，并告诉你为什么推荐、需要接受什么代价，以及什么变化会改变当前结论。</p>
                     <form id="generalDecisionForm" class="decision-entry-form">
                         <label class="field full">
                             <span>你最近在纠结什么？</span>
-                            <textarea name="prompt" placeholder="比如：今晚不知道吃什么，想要清淡一点。">${escapeHtml(state.home.generalPrompt)}</textarea>
+                            <textarea name="prompt" placeholder="比如：我拿到了两个 Offer，一个稳定但成长慢，一个机会更多但通勤很远，我该怎么选？">${escapeHtml(state.home.generalPrompt)}</textarea>
                         </label>
                         <div class="button-row">
                             <button class="btn primary" type="submit">开始决策</button>
                         </div>
                     </form>
                     ${state.home.notice ? `<div class="mode-notice">${escapeHtml(state.home.notice)}</div>` : ""}
+                    <button class="flagship-example" type="button" data-action="general-example" data-example="${escapeHtml(flagshipExample.text)}" data-demo-domain="${escapeHtml(flagshipExample.domain)}">
+                        <span>推荐体验</span>
+                        <strong>帮我比较两个 Offer</strong>
+                        <small>${escapeHtml(flagshipExample.text)}</small>
+                    </button>
                     <div class="example-grid" aria-label="决策示例">
-                        ${examples.map((example) => `<button class="example-button" type="button" data-action="general-example" data-example="${escapeHtml(example.text)}" data-demo-domain="${escapeHtml(example.domain)}">${escapeHtml(example.text)}</button>`).join("")}
+                        ${examples.map((example) => `<button class="example-button" type="button" data-action="general-example" data-example="${escapeHtml(example.text)}" data-demo-domain="${escapeHtml(example.domain)}">${escapeHtml(example.label)}</button>`).join("")}
                     </div>
                 </div>
                 <aside class="grid stats workflow-stats">
-                    ${statCard("描述选择", "一句话开始", "把目标、候选和纠结点先放到同一个入口")}
-                    ${statCard("澄清条件", "补关键约束", "信息不足时先追问，不急着给结论")}
-                    ${statCard("比较取舍", "解释建议", "展示推荐理由、替代项和下一步")}
-                    ${statCard("通用决策", "旅行 / 购物 / 自定义", "服务端决策工作台")}
+                    ${statCard("不用先整理", "一句话开始", "先描述你在纠结什么，目标、候选和顾虑可以边聊边补齐。")}
+                    ${statCard("看清决策条件", "自动拆解", "识别目标、候选、偏好和硬约束，让模糊问题变成可检查的结构。")}
+                    ${statCard("先补关键缺口", "追问重点", "信息不足时优先问真正影响结论的问题，而不是马上给答案。")}
+                    ${statCard("理解推荐边界", "可解释结论", "说明为什么推荐、要接受什么代价，以及哪些条件变化会改变结果。")}
                 </aside>
             </section>
-            <section class="grid three decision-flow" style="margin-top: 18px;">
-                ${featureCard("描述选择", "输入正在纠结的问题，不需要先判断该进入哪个能力。", "#/")}
-                ${featureCard("澄清条件", "系统围绕目标、约束、偏好和场景补齐关键上下文。", "#/")}
-                ${featureCard("比较取舍", "对候选进行排序、解释理由，并保留可追踪的决策过程。", "#/")}
-                ${featureCard("通用 Demo", "用演示数据体验同一套对话与可编辑结果侧栏。", "#/demo")}
+            <section class="grid three decision-flow value-flow" style="margin-top: 18px;">
+                ${featureCard("过程可检查", "把候选、约束、偏好和当前倾向拆开呈现，避免只得到一句无法追踪的结论。", "#/")}
+                ${featureCard("条件可修改", "你可以继续补充顾虑、调整偏好或修正候选，结果会随着条件重新组织。", "#/")}
+                ${featureCard("结论可解释", "推荐会同时展示依据、代价和变化边界，方便你判断是否接受。", "#/")}
+                ${featureCard("查看完整示例", "体验旅行、Offer、学习路径和购物等场景下的可编辑结果侧栏。", "#/demo")}
             </section>
             <section class="developer-links" aria-label="开发者入口">
                 <span class="muted">开发者入口</span>

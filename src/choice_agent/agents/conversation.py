@@ -2,6 +2,29 @@
 import re
 from choice_agent.decision.conversation import fields, patch_fields, PRIORITIES
 
+_NUMBERS = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def _number(value):
+    return float(value) if re.fullmatch(r"\d+(?:\.\d+)?", value) else float(_NUMBERS[value])
+
+
+def _duration_minutes(match):
+    amount = _number(match.group("value"))
+    unit = match.group("unit") or "分钟"
+    return int(amount * 60) if unit == "小时" else int(amount)
+
+
+def _commute_limit(text):
+    if "通勤" not in text:
+        return None
+    match = re.search(r"(?P<basis>每天|每日|单程|来回|往返)?[^，。；]{0,8}(?:最多|不超过|不超|上限|只能接受|接受)[^，。；]{0,8}(?P<value>\d+(?:\.\d+)?|一|两|二|三|四|五|六|七|八|九|十)\s*(?P<unit>小时|分钟)", text)
+    if not match:
+        return None
+    basis_text = match.group("basis") or "每天"
+    basis = "one_way" if basis_text == "单程" else "daily"
+    return {"minutes": _duration_minutes(match), "basis": basis}
+
 
 def interpret(context, provider=None, model=None):
     d, text = context.decision, context.message.strip()
@@ -18,6 +41,11 @@ def interpret(context, provider=None, model=None):
         from choice_agent.domains.shopping import shopping_category
         category = shopping_category(text)
         if category: patch["category"] = category
+    commute_limit = _commute_limit(text)
+    if commute_limit and "maxCommuteMinutes" in current:
+        patch["maxCommuteMinutes"] = commute_limit["minutes"]
+        if "commuteBasis" in current:
+            patch["commuteBasis"] = commute_limit["basis"]
     budget = re.search(r"(?:总预算|预算|不超过|不超|最多|上限)[是为改到成不超过：:\s]*(\d+(?:\.\d+)?)\s*(万|千|k)?", text, re.I)
     if not budget and "budget" in current and current["budget"].get("value") is not None:
         budget = re.search(r"^(?:改到|改成|调整到)\s*(\d+(?:\.\d+)?)\s*(万|千|k)?(?:元)?[。！!\s]*$", text, re.I)
@@ -25,7 +53,7 @@ def interpret(context, provider=None, model=None):
         if d.domain == "travel" and ("人均" in text or "每人" in text):
             question = "这里按整次行程的总预算比较。请告诉我总预算是多少元？"
         else: patch["budget"] = float(budget[1]) * {None:1,"万":10000,"千":1000,"k":1000}.get((budget[2] or '').lower() or None,1)
-    for key, words in [("budget", "预算"), ("priority", "偏好|优先|更看重"), ("departure", "出发地"), ("days", "天数"), ("maxTransitHours", "交通时间")]:
+    for key, words in [("budget", "预算"), ("priority", "偏好|优先|更看重"), ("departure", "出发地"), ("days", "天数"), ("maxTransitHours", "交通时间"), ("maxCommuteMinutes", "通勤")]:
         if key in current and re.search(r"(?:清空|取消|不限|不限制)(?:.{0,3})(?:"+words+r")|(?:"+words+r")(?:不限|不限制|清空)", text): patch[key] = None
     if d.domain == "travel":
         departure = re.search(r"从([\u4e00-\u9fffA-Za-z]{2,12}?)(?:出发|去)", text)

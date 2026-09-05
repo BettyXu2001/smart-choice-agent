@@ -41,6 +41,9 @@ _PROTECTED_CONTEXT_KEYS = {
     "sessionId",
     "session_id",
     "status",
+    "analysisMode",
+    "scenarioId",
+    "scenarioText",
 }
 
 class GenericDecisionOrchestrator:
@@ -101,7 +104,7 @@ class GenericDecisionOrchestrator:
         resolution = self.registry.identify(message, request.domain)
         decision.domain_state["sceneResolution"] = resolution
         try:
-            return self._run(user_id, profile, decision, message, None)
+            return self._run(user_id, profile, decision, message, None, None)
         except (IntegrityError, DecisionRevisionError):
             self.db.rollback()
             existing = self.repository.get_for_user(decision_id, user_id)
@@ -124,13 +127,15 @@ class GenericDecisionOrchestrator:
         assert_expected_revision(decision.revision, request.expected_revision)
         decision.domain_state["pendingReceipt"] = receipt
         profile = self.registry.get(decision.domain)
+        from choice_agent.decision.what_if import official_baseline
+        baseline = official_baseline(decision)
         decision.context = {**decision.context, **self._safe_context(request.context)}
         decision.messages.append(DecisionMessage(role="user", content=message))
         decision.domain_state.setdefault("messages", []).append(
             {"role": "user", "content": message}
         )
         decision.agent_runs = []
-        return self._run(user_id, profile, decision, message, request.expected_revision)
+        return self._run(user_id, profile, decision, message, request.expected_revision, baseline)
 
     def command(
         self, user_id: int, decision_id: str, request: DecisionCommandRequest
@@ -149,6 +154,8 @@ class GenericDecisionOrchestrator:
             return GenericDecisionResponse(decision_state=public_decision(decision),trace_id=f"command:{request.command_id}", speech_text=decision.messages[-1].content,display_blocks=decision.domain_state.get("displayBlocks",[]))
         decision.domain_state["pendingReceipt"] = receipt
         assert_expected_revision(decision.revision, request.expected_revision)
+        from choice_agent.decision.what_if import official_baseline
+        baseline = official_baseline(decision)
         decision.context = {**decision.context, **self._safe_context(request.context)}
         before = decision.revision
         mutation = apply_command(decision, request)
@@ -182,7 +189,7 @@ class GenericDecisionOrchestrator:
                     user_id=user_id,
                     message=message,
                     decision=decision,
-                    data=self._stage_data(decision),
+                    data={**self._stage_data(decision), "official_baseline": baseline},
                 )
                 if mutation.mode == "full":
                     self.unified.run(profile, context, trace)
@@ -221,7 +228,7 @@ class GenericDecisionOrchestrator:
             display_blocks=blocks,
         )
 
-    def _run(self, user_id, profile, decision, message, expected_revision):
+    def _run(self, user_id, profile, decision, message, expected_revision, baseline=None):
         trace_id = uuid4().hex
         decision.trace_refs.append(TraceReference(trace_id=trace_id, event_type="REQUEST"))
         with TraceScope(self.db, trace_id, decision.session_id, user_id) as trace:
@@ -238,12 +245,14 @@ class GenericDecisionOrchestrator:
                     user_id=user_id,
                     message=message,
                     decision=decision,
-                    data=self._stage_data(decision),
+                    data={**self._stage_data(decision), "official_baseline": baseline},
                 )
+                from choice_agent.decision.assistance import hypothetical
+                is_hypothetical = hypothetical(message)
                 resolution = self.registry.identify(message)
                 selected = next((key for key, label in {"diet":"饮食","shopping":"购物","travel":"旅行","generic":"通用"}.items() if f"按{label}继续" in message), None)
                 different = selected or (resolution["domain"] if resolution["domain"] != "generic" else None)
-                if len(decision.messages) > 1 and decision.domain != "diet" and different and different != decision.domain:
+                if not is_hypothetical and len(decision.messages) > 1 and decision.domain != "diet" and different and different != decision.domain:
                     decision.domain_state["suggestedDomain"] = {"domain":different,"message":message,"explicit": bool(selected)}
                     context.data["speech_text"] = "这像是一个新的决策场景。可以点击侧栏的新建入口继续，当前选择会保留。"
                 else:
