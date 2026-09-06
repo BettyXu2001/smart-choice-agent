@@ -3,6 +3,9 @@
 
     const API_BASE = "/api/v1/diet";
     const DECISION_API_BASE = "/api/v1/decisions";
+    const DECISION_HISTORY_API_BASE = "/api/v1/decision-history";
+    const EVALUATION_API_BASE = "/api/v1/evaluations";
+    const PROFILE_API_BASE = "/api/v1/profile";
     const USER_ID_KEY = "diet.userId";
     const MODEL_SETTINGS_KEY = "choiceAgentModelSettings";
     const DEFAULT_MODEL_SETTINGS = {
@@ -122,6 +125,18 @@
 
     async function decisionRequest(path, options) {
         return request(DECISION_API_BASE, path, options);
+    }
+
+    async function decisionHistoryRequest(path, options) {
+        return request(DECISION_HISTORY_API_BASE, path, options);
+    }
+
+    async function evaluationRequest(path, options) {
+        return request(EVALUATION_API_BASE, path, options);
+    }
+
+    async function profileRequest(path, options) {
+        return request(PROFILE_API_BASE, path, options);
     }
     function normalizeStreamError(event) {
         const detail = event?.error?.message || event?.message || "请求失败，请重试。";
@@ -248,5 +263,30 @@
         command: (decisionId, payload) => decisionRequest(`/${encodeURIComponent(decisionId)}/commands`, { method: "POST", body: payload }),
         commandStream: (decisionId, payload, options) => decisionStream(`/${encodeURIComponent(decisionId)}/commands/stream`, payload, options),
         get: (decisionId) => decisionRequest(`/${encodeURIComponent(decisionId)}`)
+    };
+
+    window.DecisionHistoryApi = {
+        list: (params) => decisionHistoryRequest(`${toQuery(params)}`),
+        get: (decisionId) => decisionHistoryRequest(`/${encodeURIComponent(decisionId)}`),
+        saveOutcome: (decisionId, payload) => decisionHistoryRequest(`/${encodeURIComponent(decisionId)}/outcome`, { method: "PUT", body: payload }),
+        clearOutcome: (decisionId, revision) => decisionHistoryRequest(`/${encodeURIComponent(decisionId)}/outcome${toQuery({ revision })}`, { method: "DELETE" })
+    };
+
+    window.EvaluationApi = {
+        dashboard: () => evaluationRequest("/dashboard"),
+        listCases: (params) => evaluationRequest(`/cases${toQuery(params)}`),
+        createCase: (payload) => evaluationRequest("/cases", { method: "POST", body: payload }),
+        updateCase: (caseId, payload) => evaluationRequest(`/cases/${encodeURIComponent(caseId)}`, { method: "PUT", body: payload }),
+        listDatasets: () => evaluationRequest("/datasets"),
+        createDataset: (payload) => evaluationRequest("/datasets", { method: "POST", body: payload }),
+        listRuns: () => evaluationRequest("/runs"),
+        createRun: (payload) => evaluationRequest("/runs", { method: "POST", body: payload }),
+        getRun: (runId) => evaluationRequest(`/runs/${encodeURIComponent(runId)}`),
+        reviewResult: (resultId, payload) => evaluationRequest(`/results/${encodeURIComponent(resultId)}/review`, { method: "PUT", body: payload })
+    };
+
+    window.ProfileApi = {
+        get: () => profileRequest(""),
+        save: (payload) => profileRequest("", { method: "PUT", body: payload })
     };
 })();

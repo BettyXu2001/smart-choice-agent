@@ -76,6 +76,19 @@ class EvidenceVerificationStatus(str, Enum):
     REJECTED = "rejected"
 
 
+class EvidenceCitationStatus(str, Enum):
+    MATCHED = "matched"
+    REJECTED = "rejected"
+    NOT_APPLICABLE = "not_applicable"
+    UNKNOWN = "unknown"
+
+
+class EvidenceClaimStatus(str, Enum):
+    VERIFIED = "verified"
+    UNVERIFIED = "unverified"
+    NOT_APPLICABLE = "not_applicable"
+
+
 class CriterionDirection(str, Enum):
     HIGHER_IS_BETTER = "higher_is_better"
     LOWER_IS_BETTER = "lower_is_better"
@@ -146,7 +159,7 @@ class Evidence(ApiModel):
     value: Any
     source_title: str
     source_url: str | None = None
-    retrieved_at: datetime = Field(default_factory=datetime.utcnow)
+    retrieved_at: datetime | None = None
     confidence: float = Field(default=1.0, ge=0, le=1)
     evidence_id: str | None = None
     candidate_id: str | None = None
@@ -156,6 +169,17 @@ class Evidence(ApiModel):
     published_at: datetime | None = None
     freshness: str | None = None
     verification_status: EvidenceVerificationStatus = EvidenceVerificationStatus.UNVERIFIED
+    source_kind: Literal["user", "web", "system", "fixture", "database", "unknown"] = "unknown"
+    statement_kind: Literal[
+        "reported_fact", "subjective_judgment", "preference", "inference", "unknown"
+    ] = "unknown"
+    citation_status: EvidenceCitationStatus = EvidenceCitationStatus.UNKNOWN
+    claim_status: EvidenceClaimStatus = EvidenceClaimStatus.UNVERIFIED
+    verification_note: str | None = None
+    source_id: str | None = None
+    source_quote: str | None = None
+    recorded_revision: int | None = None
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
 
 
 class ScoreContribution(ApiModel):
@@ -224,6 +248,13 @@ class Recommendation(ApiModel):
     tradeoff_details: list[RecommendationPoint] = Field(default_factory=list)
     generated_from_revision: int | None = None
     ranking_method: str = "weighted_sum"
+
+
+class DecisionOutcome(ApiModel):
+    candidate_id: str | None = None
+    label: str
+    reason: str | None = None
+    recorded_at: datetime | None = None
 
 
 class DecisionMessage(ApiModel):
@@ -297,6 +328,7 @@ class DecisionState(ApiModel):
     unanswered_questions: list[UnansweredQuestion] = Field(default_factory=list)
     assumptions: list[Assumption] = Field(default_factory=list)
     recommendation: Recommendation | None = None
+    outcome: DecisionOutcome | None = None
     next_action: DecisionNextAction = DecisionNextAction.WAIT_USER
     risk_flags: list[str] = Field(default_factory=list)
     excluded_candidates: list[str] = Field(default_factory=list)
@@ -389,6 +421,42 @@ class GenericDecisionResponse(ApiModel):
     trace_id: str
     speech_text: str
     display_blocks: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DecisionHistorySummary(ApiModel):
+    decision_id: str
+    title: str
+    domain: str
+    created_at: datetime
+    updated_at: datetime
+    status: DecisionStatus
+    current_recommendation: str | None = None
+    final_choice: str | None = None
+
+
+class DecisionHistoryListResponse(ApiModel):
+    items: list[DecisionHistorySummary] = Field(default_factory=list)
+    limit: int
+
+
+class DecisionHistoryDetailResponse(ApiModel):
+    summary: DecisionHistorySummary
+    decision: DecisionState
+
+
+class DecisionOutcomeRequest(ApiModel):
+    candidate_id: str | None = None
+    label: str = Field(min_length=1, max_length=200)
+    reason: str | None = Field(default=None, max_length=1000)
+    revision: int = Field(ge=0)
+
+
+class UserProfile(ApiModel):
+    budget_habit: str | None = Field(default=None, max_length=500)
+    preferred_cities: list[str] = Field(default_factory=list)
+    diet_preferences: list[str] = Field(default_factory=list)
+    notes: str | None = Field(default=None, max_length=1200)
+
 
 class DietFieldState(ApiModel):
     source: Literal["conversation", "panel", "model", "legacy"] = "legacy"
@@ -502,11 +570,18 @@ class AssistanceInterpretation(BaseModel):
     question: str | None = Field(default=None, max_length=500)
 
 
+class AssistanceCitation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_id: str
+    quote: str
+
+
 class AssistanceReason(BaseModel):
     model_config = ConfigDict(extra="forbid")
     candidate_id: str
     source_id: str
     quote: str
+    citations: list[AssistanceCitation] = Field(default_factory=list, max_length=6)
     text: str = Field(min_length=1, max_length=1000)
 
 

@@ -31,6 +31,32 @@ class DietMealPlanCompositionStrategy:
         candidates, evidence, warnings = EvidenceValidator().validate(
             result.candidates, result.sources
         )
+        if context.trace:
+            context.trace.node(
+                "Candidate Retrieval",
+                "operation",
+                "success",
+                f"为三餐计划检索到 {len(result.candidates)} 个候选",
+                input_payload={"sourceMode": context.data["source_mode"]},
+                output_payload={
+                    "candidateCount": len(result.candidates),
+                    "candidates": [{"id": item.candidate_id, "name": item.name, "origin": item.origin} for item in result.candidates],
+                    "warnings": result.warnings,
+                },
+                refs={"searchRunId": result.run.run_id if result.run else None},
+            )
+            context.trace.node(
+                "Evidence",
+                "operation",
+                "success",
+                f"加入 {len(evidence)} 条三餐 Evidence",
+                input_payload={"sourceCount": len(result.sources), "candidateCount": len(result.candidates)},
+                output_payload={
+                    "evidence": [item.model_dump(mode="json", by_alias=True) for item in evidence],
+                    "warnings": warnings,
+                },
+                refs={"sourceIds": [item.source_id for item in result.sources]},
+            )
         if result.run:
             context.decision.search_runs.append(result.run)
         context.decision.sources = result.sources
@@ -55,9 +81,50 @@ class DietMealPlanCompositionStrategy:
                 *[str(item) for item in context.data.get("exclude_ids", [])],
                 *used,
             ]))
-            ranked = self.ranking.rank(context.decision, candidates, self.evaluator, tie_breaker=lambda item: int(item.candidate_id))
+            ranking_diagnostics: dict[str, object] = {}
+            ranked = self.ranking.rank(
+                context.decision,
+                candidates,
+                self.evaluator,
+                tie_breaker=lambda item: int(item.candidate_id),
+                diagnostics=ranking_diagnostics,
+            )
+            before_positive_count = len(ranked)
             ranked = [candidate for candidate in ranked if candidate.score > 0]
             selected = ranked[0] if ranked else None
+            if context.trace:
+                counts = context.decision.domain_state.get("rankingCounts", {})
+                context.trace.node(
+                    "Hard Filter",
+                    "operation",
+                    "success",
+                    f"{meal_time} 硬约束排除 {counts.get('hardConstraintExcluded', 0)} 个餐食",
+                    input_payload={
+                        "mealTime": meal_time,
+                        "constraints": [item.model_dump(mode="json", by_alias=True) for item in context.decision.constraints],
+                        "excludedCandidates": context.decision.excluded_candidates,
+                    },
+                    output_payload={"counts": counts, "eliminated": ranking_diagnostics.get("eliminated", [])},
+                    refs={"mealTime": meal_time},
+                )
+                context.trace.node(
+                    "Ranking",
+                    "operation",
+                    "success",
+                    f"{meal_time} 完成 {before_positive_count} 个餐食排序",
+                    input_payload={"mealTime": meal_time, "criteria": [item.model_dump(mode="json", by_alias=True) for item in context.decision.criteria]},
+                    output_payload={"ranked": ranking_diagnostics.get("ranked", [])},
+                    refs={"mealTime": meal_time},
+                )
+                context.trace.node(
+                    "Selection",
+                    "operation",
+                    "success" if selected else "skipped",
+                    f"{meal_time} {'选中 ' + selected.name if selected else '暂无匹配项'}",
+                    input_payload={"mealTime": meal_time, "positiveScoreCount": len(ranked), "usedCandidateIds": used},
+                    output_payload={"selectedCandidateId": selected.candidate_id if selected else None},
+                    refs={"mealTime": meal_time, "candidateId": selected.candidate_id if selected else None},
+                )
             if selected:
                 used.append(selected.candidate_id)
                 selected_candidates.append(selected)

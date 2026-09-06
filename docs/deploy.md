@@ -81,6 +81,22 @@ server {
 
 Use Certbot or the host platform's certificate tooling to enable HTTPS.
 
+
+## Realtime Candidate Search
+
+The deployed public UI can expose realtime candidate search for shopping and travel. Configure these environment variables on the hosting platform:
+
+```env
+CHOICE_AGENT_SEARCH_PROVIDER=openai
+CHOICE_AGENT_SEARCH_API_KEY=sk-...
+CHOICE_AGENT_SEARCH_BASE_URL=https://api.openai.com/v1
+CHOICE_AGENT_SEARCH_MODEL=gpt-5-mini
+CHOICE_AGENT_SEARCH_TIMEOUT_SECONDS=20
+CHOICE_AGENT_SEARCH_MAX_QUERIES=2
+```
+
+Without `CHOICE_AGENT_SEARCH_API_KEY`, the realtime-search toggle is disabled and demo/fixture behavior remains available.
+
 ## Notes
 
 - Deploy the backend and frontend together unless the application is explicitly split later.

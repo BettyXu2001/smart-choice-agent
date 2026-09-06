@@ -159,32 +159,52 @@ class GenericDecisionOrchestrator:
         assert_expected_revision(decision.revision, request.expected_revision)
         from choice_agent.decision.what_if import official_baseline
         baseline = official_baseline(decision)
-        decision.context = {**decision.context, **self._safe_context(request.context)}
         before = decision.revision
-        mutation = apply_command(decision, request)
-        message = mutation.message or decision.user_goal
-        if not mutation.message and decision.domain != "diet":
-            labels = {"update_fields":"更新条件", "confirm_fields":"确认条件", "update_candidate":"修改候选说明", "add_candidate":"添加候选", "exclude_candidate":"排除候选", "restore_candidate":"恢复候选", "set_criterion_weight":"调整比较偏好", "set_constraint":"添加限制", "remove_constraint":"移除限制", "refresh_candidates":"刷新候选", "generate_recommendation":"重新比较"}
-            description = labels.get(request.type, "更新选择")
-            if request.type == "update_fields":
-                current = decision.domain_state.get("conversationFields", {})
-                description += "：" + "、".join(f"{current[k]['label']}设为{v if v is not None else '不限 / 清空'}" for k,v in request.payload.get("fields",{}).items())
-            from choice_agent.decision.assistance import state as assistance_state
-            assistance_state(decision)["changes"] = [description]
-            decision.messages.append(DecisionMessage(role="user",content=description))
-        if mutation.message:
-            decision.messages.append(DecisionMessage(role="user", content=mutation.message))
-            decision.domain_state.setdefault("messages", []).append(
-                {"role": "user", "content": mutation.message}
-            )
-        decision.agent_runs = []
         trace_id = uuid4().hex
         decision.trace_refs.append(TraceReference(trace_id=trace_id, event_type="COMMAND"))
         with TraceScope(self.db, trace_id, decision.session_id, user_id) as trace:
             try:
+                trace.begin_turn(decision, decision.user_goal, "command", request.expected_revision)
+                before_command = trace.snapshot(decision)
+                decision.context = {**decision.context, **self._safe_context(request.context)}
+                mutation = apply_command(decision, request)
+                message = mutation.message or decision.user_goal
+                trace.turn_summary["userMessage"] = message
+                if not mutation.message and decision.domain != "diet":
+                    labels = {"update_fields":"更新条件", "confirm_fields":"确认条件", "update_candidate":"修改候选说明", "add_candidate":"添加候选", "exclude_candidate":"排除候选", "restore_candidate":"恢复候选", "set_criterion_weight":"调整比较偏好", "set_constraint":"添加限制", "remove_constraint":"移除限制", "refresh_candidates":"刷新候选", "generate_recommendation":"重新比较"}
+                    description = labels.get(request.type, "更新选择")
+                    if request.type == "update_fields":
+                        current = decision.domain_state.get("conversationFields", {})
+                        description += "：" + "、".join(f"{current[k]['label']}设为{v if v is not None else '不限 / 清空'}" for k,v in request.payload.get("fields",{}).items())
+                    from choice_agent.decision.assistance import state as assistance_state
+                    assistance_state(decision)["changes"] = [description]
+                    decision.messages.append(DecisionMessage(role="user",content=description))
+                if mutation.message:
+                    decision.messages.append(DecisionMessage(role="user", content=mutation.message))
+                    decision.domain_state.setdefault("messages", []).append(
+                        {"role": "user", "content": mutation.message}
+                    )
+                decision.agent_runs = []
                 trace.event(
                     "COMMAND_RECEIVED", "UNIFIED_DECISION", request,
                     {"domain": profile.key, "mode": mutation.mode},
+                )
+                trace.node(
+                    "User Message",
+                    "operation",
+                    "success",
+                    "收到用户命令",
+                    input_payload=request,
+                    output_payload={"domain": profile.key, "mode": mutation.mode, "message": message},
+                )
+                trace.node(
+                    "Constraint Update",
+                    "operation",
+                    "success",
+                    "应用命令并更新 Decision State",
+                    input_payload={"type": request.type, "payload": request.payload},
+                    output_payload={"mode": mutation.mode},
+                    changes=trace.diff(before_command, decision),
                 )
                 context = AgentContext(
                     session_id=decision.session_id,
@@ -194,11 +214,22 @@ class GenericDecisionOrchestrator:
                     decision=decision,
                     data={**self._stage_data(decision), "official_baseline": baseline},
                     progress=self.progress,
+                    trace=trace,
                 )
                 if mutation.mode == "full":
                     self.unified.run(profile, context, trace)
                 elif decision.domain != "diet" and (profile.needs_clarification(context)):
+                    clarify_before = trace.snapshot(decision)
                     profile.clarify(context)
+                    trace.node(
+                        "ClarificationAgent",
+                        "agent",
+                        "success",
+                        "直接生成澄清问题",
+                        input_payload={"message": message},
+                        output_payload={"question": context.data.get("clarify_question")},
+                        changes=trace.diff(clarify_before, decision),
+                    )
                 else:
                     self.unified.recompute(
                         profile, context, trace,
@@ -220,6 +251,7 @@ class GenericDecisionOrchestrator:
                     )
                 )
                 self._persist(decision, context, profile)
+                trace.mark_committed(decision)
                 blocks = profile.display_blocks(context)
             except Exception:
                 self.db.rollback()
@@ -237,11 +269,22 @@ class GenericDecisionOrchestrator:
         decision.trace_refs.append(TraceReference(trace_id=trace_id, event_type="REQUEST"))
         with TraceScope(self.db, trace_id, decision.session_id, user_id) as trace:
             try:
+                trace.begin_turn(decision, message, "request", expected_revision)
+                if baseline is not None:
+                    trace.initial_snapshot = trace.snapshot(baseline)
                 trace.event(
                     "REQUEST_RECEIVED",
                     "UNIFIED_DECISION",
                     {"message": message, "expectedRevision": expected_revision, "context": decision.context},
                     {"domain": profile.key},
+                )
+                trace.node(
+                    "User Message",
+                    "operation",
+                    "success",
+                    "收到用户输入",
+                    input_payload={"message": message, "expectedRevision": expected_revision, "context": decision.context},
+                    output_payload={"domain": profile.key},
                 )
                 context = AgentContext(
                     session_id=decision.session_id,
@@ -251,6 +294,7 @@ class GenericDecisionOrchestrator:
                     decision=decision,
                     data={**self._stage_data(decision), "official_baseline": baseline},
                     progress=self.progress,
+                    trace=trace,
                 )
                 from choice_agent.decision.assistance import hypothetical
                 is_hypothetical = hypothetical(message)
@@ -260,6 +304,14 @@ class GenericDecisionOrchestrator:
                 if not is_hypothetical and len(decision.messages) > 1 and decision.domain != "diet" and different and different != decision.domain:
                     decision.domain_state["suggestedDomain"] = {"domain":different,"message":message,"explicit": bool(selected)}
                     context.data["speech_text"] = "这像是一个新的决策场景。可以点击侧栏的新建入口继续，当前选择会保留。"
+                    trace.node(
+                        "Intent Understanding",
+                        "operation",
+                        "skipped",
+                        "识别到可能的新决策场景，保留当前选择",
+                        input_payload={"message": message, "currentDomain": decision.domain},
+                        output_payload=decision.domain_state["suggestedDomain"],
+                    )
                 else:
                     decision.domain_state.pop("suggestedDomain", None)
                     self.unified.run(profile, context, trace)
@@ -267,6 +319,7 @@ class GenericDecisionOrchestrator:
                 decision.messages.append(DecisionMessage(role="assistant", content=speech))
                 decision.revision += 1
                 self._persist(decision, context, profile)
+                trace.mark_committed(decision)
                 blocks = profile.display_blocks(context)
             except Exception:
                 self.db.rollback()

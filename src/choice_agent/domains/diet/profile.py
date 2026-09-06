@@ -85,6 +85,32 @@ class DietProfile(DomainProfile):
         candidates, evidence, warnings = EvidenceValidator().validate(
             result.candidates, result.sources
         )
+        if context.trace:
+            context.trace.node(
+                "Candidate Retrieval",
+                "operation",
+                "success",
+                f"从餐食库检索到 {len(result.candidates)} 个候选",
+                input_payload={"sourceMode": context.data["source_mode"]},
+                output_payload={
+                    "candidateCount": len(result.candidates),
+                    "candidates": [{"id": item.candidate_id, "name": item.name, "origin": item.origin} for item in result.candidates],
+                    "warnings": result.warnings,
+                },
+                refs={"searchRunId": result.run.run_id if result.run else None},
+            )
+            context.trace.node(
+                "Evidence",
+                "operation",
+                "success",
+                f"加入 {len(evidence)} 条餐食 Evidence",
+                input_payload={"sourceCount": len(result.sources), "candidateCount": len(result.candidates)},
+                output_payload={
+                    "evidence": [item.model_dump(mode="json", by_alias=True) for item in evidence],
+                    "warnings": warnings,
+                },
+                refs={"sourceIds": [item.source_id for item in result.sources]},
+            )
         decision = context.decision
         decision.sources = result.sources
         if result.run:
@@ -95,12 +121,16 @@ class DietProfile(DomainProfile):
             "realTime": False,
             "warnings": warnings,
         }
+        ranking_diagnostics: dict[str, Any] = {}
         ranked = GenericRankingEngine().rank(
-            decision, candidates, DietCriterionEvaluator(), tie_breaker=lambda item: int(item.candidate_id)
+            decision, candidates, DietCriterionEvaluator(), tie_breaker=lambda item: int(item.candidate_id),
+            diagnostics=ranking_diagnostics,
         )
         slots = context.data["slots"]
+        before_selection_count = len(ranked)
         if not slots.is_empty():
             ranked = [candidate for candidate in ranked if candidate.score > 0]
+        positive_count = len(ranked)
         ranked = ranked[:10]
         selection = select_candidates(
             [
@@ -144,6 +174,41 @@ class DietProfile(DomainProfile):
         decision.domain_state["candidatePool"] = [
             item.model_dump(mode="json", by_alias=True) for item in candidates
         ]
+        if context.trace:
+            counts = decision.domain_state.get("rankingCounts", {})
+            context.trace.node(
+                "Hard Filter",
+                "operation",
+                "success",
+                f"硬约束排除 {counts.get('hardConstraintExcluded', 0)} 个餐食",
+                input_payload={"constraints": [item.model_dump(mode="json", by_alias=True) for item in decision.constraints]},
+                output_payload={"counts": counts, "eliminated": ranking_diagnostics.get("eliminated", [])},
+            )
+            context.trace.node(
+                "Ranking",
+                "operation",
+                "success",
+                f"完成 {counts.get('remaining', before_selection_count)} 个餐食排序",
+                input_payload={"criteria": [item.model_dump(mode="json", by_alias=True) for item in decision.criteria]},
+                output_payload={"ranked": ranking_diagnostics.get("ranked", [])},
+            )
+            context.trace.node(
+                "Selection",
+                "operation",
+                "success",
+                f"按选择策略选出 {len(ranked_candidates)} 个餐食",
+                input_payload={
+                    "positiveScoreCount": positive_count,
+                    "topLimit": 10,
+                    "strategy": context.data.get("selection_strategy", "ranked"),
+                    "recentRecommendationIds": context.data.get("recent_recommendation_ids", []),
+                    "avoidRecentCount": context.data.get("avoid_recent_count", 0),
+                },
+                output_payload={
+                    "orderedIds": selection.ordered_ids,
+                    "insights": selection.insights.as_dict(),
+                },
+            )
         transition_decision(
             decision, DecisionStatus.COMPARING, DecisionNextAction.COMPARE_CANDIDATES
         )
@@ -171,12 +236,16 @@ class DietProfile(DomainProfile):
             for meal in self.repository.list_meals(source, context.user_id)
         }
         context.data["meal_records_by_id"] = records
+        ranking_diagnostics: dict[str, Any] = {}
         ranked = GenericRankingEngine().rank(
-            context.decision, pool, DietCriterionEvaluator(), tie_breaker=lambda item: int(item.candidate_id)
+            context.decision, pool, DietCriterionEvaluator(), tie_breaker=lambda item: int(item.candidate_id),
+            diagnostics=ranking_diagnostics,
         )
         slots = context.data["slots"]
+        before_selection_count = len(ranked)
         if not slots.is_empty():
             ranked = [candidate for candidate in ranked if candidate.score > 0]
+        positive_count = len(ranked)
         ranked = [candidate for candidate in ranked if candidate.candidate_id in records][:10]
         selection = select_candidates(
             [
@@ -210,6 +279,38 @@ class DietProfile(DomainProfile):
         ]
         context.decision.candidates = ranked_candidates
         context.decision.domain_state["selection"] = selection.insights.as_dict()
+        if context.trace:
+            counts = context.decision.domain_state.get("rankingCounts", {})
+            context.trace.node(
+                "Hard Filter",
+                "operation",
+                "success",
+                f"硬约束排除 {counts.get('hardConstraintExcluded', 0)} 个餐食",
+                input_payload={"constraints": [item.model_dump(mode="json", by_alias=True) for item in context.decision.constraints]},
+                output_payload={"counts": counts, "eliminated": ranking_diagnostics.get("eliminated", [])},
+            )
+            context.trace.node(
+                "Ranking",
+                "operation",
+                "success",
+                f"复用候选池完成 {counts.get('remaining', before_selection_count)} 个餐食排序",
+                input_payload={"criteria": [item.model_dump(mode="json", by_alias=True) for item in context.decision.criteria]},
+                output_payload={"ranked": ranking_diagnostics.get("ranked", [])},
+            )
+            context.trace.node(
+                "Selection",
+                "operation",
+                "success",
+                f"按选择策略选出 {len(ranked_candidates)} 个餐食",
+                input_payload={
+                    "positiveScoreCount": positive_count,
+                    "topLimit": 10,
+                    "strategy": context.data.get("selection_strategy", "ranked"),
+                    "recentRecommendationIds": context.data.get("recent_recommendation_ids", []),
+                    "avoidRecentCount": context.data.get("avoid_recent_count", 0),
+                },
+                output_payload={"orderedIds": selection.ordered_ids, "insights": selection.insights.as_dict()},
+            )
         transition_decision(
             context.decision, DecisionStatus.COMPARING, DecisionNextAction.COMPARE_CANDIDATES
         )

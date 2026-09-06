@@ -3,6 +3,7 @@ from __future__ import annotations
 from math import isfinite
 from typing import Any, Callable, Protocol
 
+from choice_agent.decision.evidence import is_scoring_evidence
 from choice_agent.schemas import (
     Candidate,
     CandidateState,
@@ -31,12 +32,7 @@ class AttributeCriterionEvaluator:
         value = candidate.attributes.get(criterion.key)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
             return None
-        if candidate.origin == "web" and not any(
-            item.verification_status.value == "verified"
-            and (item.criterion_key or item.key) == criterion.key
-            and item.value == value
-            for item in candidate.evidence
-        ):
+        if candidate.origin == "web" and not any(is_scoring_evidence(item, criterion.key, value) for item in candidate.evidence):
             return None
         low, high = self.ranges.get(criterion.key, (0.0, 100.0))
         span = max(0.0001, high - low)
@@ -56,8 +52,7 @@ class AttributeCriterionEvaluator:
             evidence_ids=[
                 item.evidence_id for item in candidate.evidence
                 if item.evidence_id
-                and item.verification_status.value == "verified"
-                and (item.criterion_key or item.key) == criterion.key
+                and is_scoring_evidence(item, criterion.key)
             ],
         )
 
@@ -69,6 +64,7 @@ class GenericRankingEngine:
         candidates: list[Candidate],
         evaluator: CriterionEvaluator,
         tie_breaker: Callable[[Candidate], Any] | None = None,
+        diagnostics: dict[str, Any] | None = None,
     ) -> list[Candidate]:
         excluded = set(decision.excluded_candidates)
         counts = {
@@ -80,9 +76,19 @@ class GenericRankingEngine:
             "remaining": 0,
         }
         ranked: list[Candidate] = []
+        eliminated: list[dict[str, Any]] = []
+        scored: list[dict[str, Any]] = []
         for candidate in candidates:
             if candidate.candidate_id in excluded:
                 counts["userExcluded"] += 1
+                eliminated.append(
+                    {
+                        "candidateId": candidate.candidate_id,
+                        "name": candidate.name,
+                        "reasonCode": "user_excluded",
+                        "reason": "用户排除",
+                    }
+                )
                 decision.candidate_state[candidate.candidate_id] = CandidateState(
                     status="excluded", reason="用户排除", updated_by="RankStage"
                 )
@@ -107,26 +113,62 @@ class GenericRankingEngine:
                     contributions.append(contribution)
             if missing_excluded:
                 counts["missingDataExcluded"] += 1
+                eliminated.append(
+                    {
+                        "candidateId": candidate.candidate_id,
+                        "name": candidate.name,
+                        "reasonCode": "missing_required_criterion",
+                        "reason": "缺少必要数据",
+                    }
+                )
                 decision.candidate_state[candidate.candidate_id] = CandidateState(
                     status="eliminated", reason="缺少必要数据", updated_by="RankStage"
                 )
                 continue
-            hard_failure = self._hard_constraint_failure(decision, candidate)
+            hard_detail: dict[str, Any] | None = {}
+            hard_failure = self._hard_constraint_failure(decision, candidate, hard_detail)
             if hard_failure == "missing":
                 counts["missingDataExcluded"] += 1
+                eliminated.append(
+                    {
+                        "candidateId": candidate.candidate_id,
+                        "name": candidate.name,
+                        "reasonCode": "missing_hard_constraint_value",
+                        "reason": "缺少必要数据",
+                        "constraint": hard_detail,
+                    }
+                )
                 decision.candidate_state[candidate.candidate_id] = CandidateState(
                     status="eliminated", reason="缺少必要数据", updated_by="RankStage"
                 )
                 continue
             if hard_failure == "violation":
                 counts["hardConstraintExcluded"] += 1
+                eliminated.append(
+                    {
+                        "candidateId": candidate.candidate_id,
+                        "name": candidate.name,
+                        "reasonCode": "hard_constraint_violation",
+                        "reason": "不满足硬约束",
+                        "constraint": hard_detail,
+                    }
+                )
                 decision.candidate_state[candidate.candidate_id] = CandidateState(
                     status="eliminated", reason="不满足硬约束", updated_by="RankStage"
                 )
                 continue
             total_weight = sum(item.weight for item in contributions)
             score = sum(item.weighted_score for item in contributions) / total_weight if total_weight else 0
-            ranked.append(candidate.model_copy(update={"score": round(score / 100, 4), "score_breakdown": contributions}))
+            ranked_candidate = candidate.model_copy(update={"score": round(score / 100, 4), "score_breakdown": contributions})
+            ranked.append(ranked_candidate)
+            scored.append(
+                {
+                    "candidateId": candidate.candidate_id,
+                    "name": candidate.name,
+                    "score": ranked_candidate.score,
+                    "scoreBreakdown": [item.model_dump(mode="json", by_alias=True) for item in contributions],
+                }
+            )
             decision.candidate_state[candidate.candidate_id] = CandidateState(
                 status="active", updated_by="RankStage"
             )
@@ -134,12 +176,32 @@ class GenericRankingEngine:
         ranked.sort(key=lambda item: (-item.score, stable_key(item)))
         counts["remaining"] = len(ranked)
         decision.domain_state["rankingCounts"] = counts
+        if diagnostics is not None:
+            diagnostics.update(
+                {
+                    "counts": counts,
+                    "eliminated": eliminated,
+                    "ranked": [
+                        next((item for item in scored if item["candidateId"] == candidate.candidate_id), {
+                            "candidateId": candidate.candidate_id,
+                            "name": candidate.name,
+                            "score": candidate.score,
+                        })
+                        for candidate in ranked
+                    ],
+                }
+            )
         return ranked
 
     def _violates_hard_constraint(self, decision: DecisionState, candidate: Candidate) -> bool:
         return self._hard_constraint_failure(decision, candidate) is not None
 
-    def _hard_constraint_failure(self, decision: DecisionState, candidate: Candidate) -> str | None:
+    def _hard_constraint_failure(
+        self,
+        decision: DecisionState,
+        candidate: Candidate,
+        detail: dict[str, Any] | None = None,
+    ) -> str | None:
         flattened = {
             str(value)
             for raw in candidate.attributes.values()
@@ -151,6 +213,16 @@ class GenericRankingEngine:
             # Older Diet states encoded a cross-attribute deny list under this key.
             if constraint.key == "diet_exclusion":
                 if flattened.intersection(constraint.values):
+                    if detail is not None:
+                        detail.update(
+                            {
+                                "key": constraint.key,
+                                "operator": constraint.operator,
+                                "expected": constraint.values,
+                                "actual": sorted(flattened.intersection(constraint.values)),
+                                "source": constraint.source,
+                            }
+                        )
                     return "violation"
                 continue
             actual = candidate.attributes.get(constraint.key)
@@ -158,6 +230,16 @@ class GenericRankingEngine:
             if actual is None:
                 if constraint.key == "commute_minutes":
                     continue
+                if detail is not None:
+                    detail.update(
+                        {
+                            "key": constraint.key,
+                            "operator": constraint.operator,
+                            "expected": expected,
+                            "actual": None,
+                            "source": constraint.source,
+                        }
+                    )
                 return "missing"
             values = actual if isinstance(actual, list) else [actual]
             wanted = expected if isinstance(expected, list) else [expected]
@@ -184,5 +266,15 @@ class GenericRankingEngine:
             else:
                 raise ValueError(f"不支持的约束 operator：{operator}")
             if not passed:
+                if detail is not None:
+                    detail.update(
+                        {
+                            "key": constraint.key,
+                            "operator": operator,
+                            "expected": expected,
+                            "actual": actual,
+                            "source": constraint.source,
+                        }
+                    )
                 return "violation"
         return None

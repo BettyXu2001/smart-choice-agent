@@ -29,6 +29,7 @@ class AgentContext:
     decision: DecisionState
     data: dict[str, Any]
     progress: Callable[[dict[str, Any]], None] | None = None
+    trace: Any | None = None
 
     def emit_progress(self, stage: str, message: str, **payload: Any) -> None:
         if self.progress is None:
@@ -52,6 +53,12 @@ class AgentRuntime:
     def run(self, agent: BaseAgent, context: AgentContext) -> dict[str, Any]:
         started = perf_counter()
         input_payload = _safe_payload({"message": context.message, "data": context.data})
+        before = self.trace_scope.snapshot(context.decision) if hasattr(self.trace_scope, "snapshot") else None
+        node_id = (
+            self.trace_scope.start_node(agent.name, "agent", f"调用 {agent.name}", input_payload)
+            if hasattr(self.trace_scope, "start_node")
+            else None
+        )
         try:
             output = agent.execute(context)
             run = AgentRun(
@@ -62,6 +69,7 @@ class AgentRuntime:
                 output_payload=output,
             )
         except Exception as error:
+            changes = self.trace_scope.diff(before, context.decision) if before is not None and hasattr(self.trace_scope, "diff") else []
             run = AgentRun(
                 agent_name=agent.name,
                 model_name=agent.model_name,
@@ -72,7 +80,18 @@ class AgentRuntime:
             )
             context.decision.agent_runs.append(run)
             self.trace_scope.agent_run(run, context.decision.decision_id)
+            if node_id and hasattr(self.trace_scope, "finish_node"):
+                self.trace_scope.finish_node(
+                    node_id,
+                    "failed",
+                    output_payload={"error": run.error_message},
+                    changes=changes,
+                    error=run.error_message,
+                )
             raise
+        changes = self.trace_scope.diff(before, context.decision) if before is not None and hasattr(self.trace_scope, "diff") else []
         context.decision.agent_runs.append(run)
         self.trace_scope.agent_run(run, context.decision.decision_id)
+        if node_id and hasattr(self.trace_scope, "finish_node"):
+            self.trace_scope.finish_node(node_id, "success", output_payload=output, changes=changes)
         return output

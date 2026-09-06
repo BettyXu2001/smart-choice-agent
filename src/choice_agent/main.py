@@ -9,6 +9,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from choice_agent.api.evaluations import router as evaluation_router
 from choice_agent.api.routes import router
 from choice_agent.config import Settings
 from choice_agent.database import Database
@@ -40,6 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(router)
+    app.include_router(evaluation_router)
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, error: HTTPException) -> JSONResponse:
@@ -61,4 +63,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 app = create_app()
-

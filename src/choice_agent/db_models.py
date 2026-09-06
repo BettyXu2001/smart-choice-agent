@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from choice_agent.database import Base
@@ -118,6 +118,15 @@ class DecisionRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class UserProfileRecord(Base):
+    __tablename__ = "user_profiles"
+
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    profile_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class AgentRunRecord(Base):
     __tablename__ = "agent_run"
 
@@ -146,3 +155,95 @@ class EvidenceRecord(Base):
     source_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     retrieved_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class EvaluationCaseRecord(Base):
+    __tablename__ = "evaluation_case"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    title: Mapped[str] = mapped_column(String(256))
+    original_question: Mapped[str] = mapped_column(Text)
+    expected_behavior: Mapped[str] = mapped_column(Text)
+    actual_behavior: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_type: Mapped[str] = mapped_column(String(64), index=True)
+    diagnosis: Mapped[str | None] = mapped_column(Text, nullable=True)
+    modules: Mapped[list[str]] = mapped_column(JSON, default=list)
+    fix_plan: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fix_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="open", index=True)
+    case_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    source_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    audit_events: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class EvaluationDatasetRecord(Base):
+    __tablename__ = "evaluation_dataset"
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "name", "version", name="uq_evaluation_dataset_owner_name_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    name: Mapped[str] = mapped_column(String(128), index=True)
+    version: Mapped[str] = mapped_column(String(64))
+    dataset_hash: Mapped[str] = mapped_column(String(64), index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    case_snapshots: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class EvaluationRunRecord(Base):
+    __tablename__ = "evaluation_run"
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "request_id", name="uq_evaluation_run_owner_request"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    request_id: Mapped[str] = mapped_column(String(128), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    version_label: Mapped[str] = mapped_column(String(128), index=True)
+    build_commit: Mapped[str] = mapped_column(String(128), default="unknown")
+    evaluator_version: Mapped[str] = mapped_column(String(32), default="evaluation-v1")
+    dataset_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    dataset_name: Mapped[str] = mapped_column(String(128), default="未命名数据集")
+    dataset_version: Mapped[str] = mapped_column(String(64), default="adhoc")
+    dataset_hash: Mapped[str] = mapped_column(String(64), default="")
+    mode: Mapped[str] = mapped_column(String(32), default="fixture")
+    model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(32), default="running", index=True)
+    summary_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class EvaluationResultRecord(Base):
+    __tablename__ = "evaluation_result"
+    __table_args__ = (
+        UniqueConstraint("run_id", "case_id", "case_revision", "repetition", name="uq_evaluation_result_run_case_rep"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), ForeignKey("evaluation_run.id"), index=True)
+    case_id: Mapped[str] = mapped_column(String(64), index=True)
+    case_revision: Mapped[int] = mapped_column(Integer, default=1)
+    repetition: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(32), default="passed", index=True)
+    outputs_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    trace_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    assertions_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    reviews_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    metrics_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

@@ -28,12 +28,29 @@
         </a>
         <nav class="nav-links" aria-label="主导航">
             <a href="#/" data-nav="/">首页</a>
-            <a href="#/diet/meals/personal" data-nav="/data">我的数据</a>
-            <a href="#/admin/traces" data-nav="/admin/traces">Trace</a>
-            <a href="#/admin/evaluations" data-nav="/admin/evaluations">评估</a>
-            <a href="#/settings" data-nav="/settings">设置</a>
+            <a href="#/history" data-nav="/history">历史决策</a>
+            <a href="#/profile" data-nav="/profile">我的资料</a>
         </nav>
         <div class="topbar-actions">
+            <div id="developerMenu" class="theme-menu developer-menu">
+                <button id="developerMenuButton" class="theme-menu-button" type="button" data-action="toggle-developer-menu" aria-label="开发者工具" aria-haspopup="menu" aria-expanded="false">
+                    <span aria-hidden="true">⌘</span>
+                </button>
+                <div class="theme-menu-list developer-menu-list hidden" role="menu" aria-label="开发者工具">
+                    <label class="developer-toggle" role="menuitemcheckbox">
+                        <input type="checkbox" data-action="toggle-developer-mode">
+                        <span>Developer Mode</span>
+                    </label>
+                    <a href="#/admin/traces" role="menuitem">Trace</a>
+                    <a href="#/admin/evaluations" role="menuitem">Evaluation</a>
+                    <a href="#/settings" role="menuitem">API / Model 设置</a>
+                    <a href="#/developer/debug" role="menuitem">Debug 信息</a>
+                    <label class="user-field developer-user-field">
+                        <span>用户 ID</span>
+                        <input id="userIdInput" type="number" min="1" value="1">
+                    </label>
+                </div>
+            </div>
             <div id="themeMenu" class="theme-menu">
                 <button id="themeMenuButton" class="theme-menu-button" type="button" data-action="toggle-theme-menu" aria-label="选择界面皮肤" aria-haspopup="menu" aria-expanded="false">
                     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -45,10 +62,6 @@
                     <button type="button" role="menuitemradio" data-action="set-theme" data-theme-value="pop" aria-label="活力橙" aria-checked="false"><span class="theme-swatch pop"></span></button>
                 </div>
             </div>
-            <label class="user-field">
-                <span>用户 ID</span>
-                <input id="userIdInput" type="number" min="1" value="1">
-            </label>
         </div>
     </header>
 
@@ -59,7 +72,10 @@
 
 <script src="./assets/js/api.js"></script>
 <script src="./assets/js/demo.js"></script>
+<script src="./assets/js/evidence.js"></script>
 <script src="./assets/js/conversation.js"></script>
+<script src="./assets/js/trace.js"></script>
+<script src="./assets/js/evaluation.js"></script>
 <script src="./assets/js/app.js"></script>
 </body>
 </html>

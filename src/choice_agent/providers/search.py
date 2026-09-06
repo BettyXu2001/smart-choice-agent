@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -62,12 +63,40 @@ class OpenAIWebSearchProvider:
             method="POST",
         )
         last_error: Exception | None = None
-        for _ in range(2):
+        for attempt in range(2):
+            node_id = (
+                context.trace.start_node(
+                    "Candidate Retrieval",
+                    "operation",
+                    f"Web Search 尝试 {attempt + 1}",
+                    input_payload={"provider": self.name, "model": self.model, "body": body},
+                )
+                if context.trace
+                else None
+            )
             try:
                 payload = self.transport(request, self.timeout_seconds)
-                return self._parse(payload, context)
+                result = self._parse(payload, context)
+                if node_id and context.trace:
+                    context.trace.finish_node(
+                        node_id,
+                        "success",
+                        output_payload={
+                            "candidateCount": len(result.candidates),
+                            "sourceCount": len(result.sources),
+                            "runId": result.run.run_id if result.run else None,
+                        },
+                    )
+                return result
             except (HTTPError, URLError, TimeoutError, ValueError, KeyError, TypeError) as error:
                 last_error = error
+                if node_id and context.trace:
+                    context.trace.finish_node(
+                        node_id,
+                        "failed",
+                        output_payload={"errorType": type(error).__name__, "error": str(error)},
+                        error=f"{type(error).__name__}: {error}",
+                    )
         raise SearchProviderError(f"Web Search 失败：{last_error}") from last_error
 
     def _send(self, request: Request, timeout: float) -> dict[str, Any]:
@@ -92,11 +121,13 @@ class OpenAIWebSearchProvider:
                         citations[str(url)] = str(annotation.get("title") or url)
         text = text or "".join(fragments)
         parsed = json.loads(self._clean_json(text))
+        retrieved_at = datetime.utcnow()
         sources = [
             SourceDocument(source_id=f"web:{index}", title=title, url=url,
-                           publisher=title, kind="web")
+                           publisher=title, kind="web", retrieved_at=retrieved_at)
             for index, (url, title) in enumerate(citations.items(), start=1)
         ]
+        source_ids_by_url = {source.url: source.source_id for source in sources}
         candidates: list[Candidate] = []
         evidence: list[Evidence] = []
         for raw in parsed.get("candidates", []):
@@ -112,6 +143,14 @@ class OpenAIWebSearchProvider:
                     confidence=float(item.get("confidence", 0.7)),
                     published_at=item.get("publishedAt"),
                     freshness="需核实当前价格" if str(item["key"]) in {"price", "budget"} else item.get("freshness"),
+                    retrieved_at=retrieved_at,
+                    source_kind="web",
+                    statement_kind="reported_fact",
+                    citation_status="unknown",
+                    claim_status="unverified",
+                    verification_note="搜索结果，内容未独立核实",
+                    source_id=source_ids_by_url.get(str(item.get("sourceUrl") or "")),
+                    source_quote=str(item.get("claim") or ""),
                 )
                 for item in raw.get("evidence", [])
             ]

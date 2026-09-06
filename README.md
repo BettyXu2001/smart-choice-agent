@@ -35,6 +35,7 @@ debuggable, explainable, and stable.
 - **Works without an API key**: local rule agents can run the full flow when LLM mode is disabled.
 - **Optional LLM integration**: supports OpenAI-compatible Chat Completions through environment configuration.
 - **Auditable traces**: sessions, messages, recommendations, feedback, `DecisionState`, `Evidence`, and agent runs are persisted.
+- **Evaluation dashboard**: tracks 17 product, reasoning, explanation, multi-turn, and reliability metrics with Bad Case and Regression Dataset workflows.
 - **Diet domain included**: single-meal recommendations, multi-turn clarification, refresh suggestions, three-meal planning, personal meals, and public meals.
 - **FastAPI + static web UI**: run locally and inspect the API at `/docs`.
 
@@ -108,6 +109,36 @@ localStorage and sent to the local backend as request headers for diet chat and
 evaluation requests. Generic decisions now use the backend workbench even without
 an API key. Travel and Shopping default to explicitly labeled fixture data; unknown
 domains ask for manual candidates. Backend errors no longer silently create a demo.
+
+
+## Candidate Search
+
+Shopping and travel decisions can use the existing web search provider when the backend is configured. The public non-demo entry shows a `使用实时信息寻找候选` toggle; when enabled, the request sends `searchMode: "web"` and the page streams progress such as requirement understanding, candidate search, evidence validation, filtering, and comparison.
+
+The backend default remains `fixture` for deterministic local development and compatibility. Demo examples still send `searchMode: "fixture"` and are labeled as non-real-time data.
+
+To enable web search, configure:
+
+```env
+CHOICE_AGENT_SEARCH_PROVIDER=openai
+CHOICE_AGENT_SEARCH_API_KEY=sk-...
+CHOICE_AGENT_SEARCH_BASE_URL=https://api.openai.com/v1
+CHOICE_AGENT_SEARCH_MODEL=gpt-5-mini
+```
+
+The capability endpoint `GET /api/v1/search/capabilities` reports whether the service is locally configured to attempt web search. It does not expose secrets or provider internals.
+
+## Evaluation Dashboard
+
+Open `#/admin/evaluations` to use the Evaluation Dashboard. It keeps the old diet Trace report available, and adds the engineering loop for AI product quality: Bad Case capture, diagnosis, fix plan, immutable Regression Dataset versions, offline runs, version comparison, result Trace snapshots, and regression status.
+
+The dashboard exposes 17 metrics across intent and constraint understanding, decision quality, explanation grounding, multi-turn behavior, and reliability. Missing labels are shown as not evaluated instead of being scored as zero. The overall score uses only quality metrics with valid denominators; average latency remains visible as an operational metric.
+
+Backend endpoints live under `/api/v1/evaluations`. The local CLI can run the same regression path:
+
+```bash
+python -m choice_agent.evaluation.cli --version-label local-check --limit 20
+```
 
 ## Demo Mode
 
@@ -214,6 +245,7 @@ Smart Choice Agent 可以把模糊需求转成候选项排序、约束分析、�
 - **无 API Key 也能运行**：默认关闭 LLM，使用本地规则 Agent 完成完整流程。
 - **可选 LLM 集成**：通过环境变量接入 OpenAI-compatible Chat Completions 接口。
 - **完整可审计 Trace**：持久化会话、消息、推荐历史、反馈、`DecisionState`、`Evidence` 和 Agent Run。
+- **Evaluation Dashboard**：用 17 项指标、Bad Case Center 和 Regression Dataset 展示从失败归因到回归监控的闭环。
 - **内置饮食领域**：支持单餐推荐、多轮澄清、换一批、三餐计划、个人餐食库和公共餐食库。
 - **FastAPI + 本地 Web UI**：本地即可启动，API 文档位于 `/docs`。
 
@@ -282,6 +314,18 @@ Web UI 也提供 `#/settings` 设置页，可配置浏览器侧模型 API。该�
 ## 演示模式
 
 Web UI 内置通用演示工作台，覆盖旅行、职业 Offer、学习路径和购物决策。通用 demo 使用本地 fixture 数据，并在页面中标注“演示数据 / 非实时”，用于在没有 API Key、网络或额外数据库配置时展示 Choice Agent 的通用决策流程。新建演示会先进入可编辑的约束准备和候选项准备步骤，用户可以新增、删除或确认约束与候选项，再进入排序和结论生成。
+
+## Evaluation Dashboard
+
+打开 `#/admin/evaluations` 可以查看新的评估中心。页面保留旧版饮食 Trace 报告，同时新增整体得分、版本差异、17 项指标、Bad Case Center、Regression Dataset、回归运行结果和 Trace 快照。
+
+每个 Bad Case 可以记录原始问题、预期行为、实际行为、错误类型、问题归因、涉及模块、修改方案、修复版本和回归状态。Case 只有在加入数据集并由同版本回归运行通过后，才会自动进入 `verified`；手工填写修复版本不会直接视为已修复。
+
+后端接口位于 `/api/v1/evaluations`。本地也可以用 CLI 运行同一套离线回归：
+
+```bash
+python -m choice_agent.evaluation.cli --version-label local-check --limit 20
+```
 
 饮食类请求仍然使用真实的本地规则 Agent 链路和种子餐食数据，不会被通用 fixture 工作台替代。
 

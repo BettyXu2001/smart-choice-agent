@@ -4,6 +4,7 @@
     const toast = document.getElementById("toast");
     const userIdInput = document.getElementById("userIdInput");
     const THEME_STORAGE_KEY = "choiceAgentTheme";
+    const DEVELOPER_MODE_KEY = "choiceAgentDeveloperMode";
     const THEMES = {
         mint: "清新绿",
         pop: "活力橙"
@@ -27,8 +28,11 @@
     ];
     const state = {
         theme: getSavedTheme(),
+        developerMode: getSavedDeveloperMode(),
         settings: { model: DietApi.getModelSettings() },
         home: { loaded: false, personalCount: 0, publicCount: 0, generalPrompt: "", notice: "", searchCapabilities: null, capabilitiesLoading: false, realtimeSearch: true, progress: [] },
+        history: { items: [], detail: null, loading: false, error: "" },
+        profile: { data: null, loading: false, error: "" },
         slotOptions: null,
         personalMeals: [],
         publicMeals: [],
@@ -55,7 +59,12 @@
         evaluation: {
             report: null,
             loading: false,
-            form: defaultRangeForm()
+            form: defaultRangeForm(),
+            dashboard: null,
+            selectedRun: null,
+            selectedCaseId: null,
+            filters: { status: "", errorType: "", module: "", q: "" },
+            mode: "dashboard"
         },
         demo: {
             decision: null
@@ -84,6 +93,27 @@
             return false;
         }
     }
+    function getSavedDeveloperMode() {
+        try {
+            return window.localStorage.getItem(DEVELOPER_MODE_KEY) === "true";
+        } catch (error) {
+            return false;
+        }
+    }
+    function saveDeveloperMode(enabled) {
+        try {
+            window.localStorage.setItem(DEVELOPER_MODE_KEY, enabled ? "true" : "false");
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+    function applyDeveloperMode() {
+        document.body.dataset.developerMode = state.developerMode ? "on" : "off";
+        document.querySelectorAll('[data-action="toggle-developer-mode"]').forEach((input) => {
+            input.checked = state.developerMode;
+        });
+    }
     function applyTheme(theme) {
         const nextTheme = isKnownTheme(theme) ? theme : "mint";
         document.body.dataset.theme = nextTheme;
@@ -93,7 +123,7 @@
         });
     }
     function closeThemeMenu() {
-        const menu = document.querySelector(".theme-menu-list");
+        const menu = document.querySelector("#themeMenu .theme-menu-list");
         const button = document.getElementById("themeMenuButton");
         if (menu) {
             menu.classList.add("hidden");
@@ -102,13 +132,35 @@
             button.setAttribute("aria-expanded", "false");
         }
     }
+    function closeDeveloperMenu() {
+        const menu = document.querySelector(".developer-menu-list");
+        const button = document.getElementById("developerMenuButton");
+        if (menu) {
+            menu.classList.add("hidden");
+        }
+        if (button) {
+            button.setAttribute("aria-expanded", "false");
+        }
+    }
     function toggleThemeMenu() {
-        const menu = document.querySelector(".theme-menu-list");
+        const menu = document.querySelector("#themeMenu .theme-menu-list");
         const button = document.getElementById("themeMenuButton");
         if (!menu || !button) {
             return;
         }
         const willOpen = menu.classList.contains("hidden");
+        closeDeveloperMenu();
+        menu.classList.toggle("hidden", !willOpen);
+        button.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    }
+    function toggleDeveloperMenu() {
+        const menu = document.querySelector(".developer-menu-list");
+        const button = document.getElementById("developerMenuButton");
+        if (!menu || !button) {
+            return;
+        }
+        const willOpen = menu.classList.contains("hidden");
+        closeThemeMenu();
         menu.classList.toggle("hidden", !willOpen);
         button.setAttribute("aria-expanded", willOpen ? "true" : "false");
     }
@@ -122,6 +174,15 @@
         applyTheme(theme);
         showToast(saved ? "皮肤已切换" : "皮肤已切换，但无法保存偏好", saved ? undefined : "error");
         closeThemeMenu();
+    }
+    function setDeveloperMode(enabled) {
+        state.developerMode = Boolean(enabled);
+        const saved = saveDeveloperMode(state.developerMode);
+        applyDeveloperMode();
+        showToast(saved ? "Developer Mode 已更新" : "Developer Mode 已更新，但无法保存", saved ? undefined : "error");
+        if (currentRoute() === "/developer/debug") {
+            renderDeveloperDebug();
+        }
     }
     function defaultRangeForm() {
         const end = new Date();
@@ -208,8 +269,10 @@
     function setActiveNav(route) {
         let navRoute = route;
         if (route.startsWith("/diet/meals")) {
-            navRoute = "/data";
-        } else if (route === "/diet/chat" || route.startsWith("/demo") || route.startsWith("/decisions/")) {
+            navRoute = "/profile";
+        } else if (route.startsWith("/history")) {
+            navRoute = "/history";
+        } else if (route === "/diet/chat" || route.startsWith("/demo") || route.startsWith("/decisions/") || route.startsWith("/admin") || route === "/settings" || route.startsWith("/developer")) {
             navRoute = "/";
         }
         document.querySelectorAll("[data-nav]").forEach((item) => {
@@ -233,15 +296,24 @@
             renderPersonalMeals();
         } else if (route === "/diet/meals/public") {
             renderPublicMeals();
+        } else if (route === "/history") {
+            renderDecisionHistory();
+        } else if (route.startsWith("/history/")) {
+            renderDecisionHistoryDetail(route);
+        } else if (route === "/profile") {
+            renderProfile();
         } else if (route === "/admin/traces") {
             renderTraces();
         } else if (route === "/admin/evaluations") {
             renderEvaluations();
         } else if (route === "/settings") {
             renderSettings();
+        } else if (route === "/developer/debug") {
+            renderDeveloperDebug();
         } else {
             navigate("/");
         }
+        applyDeveloperMode();
         app.focus({ preventScroll: true });
     }
     function renderHomeProgress() {
@@ -331,10 +403,324 @@
                 ${featureCard("结论可解释", "推荐会同时展示依据、代价和变化边界，方便你判断是否接受。", "#/")}
                 ${featureCard("查看完整示例", "体验旅行、Offer、学习路径和购物等场景下的可编辑结果侧栏。", "#/demo")}
             </section>
-            <section class="developer-links" aria-label="开发者入口">
-                <span class="muted">开发者入口</span>
-                <a class="btn ghost" href="#/admin/traces">Trace</a>
-                <a class="btn ghost" href="#/admin/evaluations">评估</a>
+        `;
+    }
+    function formatDateTime(value) {
+        if (!value) {
+            return "-";
+        }
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+            return String(value);
+        }
+        return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+    }
+    function historyRouteId(route) {
+        return decodeURIComponent(route.replace("/history/", "").split("/")[0] || "");
+    }
+    async function renderDecisionHistory() {
+        if (!state.history.loading) {
+            state.history.loading = true;
+            state.history.error = "";
+            app.innerHTML = `<section class="section"><div class="empty">历史决策加载中...</div></section>`;
+            try {
+                const response = await DecisionHistoryApi.list({limit: 50});
+                state.history.items = response.items || [];
+            } catch (error) {
+                state.history.error = error.message || "历史决策加载失败";
+            } finally {
+                state.history.loading = false;
+            }
+            if (currentRoute() !== "/history") {
+                return;
+            }
+        }
+        const items = state.history.items || [];
+        app.innerHTML = `
+            <section class="section">
+                <div class="card-title">
+                    <div>
+                        <h2>历史决策</h2>
+                        <p>查看过去做过的选择、当时条件、推荐结论和最后实际选择。</p>
+                    </div>
+                    <a class="btn primary" href="#/">开始新决策</a>
+                </div>
+                ${state.history.error ? `<div class="diet-error">${escapeHtml(state.history.error)}</div>` : ""}
+                ${items.length ? `<div class="history-list">${items.map(renderHistoryCard).join("")}</div>` : `<div class="empty">暂无历史决策。完成一次选择后，这里会自动出现记录。</div>`}
+            </section>
+        `;
+    }
+    function renderHistoryCard(item) {
+        return `
+            <a class="history-card" href="#/history/${encodeURIComponent(item.decisionId)}">
+                <div>
+                    <strong>${escapeHtml(item.title)}</strong>
+                    <p>${escapeHtml(formatDateTime(item.updatedAt || item.createdAt))} · ${escapeHtml(item.domain || "generic")}</p>
+                </div>
+                <div class="history-card-meta">
+                    <span>当前推荐：${escapeHtml(item.currentRecommendation || "未形成推荐")}</span>
+                    <span>最终选择：${escapeHtml(item.finalChoice || "未记录")}</span>
+                </div>
+            </a>
+        `;
+    }
+    async function renderDecisionHistoryDetail(route) {
+        const id = historyRouteId(route);
+        if (!id) {
+            navigate("/history");
+            return;
+        }
+        if (!state.history.detail || state.history.detail.summary?.decisionId !== id) {
+            state.history.detail = null;
+            state.history.error = "";
+            app.innerHTML = `<section class="section"><div class="empty">历史详情加载中...</div></section>`;
+            try {
+                state.history.detail = await DecisionHistoryApi.get(id);
+            } catch (error) {
+                state.history.error = error.message || "历史详情加载失败";
+            }
+            if (currentRoute() !== route) {
+                return;
+            }
+        }
+        if (state.history.error || !state.history.detail) {
+            app.innerHTML = `<section class="section"><div class="card-title"><div><h2>历史决策</h2></div><a class="btn ghost" href="#/history">返回历史</a></div><div class="diet-error">${escapeHtml(state.history.error || "历史详情不存在")}</div></section>`;
+            return;
+        }
+        const detail = state.history.detail;
+        const decision = detail.decision || {};
+        const summary = detail.summary || {};
+        app.innerHTML = `
+            <section class="history-detail">
+                <div class="section">
+                    <div class="card-title">
+                        <div>
+                            <h2>${escapeHtml(summary.title || decision.userGoal || "未命名决策")}</h2>
+                            <p>${escapeHtml(formatDateTime(summary.updatedAt || summary.createdAt))} · ${escapeHtml(summary.domain || decision.domain || "generic")} · Revision ${escapeHtml(decision.revision ?? "-")}</p>
+                        </div>
+                        <div class="inline-actions">
+                            <a class="btn ghost" href="#/history">返回历史</a>
+                            <a class="btn primary" href="#/decisions/${encodeURIComponent(decision.decisionId || id)}">继续决策</a>
+                        </div>
+                    </div>
+                    <div class="grid three">
+                        ${statCard("当前推荐", summary.currentRecommendation || "未形成推荐", "系统基于当前条件形成的倾向")}
+                        ${statCard("最终选择", summary.finalChoice || "未记录", "你最后实际做出的选择")}
+                        ${statCard("状态", decision.status || "draft", "当前保存的决策状态")}
+                    </div>
+                </div>
+                <div class="grid two history-detail-grid">
+                    <section class="section">
+                        <h3>当时条件</h3>
+                        ${renderHistoryFacts(decision)}
+                    </section>
+                    <section class="section">
+                        <h3>最终选择</h3>
+                        ${renderOutcomeForm(decision)}
+                    </section>
+                </div>
+                <section class="section">
+                    <div class="card-title"><div><h3>候选和推荐理由</h3><p>保留当时系统整理出的候选、推荐和关键取舍。</p></div></div>
+                    <div class="demo-candidates">${(decision.candidates || []).map((candidate) => renderHistoryCandidate(candidate, decision)).join("") || `<div class="empty">暂无候选</div>`}</div>
+                </section>
+            </section>
+        `;
+    }
+    function renderHistoryFacts(decision) {
+        const constraints = decision.constraints || [];
+        const criteria = decision.criteria || [];
+        const questions = decision.unansweredQuestions || [];
+        const reasons = decision.recommendation?.reasons || [];
+        return `
+            <div class="demo-list">
+                <div><strong>目标</strong><span>${escapeHtml(decision.userGoal || "未记录")}</span></div>
+                ${constraints.map((item) => `<div><strong>${escapeHtml(item.label || item.key)}</strong><span>${escapeHtml(item.value != null ? `${item.operator} ${item.value}` : (item.values || []).join("、"))}</span></div>`).join("")}
+                ${criteria.map((item) => `<div><strong>${escapeHtml(item.label)}</strong><span>权重 ${escapeHtml(item.weight)}</span></div>`).join("")}
+                ${reasons.map((item) => `<div><strong>关键理由</strong><span>${escapeHtml(item.text)}</span></div>`).join("")}
+                ${questions.map((item) => `<div><strong>未确定信息</strong><span>${escapeHtml(item.question || item)}</span></div>`).join("")}
+            </div>
+        `;
+    }
+    function renderOutcomeForm(decision) {
+        const candidates = decision.candidates || [];
+        const outcome = decision.outcome || {};
+        return `
+            <form id="decisionOutcomeForm" class="settings-form">
+                <label class="field full">
+                    <span>从候选中选择</span>
+                    <select name="candidateId">
+                        <option value="">自由输入 / 未匹配候选</option>
+                        ${candidates.map((candidate) => `<option value="${escapeHtml(candidate.candidateId)}" ${outcome.candidateId === candidate.candidateId ? "selected" : ""}>${escapeHtml(candidate.name)}</option>`).join("")}
+                    </select>
+                </label>
+                <label class="field full">
+                    <span>最终选择</span>
+                    <input name="label" required value="${escapeHtml(outcome.label || "")}" placeholder="例如：A 公司、莫干山、ThinkPad">
+                </label>
+                <label class="field full">
+                    <span>原因</span>
+                    <textarea name="reason" placeholder="可选：为什么最后这么选？">${escapeHtml(outcome.reason || "")}</textarea>
+                </label>
+                <input type="hidden" name="decisionId" value="${escapeHtml(decision.decisionId)}">
+                <input type="hidden" name="revision" value="${escapeHtml(decision.revision)}">
+                <div class="button-row">
+                    <button class="btn primary" type="submit">保存最终选择</button>
+                    ${decision.outcome ? `<button class="btn ghost" type="button" data-action="clear-outcome" data-decision-id="${escapeHtml(decision.decisionId)}" data-revision="${escapeHtml(decision.revision)}">清除记录</button>` : ""}
+                </div>
+            </form>
+        `;
+    }
+    function renderHistoryCandidate(candidate, decision) {
+        const recommendation = decision.recommendation || {};
+        const primary = recommendation.primaryCandidateId === candidate.candidateId;
+        const reasons = (recommendation.reasons || []).filter((item) => !item.candidateId || item.candidateId === candidate.candidateId);
+        return `
+            <article class="demo-candidate${primary ? " history-primary" : ""}">
+                <div class="demo-candidate-head">
+                    <div>
+                        <h3>${escapeHtml(candidate.name)}${primary ? " · 当前推荐" : ""}</h3>
+                        <p>${escapeHtml(candidate.summary || "")}</p>
+                    </div>
+                    <span class="score">${Number.isFinite(Number(candidate.score)) ? Math.round(Number(candidate.score) * 100) + "%" : "待比较"}</span>
+                </div>
+                <div class="attribute-grid">${Object.entries(candidate.attributes || {}).map(([key, value]) => `<span><strong>${escapeHtml(key)}</strong>${escapeHtml(Array.isArray(value) ? value.join("、") : value)}</span>`).join("")}</div>
+                ${reasons.length ? `<div class="demo-list">${reasons.map((item) => `<div><strong>理由</strong><span>${escapeHtml(item.text)}</span></div>`).join("")}</div>` : ""}
+            </article>
+        `;
+    }
+    async function saveDecisionOutcome(form) {
+        const formData = new FormData(form);
+        const decisionId = formData.get("decisionId");
+        const payload = {
+            candidateId: formData.get("candidateId") || null,
+            label: String(formData.get("label") || "").trim(),
+            reason: String(formData.get("reason") || "").trim() || null,
+            revision: Number(formData.get("revision"))
+        };
+        if (!payload.label) {
+            showToast("请填写最终选择", "error");
+            return;
+        }
+        await guard(async () => {
+            state.history.detail = await DecisionHistoryApi.saveOutcome(decisionId, payload);
+            state.history.items = [];
+            renderDecisionHistoryDetail(`/history/${encodeURIComponent(decisionId)}`);
+        }, "最终选择已保存");
+    }
+    async function clearDecisionOutcome(button) {
+        const decisionId = button.dataset.decisionId;
+        const revision = Number(button.dataset.revision);
+        await guard(async () => {
+            state.history.detail = await DecisionHistoryApi.clearOutcome(decisionId, revision);
+            state.history.items = [];
+            renderDecisionHistoryDetail(`/history/${encodeURIComponent(decisionId)}`);
+        }, "最终选择已清除");
+    }
+    async function renderProfile() {
+        if (!state.profile.data && !state.profile.loading) {
+            state.profile.loading = true;
+            state.profile.error = "";
+            app.innerHTML = `<section class="section"><div class="empty">我的资料加载中...</div></section>`;
+            try {
+                state.profile.data = await ProfileApi.get();
+            } catch (error) {
+                state.profile.error = error.message || "我的资料加载失败";
+                state.profile.data = {};
+            } finally {
+                state.profile.loading = false;
+            }
+            if (currentRoute() !== "/profile") {
+                return;
+            }
+        }
+        const profile = state.profile.data || {};
+        app.innerHTML = `
+            <section class="settings-layout">
+                <div class="section settings-panel">
+                    <div class="card-title">
+                        <div>
+                            <h2>我的资料</h2>
+                            <p>保存长期偏好，后续决策可以复用这些信息。</p>
+                        </div>
+                    </div>
+                    ${state.profile.error ? `<div class="diet-error">${escapeHtml(state.profile.error)}</div>` : ""}
+                    <form id="profileForm" class="settings-form">
+                        <label class="field full">
+                            <span>预算习惯</span>
+                            <textarea name="budgetHabit" placeholder="例如：电子产品更重视长期使用价值，旅行预算偏保守。">${escapeHtml(profile.budgetHabit || "")}</textarea>
+                        </label>
+                        <label class="field full">
+                            <span>城市偏好</span>
+                            <input name="preferredCities" value="${escapeHtml((profile.preferredCities || []).join("、"))}" placeholder="上海、杭州、苏州">
+                        </label>
+                        <label class="field full">
+                            <span>饮食偏好</span>
+                            <input name="dietPreferences" value="${escapeHtml((profile.dietPreferences || []).join("、"))}" placeholder="清淡、少油、不吃辣">
+                        </label>
+                        <label class="field full">
+                            <span>其他长期偏好</span>
+                            <textarea name="notes" placeholder="例如：更看重稳定性，不喜欢复杂准备。">${escapeHtml(profile.notes || "")}</textarea>
+                        </label>
+                        <div class="button-row">
+                            <button class="btn primary" type="submit">保存资料</button>
+                        </div>
+                    </form>
+                </div>
+                <aside class="grid settings-side">
+                    ${statCard("用户 ID", DietApi.getUserId(), "当前本地资料归属")}
+                    ${statCard("个人餐食库", "已保留", "饮食场景仍可维护常吃餐食")}
+                    <a class="btn soft" href="#/diet/meals/personal">管理个人餐食库</a>
+                </aside>
+            </section>
+        `;
+    }
+    function splitProfileList(value) {
+        return String(value || "").split(/[、,，\n]/).map((item) => item.trim()).filter(Boolean);
+    }
+    async function saveProfile(form) {
+        const formData = new FormData(form);
+        const payload = {
+            budgetHabit: String(formData.get("budgetHabit") || "").trim() || null,
+            preferredCities: splitProfileList(formData.get("preferredCities")),
+            dietPreferences: splitProfileList(formData.get("dietPreferences")),
+            notes: String(formData.get("notes") || "").trim() || null
+        };
+        await guard(async () => {
+            state.profile.data = await ProfileApi.save(payload);
+            renderProfile();
+        }, "资料已保存");
+    }
+    function renderDeveloperDebug() {
+        const model = DietApi.getModelSettings();
+        const decision = state.chat.decision || state.history.detail?.decision || state.generic.decision;
+        app.innerHTML = `
+            <section class="settings-layout">
+                <div class="section settings-panel">
+                    <div class="card-title">
+                        <div>
+                            <h2>Debug 信息</h2>
+                            <p>开发者模式下查看当前本地运行状态。</p>
+                        </div>
+                    </div>
+                    <div class="demo-list">
+                        <div><strong>用户 ID</strong><span>${escapeHtml(DietApi.getUserId())}</span></div>
+                        <div><strong>当前路由</strong><span>${escapeHtml(currentRoute())}</span></div>
+                        <div><strong>Developer Mode</strong><span>${state.developerMode ? "开启" : "关闭"}</span></div>
+                        <div><strong>模型配置</strong><span>${model.enabled && model.apiKey ? "已启用" : "演示模式"}</span></div>
+                        <div><strong>主模型</strong><span>${escapeHtml(model.mainModel || "-")}</span></div>
+                        <div><strong>Base URL</strong><span>${escapeHtml(model.baseUrl || "-")}</span></div>
+                        <div><strong>当前决策</strong><span>${escapeHtml(decision?.decisionId || "-")}</span></div>
+                        <div><strong>Session</strong><span>${escapeHtml(decision?.sessionId || state.chat.sessionId || "-")}</span></div>
+                        <div><strong>Revision</strong><span>${escapeHtml(decision?.revision ?? "-")}</span></div>
+                    </div>
+                </div>
+                <aside class="grid settings-side">
+                    ${statCard("Trace", "保留", "查看 Agent 运行链路")}
+                    ${statCard("Evaluation", "保留", "生成评估报告")}
+                    <a class="btn soft" href="#/admin/traces">Trace</a>
+                    <a class="btn soft" href="#/admin/evaluations">Evaluation</a>
+                    <a class="btn ghost" href="#/settings">API / Model 设置</a>
+                </aside>
             </section>
         `;
     }
@@ -594,7 +980,7 @@
                 <div class="attribute-grid">${attrs.map(([key, value]) => `<span><strong>${escapeHtml(key)}</strong>${escapeHtml(Array.isArray(value) ? value.join("、") : value)}</span>`).join("")}</div>
                 ${breakdown.length ? `<div class="demo-list">${breakdown.map((item) => `<div><strong>${escapeHtml(item.criterionKey)}</strong><span>${Math.round(Number(item.normalizedScore || 0))}</span></div>`).join("")}</div>` : ""}
                 ${candidate.origin === "manual" ? `<form class="candidate-edit inline-form" data-candidate-id="${escapeHtml(candidate.candidateId)}"><label>候选说明<input name="summary" value="${escapeHtml(candidate.summary || "")}" placeholder="优点与顾虑"></label><button class="btn ghost">保存说明</button></form>` : ""}
-                ${evidence.length ? `<div class="demo-list">${evidence.map((item) => `<div><strong>${escapeHtml(item.verificationStatus || "unverified")}</strong><span>${/^https?:\/\//i.test(item.sourceUrl || "") && item.verificationStatus === "verified" ? `<a href="${escapeHtml(item.sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(item.sourceTitle)}</a>` : escapeHtml(item.sourceTitle)}${item.freshness ? ` · ${escapeHtml(item.freshness)}` : ""}</span></div>`).join("")}</div>` : ""}
+                <details class="evidence-details"><summary>查看候选依据</summary>${window.EvidenceView.candidate(evidence)}</details>
             </article>
         `;
     }
@@ -1013,6 +1399,12 @@
     }
     function renderMessage(message) {
         const mealCards = (message.meals || []).map((meal) => renderMealCard(meal, { feedback: true, sessionId: message.sessionId })).join("") + (message.choices || []).map(c => `<article class="general-choice"><strong>${escapeHtml(c.name)}</strong><p>${escapeHtml(c.summary || "")}</p></article>`).join("");
+        const historyReasons = message.analysis?.sources
+            ? [...(message.analysis.keyReasons || message.analysis.reasons || []), ...(message.analysis.tradeoffs || [])].slice(0, 6)
+            : [];
+        const historyEvidence = historyReasons.length
+            ? `<details class="message-meta evidence-history"><summary>查看当轮依据</summary><ul class="evidence-linked-list">${historyReasons.map((item) => window.EvidenceView.point(item, message.analysis, null)).join("")}</ul></details>`
+            : "";
         const missingSlots = message.missingSlots && message.missingSlots.length
             ? `<div class="chips">${message.missingSlots.map((slot) => `<span class="chip selected">${escapeHtml(SLOT_LABELS[slot] || slot)}</span>`).join("")}</div>`
             : "";
@@ -1024,6 +1416,7 @@
                 <div class="bubble">${escapeHtml(message.text)}</div>
                 ${missingSlots}
                 ${mealCards ? `<details class="diet-history"><summary>查看当时推荐</summary><div class="grid">${mealCards}</div></details>` : ""}
+                ${historyEvidence}
                 ${trace ? `<details class="message-meta"><summary>本轮详情</summary>${trace}</details>` : ""}
             </article>
         `;
@@ -1265,8 +1658,8 @@
                 <div class="section">
                     <div class="card-title">
                         <div>
-                            <h2>Trace 调试</h2>
-                            <p>按时间范围或会话查询请求链路，查看意图修正、槽位和推荐事件。</p>
+                            <h2>决策过程</h2>
+                            <p>按时间轴查看用户输入、意图理解、状态变化、候选过滤、Agent 输出和推荐变化。</p>
                         </div>
                     </div>
                     <form id="traceFilterForm" class="form-grid">
@@ -1302,7 +1695,7 @@
                     ${renderTraceTable()}
                 </div>
                 <aside class="section">
-                    ${selected ? renderTraceDetail(selected) : `<div class="empty">选择一条 Trace 查看详情和标注表单。</div>`}
+                    ${selected ? renderTraceDetail(selected) : `<div class="empty">选择一条 Trace 查看决策过程和标注表单。</div>`}
                 </aside>
             </section>
         `;
@@ -1345,6 +1738,7 @@
         `;
     }
     function renderTraceDetail(trace) {
+        const timelineHtml = window.TraceTimeline ? window.TraceTimeline.render(trace) : `<details open><summary>Trace JSON</summary><pre class="json-box">${escapeHtml(safeJson(trace.traceJson))}</pre></details>`;
         return `
             <div class="card-title">
                 <div>
@@ -1357,10 +1751,7 @@
                     <span class="badge">${escapeHtml(trace.status || "UNKNOWN")}</span>
                     <p class="muted">Session：${escapeHtml(trace.sessionId || "-")} · Events：${escapeHtml(trace.eventCount ?? "-")} · Duration：${escapeHtml(trace.durationMs ?? "-")} ms</p>
                 </div>
-                <details open>
-                    <summary>Trace JSON</summary>
-                    <pre class="json-box">${escapeHtml(safeJson(trace.traceJson))}</pre>
-                </details>
+                ${timelineHtml}
                 <form id="traceLabelForm" class="form-grid">
                     <input type="hidden" name="traceId" value="${escapeHtml(trace.traceId)}">
                     <div class="field">
@@ -1459,6 +1850,10 @@
         }, "Trace 标注已保存");
     }
     function renderEvaluations() {
+        if (evaluationDashboard) {
+            evaluationDashboard.render();
+            return;
+        }
         app.innerHTML = `
             <section class="section">
                 <div class="card-title">
@@ -1629,6 +2024,9 @@
         }, "反馈已记录");
     }
     function handleClick(event) {
+        if (evaluationDashboard?.handleClick(event)) {
+            return;
+        }
         const dietTarget = event.target.closest("[data-diet-action]");
         if (dietTarget) { handleDietAction(dietTarget).catch(error => showToast(error.message, "error")); return; }
         const target = event.target.closest("[data-action]");
@@ -1638,6 +2036,10 @@
         const action = target.dataset.action;
         if (action === "start-demo-chat") {
             startDemoChat(target);
+        } else if (action === "toggle-theme-menu") {
+            toggleThemeMenu();
+        } else if (action === "toggle-developer-menu") {
+            toggleDeveloperMenu();
         } else if (action === "set-theme") {
             setTheme(target.dataset.themeValue);
         } else if (action === "general-example") {
@@ -1715,6 +2117,8 @@
             editDemoCandidateDrafts();
         } else if (action === "clear-model-settings") {
             clearModelSettings();
+        } else if (action === "clear-outcome") {
+            clearDecisionOutcome(target);
         }
     }
     async function submitGeneralDecision(form) {
@@ -1747,6 +2151,9 @@
     }
     function handleSubmit(event) {
         const form = event.target;
+        if (evaluationDashboard?.handleSubmit(event)) {
+            return;
+        }
         if (form.id === "generalDecisionForm") {
             event.preventDefault();
             submitGeneralDecision(form);
@@ -1772,11 +2179,20 @@
         } else if (form.id === "modelSettingsForm") {
             event.preventDefault();
             saveModelSettings(form);
+        } else if (form.id === "decisionOutcomeForm") {
+            event.preventDefault();
+            saveDecisionOutcome(form);
+        } else if (form.id === "profileForm") {
+            event.preventDefault();
+            saveProfile(form);
         }
     }
     function closeThemeMenuOnOutsideClick(event) {
-        if (!event.target.closest(".theme-menu")) {
+        if (!event.target.closest("#themeMenu")) {
             closeThemeMenu();
+        }
+        if (!event.target.closest("#developerMenu")) {
+            closeDeveloperMenu();
         }
     }
     function handleChange(event) {
@@ -1788,10 +2204,15 @@
             updateDemoWeight(target.dataset.key, Number(target.value));
         } else if (target.dataset.action === "real-search-toggle") {
             state.home.realtimeSearch = target.checked;
+        } else if (target.dataset.action === "toggle-developer-mode") {
+            setDeveloperMode(target.checked);
+        } else if (evaluationDashboard?.handleChange(event)) {
+            return;
         }
     }
     function initTheme() {
         applyTheme(state.theme);
+        applyDeveloperMode();
     }
     function initUserField() {
         userIdInput.value = DietApi.setUserId(DietApi.getUserId());
@@ -1800,8 +2221,11 @@
             state.home.loaded = false;
             state.personalMeals = [];
             state.publicMeals = [];
+            state.history = { items: [], detail: null, loading: false, error: "" };
+            state.profile = { data: null, loading: false, error: "" };
             state.traces.rows = [];
             state.traces.selected = null;
+            Object.assign(state.evaluation, { dashboard: null, selectedRun: null, selectedCaseId: null, loading: false });
             state.chat.generation += 1;
             Object.assign(state.chat, {sessionId: null, decision: null, messages: defaultChatMessages(), initialized: false, sending: false, retry: null, error: "", draft: "", editFields: null, panelOpen: false, pendingPrompt: "", autoSending: false});
             showToast("用户 ID 已切换");
@@ -1840,6 +2264,7 @@
     app.addEventListener("change", handleChange);
     app.addEventListener("submit", handleSubmit);
     const conversation = window.createConversation({state, app, currentRoute, navigate, showToast, ensureSlotOptions, SLOT_LABELS, defaultChatMessages, renderMessage, renderMealCard, escapeHtml, genericRouteId, renderGeneralDetails});
+    const evaluationDashboard = window.createEvaluationDashboard ? window.createEvaluationDashboard({state, app, navigate, showToast, escapeHtml, safeJson, statCard, formatScore}) : null;
     const {renderChat, closeDietPanel, sendDietCommand, handleDietAction, submitChat, resetChat, prepareChatFromHome} = conversation;
     initTheme();
     initUserField();

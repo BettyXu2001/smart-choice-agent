@@ -1,11 +1,13 @@
 """Grounded turn updates and bounded decision assistance, with optional model reasoning."""
 import json
 import re
+from hashlib import sha256
 from uuid import uuid4
 
 from choice_agent.decision.conversation import fields, patch_fields
+from choice_agent.decision.evidence import sync_decision_evidence, source_kind_for_origin
 from choice_agent.schemas import (
-    AssistanceInterpretation, AssistanceExplanation, Recommendation, RecommendationPoint,
+    AssistanceInterpretation, AssistanceExplanation, Evidence, Recommendation, RecommendationPoint,
     DecisionStatus, DecisionNextAction,
 )
 from choice_agent.decision.state_machine import transition_decision
@@ -171,7 +173,19 @@ def model_understand(context):
     if not provider or not provider.enabled or context.data.get("is_hypothetical"): return
     from choice_agent.prompts.conversation import SYSTEM_PROMPT
     try:
-        parsed=AssistanceInterpretation.model_validate(provider.complete_json(system_prompt=SYSTEM_PROMPT,user_prompt=json.dumps(model_context(context),ensure_ascii=False),model=context.data.get("model_name")))
+        user_prompt=json.dumps(model_context(context),ensure_ascii=False)
+        raw=(
+            context.trace.model_call(
+                "Intent Understanding",
+                context.data.get("model_name"),
+                SYSTEM_PROMPT,
+                user_prompt,
+                lambda: provider.complete_json(system_prompt=SYSTEM_PROMPT,user_prompt=user_prompt,model=context.data.get("model_name")),
+            )
+            if context.trace
+            else provider.complete_json(system_prompt=SYSTEM_PROMPT,user_prompt=user_prompt,model=context.data.get("model_name"))
+        )
+        parsed=AssistanceInterpretation.model_validate(raw)
         if parsed.intent=="what_if":
             # A model cannot retroactively undo deterministic changes; ambiguous intent is clarified.
             context.data["fact_question"]="你想暂时比较一个假设，还是修改当前条件？"
@@ -200,28 +214,156 @@ def model_understand(context):
         warning=f"模型理解不可用，保留已确认条件：{type(error).__name__}"
         d.domain_state["interpretationWarning"]=warning
         state(d)["warning"]=warning
+        if context.trace:
+            context.trace.node(
+                "Fallback",
+                "operation",
+                "fallback",
+                "模型理解不可用，保留已确认条件",
+                input_payload={"agent": "ConversationInterpretation"},
+                output_payload={"warning": warning},
+            )
 
 
 def candidate_text(decision,candidate):
     return "；".join([candidate.summary or "说明待补充",*[f["text"] for f in state(decision).get("facts",[]) if f["candidateId"]==candidate.candidate_id]])
 
 
+def _stable_evidence_id(*parts):
+    raw = "|".join("" if part is None else str(part) for part in parts)
+    return "ev:" + sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _source_label(source_kind):
+    return {
+        "user": "用户输入",
+        "web": "搜索结果",
+        "system": "系统推断",
+        "fixture": "演示数据",
+        "database": "数据库记录",
+    }.get(source_kind or "unknown", "来源不明")
+
+
+def _note(source_kind, citation_status=None):
+    if source_kind == "web":
+        return "来源链接已校验，内容未独立核实" if citation_status == "matched" else "搜索来源未完全校验，内容需核实"
+    if source_kind == "user":
+        return "用户输入，未外部核实"
+    if source_kind == "fixture":
+        return "演示数据，不代表真实情况"
+    if source_kind == "database":
+        return "项目数据库记录"
+    if source_kind == "system":
+        return "系统推断，需查看其支撑依据"
+    return "来源不明，待核实"
+
+
+def _register_evidence(decision, item):
+    if not item.evidence_id:
+        item = item.model_copy(update={"evidence_id": _stable_evidence_id(item.candidate_id, item.key, item.value, item.source_title, item.source_url)})
+    existing = {e.evidence_id: e for e in decision.evidence if e.evidence_id}
+    existing[item.evidence_id] = item
+    decision.evidence = list(existing.values())
+    return item
+
+
+def _candidate_evidence(decision, candidate, key, value, text, statement_kind=None):
+    for item in candidate.evidence:
+        if (item.criterion_key or item.key) == key and (value is None or item.value == value) and item.evidence_id:
+            return _register_evidence(decision, item)
+    source_kind = source_kind_for_origin(candidate.origin)
+    if candidate.candidate_id in decision.domain_state.get("demoCandidateIds", []):
+        source_kind = "fixture"
+    if source_kind == "fixture" and not decision.context.get("demoMode") and candidate.origin != "fixture":
+        source_kind = "unknown"
+    statement_kind = statement_kind or ("subjective_judgment" if source_kind == "user" else "reported_fact")
+    item = Evidence(
+        evidence_id=_stable_evidence_id(candidate.candidate_id, key, value if value is not None else text, source_kind),
+        candidate_id=candidate.candidate_id,
+        criterion_key=key,
+        key=key,
+        value=value if value is not None else text,
+        source_title=_source_label(source_kind),
+        claim=text,
+        source_quote=text,
+        source_kind=source_kind,
+        statement_kind=statement_kind,
+        citation_status="not_applicable",
+        claim_status="not_applicable" if source_kind in {"fixture", "database"} else "unverified",
+        verification_note=_note(source_kind),
+        recorded_revision=decision.revision,
+    )
+    return _register_evidence(decision, item)
+
+
 def catalog(decision):
+    sync_decision_evidence(decision)
     result={}
     for c in decision.candidates:
         trusted_summary=c.origin!="web"
-        if trusted_summary: result[f"candidate:{c.candidate_id}:summary"]={"candidateId":c.candidate_id,"text":c.summary or "说明待补充","source": "demo" if decision.context.get("demoMode") or c.origin=="fixture" else c.origin}
+        if trusted_summary:
+            text = c.summary or "说明待补充"
+            item = _candidate_evidence(decision, c, "summary", text, text)
+            result[item.evidence_id]={"candidateId":c.candidate_id,"text":text,"source":item.source_kind,"evidence":item.model_dump(mode="json", by_alias=True)}
+            result[f"candidate:{c.candidate_id}:summary"] = result[item.evidence_id]
         for key,value in c.attributes.items():
             if isinstance(value,(int,float)) and (c.origin!="web" or any(p.criterion_key==key and p.raw_value is not None and p.evidence_ids for p in c.score_breakdown)):
-                result[f"candidate:{c.candidate_id}:{key}"]={"candidateId":c.candidate_id,"text":f"{key}：{value}","source":c.origin}
+                text=f"{key}：{value}"
+                item = _candidate_evidence(decision, c, key, value, text)
+                result[item.evidence_id]={"candidateId":c.candidate_id,"text":text,"source":item.source_kind,"evidence":item.model_dump(mode="json", by_alias=True)}
+                result[f"candidate:{c.candidate_id}:{key}"] = result[item.evidence_id]
     valid={c.candidate_id for c in decision.candidates}
     for f in state(decision).get("facts",[]):
-        if f["candidateId"] in valid: result[f["id"]]={"candidateId":f["candidateId"],"text":f["text"],"source":f["source"]}
+        if f["candidateId"] in valid:
+            item = Evidence(
+                evidence_id=f["id"],
+                candidate_id=f["candidateId"],
+                criterion_key=f.get("kind"),
+                key=f.get("kind") or "fact",
+                value=f.get("value", f["text"]),
+                source_title="用户输入" if f.get("source") == "conversation" else _source_label(source_kind_for_origin(f.get("source"))),
+                claim=f["text"],
+                source_quote=f.get("quote") or f["text"],
+                source_kind="user" if f.get("source") == "conversation" else source_kind_for_origin(f.get("source")),
+                statement_kind="reported_fact",
+                citation_status="not_applicable",
+                claim_status="unverified",
+                verification_note="用户输入，未外部核实",
+                recorded_revision=f.get("revision"),
+            )
+            item = _register_evidence(decision, item)
+            result[item.evidence_id]={"candidateId":f["candidateId"],"text":f["text"],"source":item.source_kind,"evidence":item.model_dump(mode="json", by_alias=True)}
     return result
 
 
 def point(c, text, key="summary"):
-    return {"candidateId":c.candidate_id,"text":text,"sourceId":f"candidate:{c.candidate_id}:{key}"}
+    source_id = f"candidate:{c.candidate_id}:{key}"
+    return {"candidateId":c.candidate_id,"text":text,"sourceId":source_id,"evidenceIds":[source_id]}
+
+
+def _resolve_refs(item, sources):
+    ids = []
+    for source_id in item.get("evidenceIds") or [item.get("sourceId")]:
+        source = sources.get(source_id)
+        evidence = source.get("evidence") if source else None
+        evidence_id = evidence.get("evidenceId") if isinstance(evidence, dict) else source_id
+        if source and evidence_id and evidence_id not in ids:
+            ids.append(evidence_id)
+    if not ids:
+        return None
+    resolved = dict(item)
+    resolved["evidenceIds"] = ids
+    resolved["sourceId"] = ids[0]
+    return resolved
+
+
+def _reason_refs(reason):
+    refs = [{"source_id": item.source_id, "quote": item.quote} for item in reason.citations]
+    if not refs:
+        refs = [{"source_id": reason.source_id, "quote": reason.quote}]
+    elif reason.source_id != refs[0]["source_id"] or reason.quote != refs[0]["quote"]:
+        raise ValueError("解释引用表示不一致")
+    return refs
 
 
 def rule_analysis(context, decision):
@@ -245,8 +387,11 @@ def rule_analysis(context, decision):
             if not criterion: continue
             peers=[c for c in candidates[1:] if isinstance(c.attributes.get(criterion.key),(int,float))]
             text=f"{chosen.name}的{criterion.label}为 {score.raw_value}{criterion.unit or ''}"
-            if peers: text+=f"；{peers[0].name}为 {peers[0].attributes[criterion.key]}{criterion.unit or ''}"
-            result["reasons"].append(point(chosen,text,criterion.key))
+            item = point(chosen,text,criterion.key)
+            if peers:
+                text+=f"；{peers[0].name}为 {peers[0].attributes[criterion.key]}{criterion.unit or ''}"
+                item.update(text=text,evidenceIds=[item["sourceId"],f"candidate:{peers[0].candidate_id}:{criterion.key}"])
+            result["reasons"].append(item)
             if len(result["reasons"])>=2: break
         for other in candidates[1:]:
             advantages=[]
@@ -334,8 +479,8 @@ def explain(context, profile):
     if analysis["hypothetical"] and "雨" in context.message:
         analysis.update(primaryCandidateId=None,summary="如果下雨，户外方案的适合程度需要重新确认。现有示例没有天气或室内备选资料，暂时不能据此改选。当前选择未改变。",question="遇到下雨，你愿意保留户外行程，还是更希望准备室内备选？")
     sources=catalog(target)
-    analysis["reasons"]=[r for r in analysis["reasons"] if r["sourceId"] in sources]
-    analysis["tradeoffs"]=[r for r in analysis["tradeoffs"] if r["sourceId"] in sources]
+    analysis["reasons"]=[resolved for r in analysis["reasons"] if (resolved := _resolve_refs(r, sources))]
+    analysis["tradeoffs"]=[resolved for r in analysis["tradeoffs"] if (resolved := _resolve_refs(r, sources))]
     provider=context.data.get("model_provider")
     analysis["mode"]="rules"
     if provider and provider.enabled and sources:
@@ -347,23 +492,51 @@ def explain(context, profile):
         if measured: allowed=[analysis["primaryCandidateId"]] if analysis["primaryCandidateId"] else []
         payload={**model_context(context),"fields":fields(target),"saved_fields":fields(d),"hypothetical":analysis["hypothetical"],"source_catalog":sources,"allowed_primary_ids":allowed,"rule_analysis":analysis}
         try:
-            parsed=AssistanceExplanation.model_validate(provider.complete_json(system_prompt=EXPLANATION_PROMPT,user_prompt=json.dumps(payload,ensure_ascii=False),model=context.data.get("main_model_name") or context.data.get("model_name")))
+            user_prompt=json.dumps(payload,ensure_ascii=False)
+            model_name=context.data.get("main_model_name") or context.data.get("model_name")
+            raw=(
+                context.trace.model_call(
+                    "Explanation",
+                    model_name,
+                    EXPLANATION_PROMPT,
+                    user_prompt,
+                    lambda: provider.complete_json(system_prompt=EXPLANATION_PROMPT,user_prompt=user_prompt,model=model_name),
+                )
+                if context.trace
+                else provider.complete_json(system_prompt=EXPLANATION_PROMPT,user_prompt=user_prompt,model=model_name)
+            )
+            parsed=AssistanceExplanation.model_validate(raw)
             if parsed.primary_candidate_id is not None and parsed.primary_candidate_id not in allowed: raise ValueError("推荐违反候选限制")
             for reason in [*parsed.reasons,*parsed.tradeoffs]:
-                source=sources.get(reason.source_id)
-                if not source or source["candidateId"]!=reason.candidate_id or source["text"]!=reason.quote: raise ValueError("解释引用无效")
+                refs = _reason_refs(reason)
+                for ref in refs:
+                    source=sources.get(ref["source_id"])
+                    if not source or source["text"]!=ref["quote"]: raise ValueError("解释引用无效")
+                if not any(sources[ref["source_id"]]["candidateId"]==reason.candidate_id for ref in refs): raise ValueError("解释缺少本候选依据")
             if parsed.primary_candidate_id and not any(r.candidate_id==parsed.primary_candidate_id for r in parsed.reasons): raise ValueError("推荐缺少依据")
             response_text=" ".join([parsed.summary,*[r.text for r in [*parsed.reasons,*parsed.tradeoffs]]])
-            known_text=json.dumps({"sources":sources,"fields":fields(target)},ensure_ascii=False)
+            used_source_ids={ref["source_id"] for reason in [*parsed.reasons,*parsed.tradeoffs] for ref in _reason_refs(reason)}
+            known_text=json.dumps({"sources":{k:v for k,v in sources.items() if k in used_source_ids},"fields":fields(target)},ensure_ascii=False)
             if set(re.findall(r"\d+(?:\.\d+)?",response_text))-set(re.findall(r"\d+(?:\.\d+)?",known_text)): raise ValueError("解释含无依据数值")
             if any(w in response_text for w in ["保证成功","绝对安全","没有任何风险","稳赚"]): raise ValueError("解释包含无依据保证")
             analysis.update(primaryCandidateId=parsed.primary_candidate_id,summary=parsed.summary,
-                reasons=[{"candidateId":r.candidate_id,"sourceId":r.source_id,"text":r.text} for r in parsed.reasons],
-                tradeoffs=[{"candidateId":r.candidate_id,"sourceId":r.source_id,"text":r.text} for r in parsed.tradeoffs],question=parsed.question,mode="model")
+                reasons=[{"candidateId":r.candidate_id,"sourceId":_reason_refs(r)[0]["source_id"],"evidenceIds":[ref["source_id"] for ref in _reason_refs(r)],"text":r.text} for r in parsed.reasons],
+                tradeoffs=[{"candidateId":r.candidate_id,"sourceId":_reason_refs(r)[0]["source_id"],"evidenceIds":[ref["source_id"] for ref in _reason_refs(r)],"text":r.text} for r in parsed.tradeoffs],question=parsed.question,mode="model")
+            analysis["reasons"]=[resolved for r in analysis["reasons"] if (resolved := _resolve_refs(r, sources))]
+            analysis["tradeoffs"]=[resolved for r in analysis["tradeoffs"] if (resolved := _resolve_refs(r, sources))]
             if analysis["hypothetical"]: analysis["summary"]="假设分析（未修改当前选择）："+analysis["summary"]
         except (ValueError,RuntimeError,OSError,KeyError,TypeError) as error:
             info["warning"]=f"模型解释不可用，已按现有事实继续比较：{type(error).__name__}"
             analysis["mode"]="rules_fallback"
+            if context.trace:
+                context.trace.node(
+                    "Fallback",
+                    "operation",
+                    "fallback",
+                    "模型解释不可用，按已核对事实继续比较",
+                    input_payload={"agent": "AssistanceExplanation"},
+                    output_payload={"warning": info["warning"], "mode": analysis["mode"]},
+                )
     if not (d.context.get("demoMode") or any(c.origin=="fixture" for c in target.candidates)) and any(c.origin=="manual" for c in target.candidates):
         analysis["summary"]+="依据用户输入，尚未经外部核实。"
     elif analysis["mode"]=="model" and (d.context.get("demoMode") or any(c.origin=="fixture" for c in target.candidates)):
@@ -395,7 +568,7 @@ def explain(context, profile):
         if isinstance(info.get("whatIfAnalysis"), dict):
             info["whatIfAnalysis"]["stale"] = True
         info["whatIfScenarios"] = scenarios(d, analysis)
-        d.recommendation=Recommendation(primary_candidate_id=analysis["primaryCandidateId"],summary=analysis["summary"],ranking_method="grounded_qualitative" if d.domain_state.get("qualitative") else "weighted_sum",reasons=[RecommendationPoint(text=r["text"],candidate_id=r["candidateId"],evidence_ids=[r["sourceId"]]) for r in analysis["reasons"]],tradeoffs=[r["text"] for r in analysis["tradeoffs"]],generated_from_revision=d.revision)
+        d.recommendation=Recommendation(primary_candidate_id=analysis["primaryCandidateId"],summary=analysis["summary"],ranking_method="grounded_qualitative" if d.domain_state.get("qualitative") else "weighted_sum",reasons=[RecommendationPoint(text=r["text"],candidate_id=r["candidateId"],evidence_ids=r.get("evidenceIds") or [r["sourceId"]]) for r in analysis["reasons"]],tradeoffs=[r["text"] for r in analysis["tradeoffs"]],tradeoff_details=[RecommendationPoint(text=r["text"],candidate_id=r["candidateId"],evidence_ids=r.get("evidenceIds") or [r["sourceId"]]) for r in analysis["tradeoffs"]],generated_from_revision=d.revision)
     context.data["speech_text"]=speech
     transition_decision(d,DecisionStatus.DECIDED,DecisionNextAction.WAIT_USER)
     context.data["display_blocks"]=profile.display_blocks(context)

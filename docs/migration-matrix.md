@@ -19,7 +19,7 @@
 | 推荐反馈 | FeedbackRecord + 兼容 API | 已迁移 |
 | 请求 Trace | TraceScope + AgentRunRecord | 已迁移并扩展 |
 | Trace 人工标注 | Trace Label API 和原页面 | 已迁移 |
-| 评估报告 | 完整规则指标 + 反馈归因 + 可选 LLM Judge | 已补齐核心指标 |
+| 评估报告 | 旧 Diet Trace 规则报告 + Evaluation Dashboard / Bad Case / Regression Dataset | 已升级为评估闭环 |
 | 静态管理页面 | FastAPI StaticFiles 托管 | 已迁移 |
 | 通用候选/证据/推荐 | DecisionState / Candidate / Evidence | 新增 |
 | 硬约束/软偏好 | Constraint 运算符过滤 + Criterion 权重 | 已扩展，自然语言偏好策略待深化 |
@@ -31,6 +31,7 @@
 | 购物 fixture 后端领域 | ShoppingProfile，按商品类别选取离线模拟数据 | 已接入 |
 | 工作台编辑 | Command API + revision/CAS + EditEvent | 已接入 |
 | 真实搜索 | Responses Web Search + 工具来源白名单 | 已实现，真实服务待验收 |
+| Evidence 展示 | DecisionState.evidence + Canvas 展开 + 来源/陈述/核验状态 | 已接入，内容事实核验仍需外部服务 |
 
 | 通用对话与结果侧栏 | conversation.js，共用会话恢复、编辑、重试和抽屉 | 已推广到购物/旅行/Generic |
 | 场景识别 | POST /api/v1/decision-domains/resolve | 后端唯一入口，混合场景澄清 |
@@ -48,4 +49,5 @@
 - 默认使用 SQLite；SQLAlchemy 模型保留切换 MySQL/PostgreSQL 的能力。
 - Diet、Travel、Shopping、Generic 使用同一 StageRunner；职业/学习等未知领域走 Generic 手工比较，不误路由为旅行。
 - Diet 单餐、调整、三餐、风险、评估兼容；旧 Agent 名称保留用于 Trace/Evaluation，旧 CandidateAgent/PlanningAgent 的重复实现已移除。
+- Evidence 中的 URL matched 只表示链接来自工具结果，不表示网页陈述已经独立核验；用户输入和演示数据会在 Canvas 中明确标注。
 - 仍待完成严格类型化的阶段 hook、独立 Source/Evidence Trace 和证据 freshness/conflict/coverage 完整策略。共享调度已落地不等于全部架构细化已完成。

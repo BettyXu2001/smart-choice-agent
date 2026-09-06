@@ -21,17 +21,36 @@ class DecisionRepository:
             return None
         return DecisionState.model_validate(row.state_json)
 
+    def visible_to_user(self, decision: DecisionState, user_id: int) -> bool:
+        owner = decision.owner_user_id
+        if owner is None and user_id == 1:
+            decision.owner_user_id = 1
+            return True
+        return owner == user_id
+
     def get_for_user(self, decision_id: str, user_id: int) -> DecisionState | None:
         decision = self.get(decision_id)
         if decision is None:
             return None
-        owner = decision.owner_user_id
-        if owner is None and user_id == 1:
-            decision.owner_user_id = 1
-            return decision
-        if owner != user_id:
+        if not self.visible_to_user(decision, user_id):
             return None
         return decision
+
+    def list_for_user(self, user_id: int, limit: int = 50) -> list[tuple[DecisionRecord, DecisionState]]:
+        bounded_limit = max(1, min(limit, 100))
+        rows = self.db.scalars(
+            select(DecisionRecord)
+            .order_by(desc(DecisionRecord.updated_at), desc(DecisionRecord.created_at))
+            .limit(bounded_limit * 3)
+        ).all()
+        visible: list[tuple[DecisionRecord, DecisionState]] = []
+        for row in rows:
+            decision = DecisionState.model_validate(row.state_json)
+            if self.visible_to_user(decision, user_id):
+                visible.append((row, decision))
+                if len(visible) >= bounded_limit:
+                    break
+        return visible
 
     def latest_for_session(self, session_id: str) -> DecisionState | None:
         row = self.db.scalar(

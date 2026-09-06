@@ -34,13 +34,40 @@ class StageRunner:
             runtime.run(ProfileStage("RiskAgent", profile.pre_safety), context)
             return StageRunResult("answer", profile.phase(context))
         if profile.should_stop_after_understanding(context):
+            if context.trace:
+                context.trace.node(
+                    "Candidate Retrieval",
+                    "operation",
+                    "skipped",
+                    "理解阶段已给出答复，后续候选检索跳过",
+                    input_payload={"domain": profile.key},
+                    output_payload={"phase": profile.phase(context)},
+                )
             return StageRunResult("answer", profile.phase(context))
         if profile.should_adjust(context):
             runtime.run(ProfileStage("AdjustmentAgent", profile.adjust), context)
         if profile.should_clarify(context):
             result = runtime.run(ProfileStage("ClarificationAgent", profile.clarify), context)
             if profile.is_clarifying(result, context):
+                if context.trace:
+                    context.trace.node(
+                        "Candidate Retrieval",
+                        "operation",
+                        "skipped",
+                        "需要先补充关键信息，候选检索跳过",
+                        input_payload={"domain": profile.key},
+                        output_payload={"question": context.data.get("clarify_question")},
+                    )
                 return StageRunResult("clarify", "CLARIFY")
+        elif context.trace:
+            context.trace.node(
+                "Constraint Update",
+                "operation",
+                "skipped",
+                "当前轮次无需澄清",
+                input_payload={"domain": profile.key},
+                output_payload={"status": context.decision.status.value if context.decision.status else None},
+            )
         if profile.should_compose(context):
             runtime.run(ProfileStage("PlanningAgent", profile.compose), context)
         else:

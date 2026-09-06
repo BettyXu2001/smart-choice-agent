@@ -4,7 +4,14 @@ from dataclasses import dataclass
 from math import isfinite
 from uuid import uuid4
 
-from choice_agent.schemas import Candidate, Constraint, DecisionCommandRequest, EvidenceVerificationStatus
+from choice_agent.schemas import (
+    Candidate,
+    Constraint,
+    DecisionCommandRequest,
+    EvidenceCitationStatus,
+    EvidenceClaimStatus,
+    EvidenceVerificationStatus,
+)
 
 
 @dataclass(frozen=True)
@@ -30,6 +37,9 @@ def apply_command(decision, request: DecisionCommandRequest) -> CommandMutation:
         identifier = payload.get("candidateId")
         existing = next((c for c in decision.domain_state.get("manualCandidates", []) if c["candidateId"] == identifier), None)
         if existing is None: raise ValueError("只能编辑自己提供的候选")
+        decision.domain_state["demoCandidateIds"] = [
+            item for item in decision.domain_state.get("demoCandidateIds", []) if item != identifier
+        ]
         allowed = {k: v for k, v in payload.items() if k in {"name", "summary", "attributes"}}
         payload = {"candidate": {**existing, **allowed}}
         command_type = "add_candidate"
@@ -99,7 +109,15 @@ def apply_command(decision, request: DecisionCommandRequest) -> CommandMutation:
         candidate.score = 0
         candidate.score_breakdown = []
         for item in candidate.evidence:
+            item.evidence_id = None
             item.verification_status = EvidenceVerificationStatus.UNVERIFIED
+            item.source_kind = "user"
+            item.statement_kind = "subjective_judgment"
+            item.citation_status = EvidenceCitationStatus.NOT_APPLICABLE
+            item.claim_status = EvidenceClaimStatus.UNVERIFIED
+            item.verification_note = "用户输入，未外部核实"
+            item.source_id = None
+            item.supporting_evidence_ids = []
         candidate.evidence_ids = []
         manual = decision.domain_state.setdefault("manualCandidates", [])
         manual[:] = [item for item in manual if item.get("candidateId") != candidate.candidate_id]

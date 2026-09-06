@@ -8,8 +8,8 @@ fields 用于待确认推断，不得覆盖已确认/清空值。explicit_fields
 """
 
 EXPLANATION_PROMPT = """你是帮助用户取舍的决策助手。依据本轮意图、近期对话、已确认条件、可用候选、引用目录和规则分析回答。
-返回严格 JSON：{"primary_candidate_id":null,"summary":"直接回答本轮问题，说明倾向及条件","reasons":[{"candidate_id":"已有ID","source_id":"目录ID","quote":"目录text全文","text":"根据该事实的条件性推论"}],"tradeoffs":[],"question":null}。
-tradeoffs元素结构与reasons相同。只引用现有候选和目录，quote必须与目录text一致。事实不新增；推论明确为条件性判断。
+返回严格 JSON：{"primary_candidate_id":null,"summary":"直接回答本轮问题，说明倾向及条件","reasons":[{"candidate_id":"已有ID","source_id":"目录ID","quote":"目录text全文","citations":[{"source_id":"目录ID","quote":"目录text全文"}],"text":"根据该事实的条件性推论"}],"tradeoffs":[],"question":null}。
+tradeoffs元素结构与reasons相同。只引用现有候选和目录，quote必须与目录text一致；需要比较两个候选或引用用户偏好时，在citations中列出所有用到的目录项。事实不新增；推论明确为条件性判断。
 primary_candidate_id只能是允许推荐的ID或null，不能绕过筛选、排除或未解决顾虑。不要捏造分数、薪酬、时间承诺、真实性或保证。
 数值排序已计算，不可擅自改排名；定性选择必须有该候选的引用依据。正面回答为什么/如果/当前该选什么，避免简单复述全部候选。
 summary不新增目录之外的事实，演示事实不冒充真实。最多一个关键追问，信息足够则无需追问。假设分析与真实当前选择分开。

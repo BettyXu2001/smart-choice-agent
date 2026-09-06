@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -44,6 +45,7 @@ class DietMealProvider:
         )
         candidates: list[Candidate] = []
         evidence: list[Evidence] = []
+        now = datetime.utcnow()
         for meal in meals:
             attributes = {field: list(getattr(meal, field) or []) for field in SLOT_FIELDS}
             items = [
@@ -56,6 +58,14 @@ class DietMealProvider:
                     publisher="Choice Agent",
                     confidence=1.0,
                     verification_status="verified",
+                    source_kind="database",
+                    statement_kind="reported_fact",
+                    citation_status="not_applicable",
+                    claim_status="not_applicable",
+                    verification_note="项目数据库记录",
+                    source_id=source_id,
+                    source_quote=f"{key}: {value}",
+                    retrieved_at=now,
                 )
                 for key, value in attributes.items()
                 if value
@@ -96,6 +106,7 @@ class FixtureCandidateProvider:
         )
         candidates: list[Candidate] = []
         evidence: list[Evidence] = []
+        now = datetime.utcnow()
         for item in self.fixtures:
             items = [
                 Evidence(
@@ -107,6 +118,14 @@ class FixtureCandidateProvider:
                     publisher="Choice Agent",
                     confidence=1.0,
                     verification_status="verified",
+                    source_kind="fixture",
+                    statement_kind="reported_fact",
+                    citation_status="not_applicable",
+                    claim_status="not_applicable",
+                    verification_note="演示数据，不代表真实情况",
+                    source_id=source_id,
+                    source_quote=f"{key}: {value}",
+                    retrieved_at=now,
                 )
                 for key, value in item.get("attributes", {}).items()
             ]

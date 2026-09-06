@@ -12,7 +12,7 @@ from choice_agent.api.decision_stream import stream_command_decision, stream_cre
 from choice_agent.agents.base import AgentContext
 from choice_agent.agents.diet import EvaluationAgent
 from choice_agent.config import Settings
-from choice_agent.db_models import MealRecord, TraceRecord
+from choice_agent.db_models import DecisionRecord, MealRecord, TraceRecord
 from choice_agent.decision.state_machine import DecisionRevisionError
 from choice_agent.orchestration.diet import DietOrchestrator
 from choice_agent.orchestration.generic import GenericDecisionOrchestrator
@@ -20,10 +20,13 @@ from choice_agent.providers.model import ModelProvider, OpenAICompatibleProvider
 from choice_agent.providers.search import SearchProviderError
 from choice_agent.repositories.decision_repository import DecisionRepository
 from choice_agent.repositories.diet_repository import DietRepository
+from choice_agent.repositories.profile_repository import ProfileRepository
 from choice_agent.schemas import (
-    ChatRequest, ChatResponse, DietPanelCommand, DecisionCommandRequest, DecisionState, EvaluationRequest, FeedbackRequest,
-    GenericDecisionMessageRequest, GenericDecisionRequest, GenericDecisionResponse, SearchCapabilitiesResponse,
-    MealRequest, MealResponse, SlotBundle, SourceMode, TraceLabelRequest,
+    ChatRequest, ChatResponse, DecisionHistoryDetailResponse, DecisionHistoryListResponse,
+    DecisionHistorySummary, DecisionCommandRequest, DecisionOutcome, DecisionOutcomeRequest,
+    DecisionState, DietPanelCommand, EvaluationRequest, FeedbackRequest, GenericDecisionMessageRequest,
+    GenericDecisionRequest, GenericDecisionResponse, MealRequest, MealResponse, SearchCapabilitiesResponse,
+    SlotBundle, SourceMode, TraceLabelRequest, UserProfile,
 )
 
 
@@ -144,6 +147,28 @@ def trace_response(row: TraceRecord) -> dict[str, Any]:
         "createdAt": row.created_at.isoformat(),
         "updatedAt": row.updated_at.isoformat(),
     }
+
+
+def decision_history_summary(row: Any, decision: DecisionState) -> DecisionHistorySummary:
+    title = decision.user_goal.strip()
+    if not title:
+        user_message = next((item.content.strip() for item in decision.messages if item.role == "user" and item.content.strip()), "")
+        title = user_message or "未命名决策"
+    recommendation = None
+    if decision.recommendation and decision.recommendation.primary_candidate_id:
+        primary_id = decision.recommendation.primary_candidate_id
+        candidate = next((item for item in decision.candidates if item.candidate_id == primary_id), None)
+        recommendation = candidate.name if candidate else primary_id
+    return DecisionHistorySummary(
+        decision_id=decision.decision_id,
+        title=title,
+        domain=decision.domain,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        status=decision.status,
+        current_recommendation=recommendation,
+        final_choice=decision.outcome.label if decision.outcome else None,
+    )
 
 
 @router.post("/api/v1/decisions/stream")
@@ -532,6 +557,122 @@ def command_decision(
         raise HTTPException(status_code=502, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get("/api/v1/decision-history", response_model=DecisionHistoryListResponse)
+def list_decision_history(
+    limit: int = Query(default=50, ge=1, le=100),
+    uid: int = Depends(user_id),
+    db: Session = Depends(get_db),
+) -> DecisionHistoryListResponse:
+    repository = DecisionRepository(db)
+    items = [decision_history_summary(row, decision) for row, decision in repository.list_for_user(uid, limit)]
+    return DecisionHistoryListResponse(items=items, limit=limit)
+
+
+@router.get("/api/v1/decision-history/{decision_id}", response_model=DecisionHistoryDetailResponse)
+def get_decision_history_detail(
+    decision_id: str,
+    uid: int = Depends(user_id),
+    db: Session = Depends(get_db),
+) -> DecisionHistoryDetailResponse:
+    repository = DecisionRepository(db)
+    row = db.get(DecisionRecord, decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Decision 不存在或无权访问")
+    decision = DecisionState.model_validate(row.state_json)
+    if not repository.visible_to_user(decision, uid):
+        raise HTTPException(status_code=404, detail="Decision 不存在或无权访问")
+    from choice_agent.decision.conversation import public_decision
+
+    public = public_decision(decision)
+    return DecisionHistoryDetailResponse(
+        summary=decision_history_summary(row, public),
+        decision=public,
+    )
+
+
+@router.put("/api/v1/decision-history/{decision_id}/outcome", response_model=DecisionHistoryDetailResponse)
+def save_decision_outcome(
+    decision_id: str,
+    body: DecisionOutcomeRequest,
+    uid: int = Depends(user_id),
+    db: Session = Depends(get_db),
+) -> DecisionHistoryDetailResponse:
+    from choice_agent.decision.conversation import public_decision
+
+    repository = DecisionRepository(db)
+    row = db.get(DecisionRecord, decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Decision 不存在或无权访问")
+    decision = DecisionState.model_validate(row.state_json)
+    if not repository.visible_to_user(decision, uid):
+        raise HTTPException(status_code=404, detail="Decision 不存在或无权访问")
+    if decision.revision != body.revision:
+        raise HTTPException(status_code=409, detail="Decision 已被其他请求更新，请刷新后重试")
+    if body.candidate_id and not any(item.candidate_id == body.candidate_id for item in decision.candidates):
+        raise HTTPException(status_code=400, detail="最终选择的候选不存在")
+    decision.outcome = DecisionOutcome(
+        candidate_id=body.candidate_id,
+        label=body.label.strip(),
+        reason=body.reason.strip() if body.reason else None,
+        recorded_at=datetime.now(),
+    )
+    decision.revision += 1
+    try:
+        repository.save(decision)
+    except DecisionRevisionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    public = public_decision(decision)
+    return DecisionHistoryDetailResponse(
+        summary=decision_history_summary(row, public),
+        decision=public,
+    )
+
+
+@router.delete("/api/v1/decision-history/{decision_id}/outcome", response_model=DecisionHistoryDetailResponse)
+def clear_decision_outcome(
+    decision_id: str,
+    revision: int = Query(ge=0),
+    uid: int = Depends(user_id),
+    db: Session = Depends(get_db),
+) -> DecisionHistoryDetailResponse:
+    from choice_agent.decision.conversation import public_decision
+
+    repository = DecisionRepository(db)
+    row = db.get(DecisionRecord, decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Decision 不存在或无权访问")
+    decision = DecisionState.model_validate(row.state_json)
+    if not repository.visible_to_user(decision, uid):
+        raise HTTPException(status_code=404, detail="Decision 不存在或无权访问")
+    if decision.revision != revision:
+        raise HTTPException(status_code=409, detail="Decision 已被其他请求更新，请刷新后重试")
+    decision.outcome = None
+    decision.revision += 1
+    try:
+        repository.save(decision)
+    except DecisionRevisionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    public = public_decision(decision)
+    return DecisionHistoryDetailResponse(
+        summary=decision_history_summary(row, public),
+        decision=public,
+    )
+
+
+@router.get("/api/v1/profile", response_model=UserProfile)
+def get_profile(uid: int = Depends(user_id), db: Session = Depends(get_db)) -> UserProfile:
+    return ProfileRepository(db).get(uid)
+
+
+@router.put("/api/v1/profile", response_model=UserProfile)
+def save_profile(
+    body: UserProfile,
+    uid: int = Depends(user_id),
+    db: Session = Depends(get_db),
+) -> UserProfile:
+    return ProfileRepository(db).save(uid, body)
 
 
 @router.get("/api/v1/decisions/{decision_id}", response_model=DecisionState)

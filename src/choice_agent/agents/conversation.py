@@ -99,6 +99,11 @@ def interpret(context, provider=None, model=None):
                     payload = {"candidate": {"name":name,"summary":summary,"attributes":{}}}
                     if existing: payload["candidate"]["candidateId"] = existing["candidateId"]
                     apply_command(d, DecisionCommandRequest(command_id="turn",type="add_candidate",expected_revision=d.revision,payload=payload))
+                    created = next((c for c in d.domain_state.get("manualCandidates",[]) if c["name"] == name),None)
+                    if created and d.context.get("demoMode") and d.revision == 0 and not existing:
+                        ids = d.domain_state.setdefault("demoCandidateIds", [])
+                        if created["candidateId"] not in ids:
+                            ids.append(created["candidateId"])
                     operation = "add_candidate"
     if "换一批" in text or "刷新" in text: operation = "refresh"
     if not context.data.get("simulation"):

@@ -44,14 +44,22 @@ class IntentAgent(BaseAgent):
         )
         if self.provider.enabled:
             try:
-                parsed = self.provider.complete_json(
-                    _prompt("intent.txt"),
-                    json.dumps({
+                system_prompt = _prompt("intent.txt")
+                user_prompt = json.dumps({
                         "message": context.message,
                         "currentSlots": context.data.get("current_slots", {}),
                         "recentMessages": context.data.get("recent_messages", []),
-                    }, ensure_ascii=False),
-                    self.model_name,
+                    }, ensure_ascii=False)
+                parsed = (
+                    context.trace.model_call(
+                        "Intent Understanding",
+                        self.model_name,
+                        system_prompt,
+                        user_prompt,
+                        lambda: self.provider.complete_json(system_prompt, user_prompt, self.model_name),
+                    )
+                    if context.trace
+                    else self.provider.complete_json(system_prompt, user_prompt, self.model_name)
                 )
                 model_intent = Intent(parsed.get("intent", intent.value))
                 model_slots = slots.merged_with(SlotBundle.model_validate(parsed.get("slots", {})))
@@ -63,6 +71,15 @@ class IntentAgent(BaseAgent):
                     confidence = model_confidence
                 slots = model_slots
             except (ValueError, KeyError, TypeError):
+                if context.trace:
+                    context.trace.node(
+                        "Fallback",
+                        "operation",
+                        "fallback",
+                        "模型意图输出无效，保留规则识别结果",
+                        input_payload={"agent": self.name},
+                        output_payload={"intent": intent.value, "slots": slots.model_dump(by_alias=True)},
+                    )
                 logger.warning("Invalid model intent output; preserving rule-based intent and slots")
         context.decision.intent = intent
         context.data["incoming_slots"] = slots
@@ -179,23 +196,40 @@ class ExplanationAgent(BaseAgent):
         reasons = {item.meal.id: self._reason(item, slots) for item in selected}
         if self.provider.enabled:
             try:
-                parsed = self.provider.complete_json(
-                    _prompt("recommend-response.txt"),
-                    json.dumps({
+                system_prompt = _prompt("recommend-response.txt")
+                user_prompt = json.dumps({
                         "message": context.message,
                         "slots": slots.model_dump(by_alias=True),
                         "candidates": [
                             {"id": item.meal.id, "name": item.meal.name, "score": item.score}
                             for item in selected
                         ],
-                    }, ensure_ascii=False),
-                    self.model_name,
+                    }, ensure_ascii=False)
+                parsed = (
+                    context.trace.model_call(
+                        "Explanation",
+                        self.model_name,
+                        system_prompt,
+                        user_prompt,
+                        lambda: self.provider.complete_json(system_prompt, user_prompt, self.model_name),
+                    )
+                    if context.trace
+                    else self.provider.complete_json(system_prompt, user_prompt, self.model_name)
                 )
                 for option in parsed.get("recommendations", []):
                     meal_id = int(option.get("mealId", option.get("itemId", 0)))
                     if meal_id in reasons and str(option.get("reason", "")).strip():
                         reasons[meal_id] = str(option["reason"]).strip()
             except (ValueError, KeyError, TypeError):
+                if context.trace:
+                    context.trace.node(
+                        "Fallback",
+                        "operation",
+                        "fallback",
+                        "模型解释输出无效，保留规则解释",
+                        input_payload={"agent": self.name},
+                        output_payload={"candidateIds": [item.meal.id for item in selected]},
+                    )
                 logger.warning("Invalid model explanation output; preserving available rule-based reasons")
         blocks = [_meal_response(item, reasons[item.meal.id]) for item in selected]
         if context.decision.intent == Intent.MEAL_PLAN:

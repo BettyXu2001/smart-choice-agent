@@ -4,7 +4,7 @@ from abc import abstractmethod
 from typing import Any
 
 from choice_agent.agents.base import AgentContext
-from choice_agent.decision.evidence import EvidenceValidator
+from choice_agent.decision.evidence import EvidenceValidator, sync_decision_evidence
 from choice_agent.decision.ranking import CriterionEvaluator, GenericRankingEngine
 from choice_agent.decision.state_machine import transition_decision
 from choice_agent.domains.profile import DomainProfile
@@ -88,11 +88,39 @@ class ComparisonProfile(DomainProfile):
         result = CompositeCandidateProvider.merge([result, manual])
         merged_count = len(result.candidates)
         run_mode = result.run.mode if result.run else "manual"
+        if context.trace:
+            context.trace.node(
+                "Candidate Retrieval",
+                "operation",
+                "success",
+                f"检索到 {merged_count} 个候选",
+                input_payload={"mode": mode, "sourceMode": source_mode, "provider": self.candidate_provider.name},
+                output_payload={
+                    "runMode": run_mode,
+                    "candidateCount": merged_count,
+                    "candidates": [{"id": item.candidate_id, "name": item.name, "origin": item.origin} for item in result.candidates],
+                    "warnings": result.warnings,
+                },
+                refs={"searchRunId": result.run.run_id if result.run else None},
+            )
         context.emit_progress("candidates_found", f"找到 {merged_count} 个候选", counts={"found": merged_count}, sourceMode=run_mode)
         context.emit_progress("validating_evidence", "正在校验证据来源", sourceMode=run_mode)
         candidates, evidence, validation_warnings = self.evidence_validator.validate(
             result.candidates, result.sources
         )
+        if context.trace:
+            context.trace.node(
+                "Evidence",
+                "operation",
+                "success",
+                f"加入 {len(evidence)} 条 Evidence",
+                input_payload={"sourceCount": len(result.sources), "candidateCount": len(result.candidates)},
+                output_payload={
+                    "evidence": [item.model_dump(mode="json", by_alias=True) for item in evidence],
+                    "warnings": validation_warnings,
+                },
+                refs={"sourceIds": [item.source_id for item in result.sources]},
+            )
         if result.run:
             context.decision.search_runs.append(result.run)
         context.decision.sources = result.sources
@@ -106,8 +134,32 @@ class ComparisonProfile(DomainProfile):
             "realTime": bool(result.run and result.run.mode == "web"),
             "warnings": [*result.warnings, *validation_warnings],
         }
-        context.decision.candidates = self.ranking.rank(context.decision, candidates, self.evaluator)
+        ranking_diagnostics: dict[str, Any] = {}
+        context.decision.candidates = self.ranking.rank(
+            context.decision, candidates, self.evaluator, diagnostics=ranking_diagnostics
+        )
+        sync_decision_evidence(context.decision)
         counts = context.decision.domain_state.get("rankingCounts", {})
+        if context.trace:
+            context.trace.node(
+                "Hard Filter",
+                "operation",
+                "success",
+                f"硬约束排除 {counts.get('hardConstraintExcluded', 0)} 个候选",
+                input_payload={"constraints": [item.model_dump(mode="json", by_alias=True) for item in context.decision.constraints]},
+                output_payload={
+                    "counts": counts,
+                    "eliminated": ranking_diagnostics.get("eliminated", []),
+                },
+            )
+            context.trace.node(
+                "Ranking",
+                "operation",
+                "success",
+                f"完成 {counts.get('remaining', len(context.decision.candidates))} 个候选排序",
+                input_payload={"criteria": [item.model_dump(mode="json", by_alias=True) for item in context.decision.criteria]},
+                output_payload={"ranked": ranking_diagnostics.get("ranked", [])},
+            )
         context.emit_progress("constraints_applied", f"基于硬约束排除 {counts.get('hardConstraintExcluded', 0)} 个", counts=counts, sourceMode=run_mode)
         context.emit_progress("ranking_candidates", f"正在比较剩余 {counts.get('remaining', len(context.decision.candidates))} 个", counts=counts, sourceMode=run_mode)
         transition_decision(context.decision, DecisionStatus.COMPARING, DecisionNextAction.COMPARE_CANDIDATES)
@@ -126,10 +178,29 @@ class ComparisonProfile(DomainProfile):
             for item in context.decision.domain_state.get("candidatePool", [])
         ]
         context.emit_progress("ranking_candidates", f"正在比较剩余 {len(pool)} 个", sourceMode=context.decision.domain_state.get("source", {}).get("mode"))
+        ranking_diagnostics: dict[str, Any] = {}
         context.decision.candidates = self.ranking.rank(
-            context.decision, pool, self.evaluator
+            context.decision, pool, self.evaluator, diagnostics=ranking_diagnostics
         )
+        sync_decision_evidence(context.decision)
         counts = context.decision.domain_state.get("rankingCounts", {})
+        if context.trace:
+            context.trace.node(
+                "Hard Filter",
+                "operation",
+                "success",
+                f"硬约束排除 {counts.get('hardConstraintExcluded', 0)} 个候选",
+                input_payload={"constraints": [item.model_dump(mode="json", by_alias=True) for item in context.decision.constraints]},
+                output_payload={"counts": counts, "eliminated": ranking_diagnostics.get("eliminated", [])},
+            )
+            context.trace.node(
+                "Ranking",
+                "operation",
+                "success",
+                f"复用候选池完成 {counts.get('remaining', len(context.decision.candidates))} 个候选排序",
+                input_payload={"criteria": [item.model_dump(mode="json", by_alias=True) for item in context.decision.criteria]},
+                output_payload={"ranked": ranking_diagnostics.get("ranked", [])},
+            )
         context.emit_progress("comparison_ready", f"完成比较，保留 {counts.get('remaining', len(context.decision.candidates))} 个候选", counts=counts, sourceMode=context.decision.domain_state.get("source", {}).get("mode"))
         transition_decision(
             context.decision, DecisionStatus.COMPARING, DecisionNextAction.COMPARE_CANDIDATES
@@ -191,6 +262,15 @@ class ComparisonProfile(DomainProfile):
             except RuntimeError as error:
                 result = self.candidate_provider.search(context)
                 result.warnings.append(f"Web Search 失败，已回退 fixture：{error}")
+                if context.trace:
+                    context.trace.node(
+                        "Fallback",
+                        "operation",
+                        "fallback",
+                        "Web Search 失败，已回退 fixture 候选",
+                        input_payload={"mode": mode, "provider": getattr(self.web_provider, "name", "web")},
+                        output_payload={"fallbackProvider": self.candidate_provider.name, "error": str(error)},
+                    )
                 return result
         return self.candidate_provider.search(context)
 

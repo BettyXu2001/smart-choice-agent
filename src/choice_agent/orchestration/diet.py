@@ -147,6 +147,13 @@ class DietOrchestrator:
         before = decision.revision
         with TraceScope(self.db, trace_id, session.id, user_id) as trace:
             try:
+                trace.begin_turn(
+                    decision,
+                    request.message.strip() if not command else f"{request.type}: {request.payload}",
+                    "command" if command else "request",
+                    request.expected_revision,
+                )
+                before_input = trace.snapshot(decision)
                 decision.agent_runs = []
                 if command:
                     message = self._panel_patch(decision, session, request)
@@ -159,7 +166,26 @@ class DietOrchestrator:
                 self.repository.add_message(session.id, "user", message, None, trace_id)
                 decision.trace_refs.append(TraceReference(trace_id=trace_id, event_type="COMMAND" if command else "REQUEST"))
                 trace.event("COMMAND_RECEIVED" if command else "REQUEST_RECEIVED", "HTTP", request, {"sessionId": session.id})
+                trace.node(
+                    "User Message",
+                    "operation",
+                    "success",
+                    "收到用户命令" if command else "收到用户输入",
+                    input_payload=request,
+                    output_payload={"sessionId": session.id, "message": message},
+                )
+                if command:
+                    trace.node(
+                        "Constraint Update",
+                        "operation",
+                        "success",
+                        "应用面板命令并更新饮食条件",
+                        input_payload={"type": request.type, "payload": request.payload},
+                        output_payload={"message": message},
+                        changes=trace.diff(before_input, decision),
+                    )
                 context = self._context(decision, session, user_id, message, trace_id)
+                context.trace = trace
                 profile = DietProfile(self.repository, self.settings, self.provider)
                 clarify = False
                 if command and request.type == "confirm_fields":
@@ -227,6 +253,7 @@ class DietOrchestrator:
                     }
                 self.decisions.save(decision)
                 self.db.commit()
+                trace.mark_committed(decision)
                 return response
             except Exception:
                 self.db.rollback()
