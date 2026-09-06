@@ -82,7 +82,8 @@ def understand_fields(context):
         if clear:
             patch[key] = []
         elif direct:
-            replace = key == "mealTime" or bool(re.search("改成|改为|换成|换为|只要|只想|不要.*要", message))
+            replace = (key == "mealTime" or states[key]["source"] in {"model", "user_profile"}
+                       or bool(re.search("改成|改为|换成|换为|只要|只想|不要.*要", message)))
             patch[key] = direct if replace else list(dict.fromkeys([*current[key], *direct]))
         elif incoming[key] and not states[key]["confirmed"] and not states[key]["cleared"]:
             inferred[key] = list(dict.fromkeys([*current[key], *incoming[key]]))

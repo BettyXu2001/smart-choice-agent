@@ -45,8 +45,10 @@ class ComparisonProfile(DomainProfile):
         decision.criteria = self._merge_criteria(decision.criteria)
         from choice_agent.decision.conversation import sync_dependencies
         sync_dependencies(decision, self.criteria)
+        retained_assumptions = [item for item in decision.assumptions if item.key != "provider"]
         decision.assumptions = [
-            Assumption(key="provider", value=self.candidate_provider.name, confidence=1.0)
+            *retained_assumptions,
+            Assumption(key="provider", value=self.candidate_provider.name, confidence=1.0),
         ]
         decision.domain_state["intent"] = decision.intent_key
         return {

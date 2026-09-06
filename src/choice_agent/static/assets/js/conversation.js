@@ -78,6 +78,23 @@ window.createConversation = function(deps) {
         renderChat();
     }
 
+    function fieldSourceLabel(field) {
+        if (!field) return "";
+        if (field.source === "user_profile") return "来自我的资料";
+        return field.confirmed ? "你已表达" : "待你确认";
+    }
+    function displayProfileValue(value) {
+        return Array.isArray(value) ? value.join("、") : String(value ?? "");
+    }
+    function renderProfileSuggestions(decision, busy) {
+        const states = decision?.domainState?.conversationFields || decision?.domainState?.dietFieldState || {};
+        const suggestions = (decision?.domainState?.profileSuggestions || []).filter(item => {
+            const field = states[item.fieldKey] || {};
+            return item.source === "user_profile" && item.fieldKey && field.source === "user_profile" && !field.confirmed && !field.cleared;
+        });
+        if (!suggestions.length) return "";
+        return `<section class="diet-pending profile-suggestions"><strong>来自我的资料</strong>${suggestions.map(item => `<p>${escapeHtml(item.label || "偏好")}：${escapeHtml(displayProfileValue(item.value))}</p><div class="button-row"><button class="btn soft" data-diet-action="profile-adopt" data-profile-field="${escapeHtml(item.fieldKey)}" ${busy}>本次采用</button><button class="btn ghost" data-diet-action="profile-modify" ${busy}>修改</button><button class="btn ghost" data-diet-action="profile-ignore" data-profile-field="${escapeHtml(item.fieldKey)}" ${busy}>本次忽略</button></div>`).join("")}</section>`;
+    }
     function renderDietPanel() {
         if (isGeneral()) return renderGeneralPanel();
         const d = state.chat.decision;
@@ -96,7 +113,7 @@ window.createConversation = function(deps) {
                     <button type="button" class="btn ghost" data-diet-action="clear" data-field="${key}" ${busy}>清空</button></details>`;
             }
             if (!current.length && !["mealTime", "taste", "healthGoal"].includes(key)) return "";
-            return `<div class="diet-field-row"><span>${escapeHtml(label)}</span><div><strong>${escapeHtml(current.join("、") || (meta[key]?.cleared ? "不限" : "尚未设置"))}</strong>${current.length ? `<small>${meta[key]?.confirmed ? "你已表达" : "待你确认"}</small>` : ""}</div></div>`;
+            return `<div class="diet-field-row"><span>${escapeHtml(label)}</span><div><strong>${escapeHtml(current.join("、") || (meta[key]?.cleared ? "不限" : "尚未设置"))}</strong>${current.length ? `<small>${escapeHtml(fieldSourceLabel(meta[key]))}</small>` : ""}</div></div>`;
         }).join("");
         const blocks = d?.domainState?.displayBlocks || [];
         const valid = d && d.status !== "clarifying" && !(d.riskFlags || []).length;
@@ -117,6 +134,7 @@ window.createConversation = function(deps) {
             <section class="diet-panel-section"><div class="card-title"><h4>这顿的条件</h4>${!state.chat.editFields ? `<button class="btn soft" data-diet-action="edit" ${busy} ${!d || !state.slotOptions ? "disabled" : ""}>编辑条件</button>` : ""}</div>
                 ${fieldRows}
                 ${state.chat.editFields ? `<div class="button-row"><button class="btn primary" data-diet-action="save" ${busy}>保存并更新</button><button class="btn ghost" data-diet-action="cancel" ${busy}>取消</button></div>` : ""}
+                ${renderProfileSuggestions(d, busy)}
                 ${unresolved.length && !state.chat.editFields ? `<div class="diet-pending"><strong>待确认理解</strong><p>${unresolved.map(k => escapeHtml(labels[k])).join("、")}来自模型理解或历史记录。</p><button class="btn soft" data-diet-action="confirm" ${busy}>确认这些条件</button></div>` : ""}
                 ${(d?.domainState?.unverifiedRestrictions || []).length ? `<p class="diet-pending">你提到：${escapeHtml(d.domainState.unverifiedRestrictions.join("、"))}。当前餐食数据尚不能验证这些限制，请核对食材。</p>` : ""}
                 <details><summary>忌口支持范围</summary><p class="muted">当前仅能排除餐食库中已有的标签，尚不能保证任意食材忌口已被过滤。</p></details>
@@ -239,6 +257,14 @@ window.createConversation = function(deps) {
                 const fields = Object.fromEntries(Object.entries(state.chat.editFields).filter(([k,v]) => JSON.stringify(v) !== JSON.stringify(saved[k] ?? (isGeneral() ? null : []))));
                 if (!Object.keys(fields).length) { state.chat.editFields = null; renderChat(); return; }
                 await sendDietCommand("update_fields", {fields});
+            } else if (action === "profile-adopt") {
+                const field = target.dataset.profileField;
+                if (field) await sendDietCommand("confirm_fields", {fields:[field]});
+            } else if (action === "profile-ignore") {
+                const field = target.dataset.profileField;
+                if (field) await sendDietCommand("update_fields", {fields:{[field]: isGeneral() ? null : []}});
+            } else if (action === "profile-modify") {
+                state.chat.editFields = structuredClone(dietFieldValues()); renderChat();
             } else if (action === "confirm") {
                 const meta = state.chat.decision.domainState?.[isGeneral() ? "conversationFields" : "dietFieldState"] || {};
                 const fields = Object.entries(dietFieldValues()).filter(([k,v]) => (isGeneral() ? v != null : v.length) && !meta[k]?.confirmed).map(([k]) => k);
@@ -376,7 +402,7 @@ window.createConversation = function(deps) {
         const rows = Object.entries(all).filter(([key,field]) => !["background","weeklyHours"].includes(key) || field.value != null || /学习|课程|编程/.test(d?.userGoal || "")).map(([key, field]) => {
             const value = state.chat.editFields ? state.chat.editFields[key] : field.value;
             const input = key === "category" ? `<select id="general-${key}" data-general-field="${key}" ${busy}><option value="">尚未设置</option>${Object.entries({laptop:"电脑 / 笔记本",phone:"手机",headphones:"耳机",appliance:"家电"}).map(([v,l]) => `<option value="${v}" ${value === v ? "selected" : ""}>${l}</option>`).join("")}</select>` : `<input id="general-${key}" data-general-field="${key}" type="${field.type === "number" ? "number" : "text"}" ${field.type === "number" ? 'min="0.01" step="any"' : ''} value="${escapeHtml(value ?? "")}" ${busy}>`;
-            return `<div class="diet-field-row"><label for="general-${key}">${escapeHtml(field.label)}${field.unit ? `（${escapeHtml(field.unit)}）` : ""}</label><div>${state.chat.editFields ? input : `<strong>${escapeHtml(displayValue(value) ?? (field.cleared ? "不限 / 已清空" : "尚未设置"))}</strong>`}<small>${field.value != null ? (field.confirmed ? "你已表达" : "待你确认") : ""}</small><small>${escapeHtml(field.impact)}</small></div></div>`;
+            return `<div class="diet-field-row"><label for="general-${key}">${escapeHtml(field.label)}${field.unit ? `（${escapeHtml(field.unit)}）` : ""}</label><div>${state.chat.editFields ? input : `<strong>${escapeHtml(displayValue(value) ?? (field.cleared ? "不限 / 已清空" : "尚未设置"))}</strong>`}<small>${field.value != null ? escapeHtml(fieldSourceLabel(field)) : ""}</small><small>${escapeHtml(field.impact)}</small></div></div>`;
         }).join("");
         const pending = Object.values(all).some(f => f.value != null && !f.confirmed);
         const suggestion = d?.domainState?.suggestedDomain;
@@ -409,7 +435,7 @@ window.createConversation = function(deps) {
             ${whatIf ? `<section class="canvas-block what-if-result"><span class="eyebrow">假设结果${whatIf.stale ? " · 已过期" : ""}</span><h4>${escapeHtml(whatIf.summary || "已完成假设比较")}</h4><p class="muted">${escapeHtml(whatIf.notice || "这是一次假设比较，没有修改当前保存的正式条件。")}</p>${renderPoints((whatIf.keyReasons || whatIf.reasons || []).slice(0, 3), "这次假设没有足够依据改变判断。", whatIf)}</section>` : ""}
             ${assistance.warning ? `<p class="diet-error">${escapeHtml(assistance.warning)}</p>` : ""}
             <section class="diet-panel-section"><div class="card-title"><h4>我理解的条件</h4>${!state.chat.editFields ? `<button class="btn soft" data-diet-action="edit" ${busy} ${!d ? "disabled" : ""}>编辑条件</button>` : ""}</div>${rows}
-            ${state.chat.editFields ? `<div class="button-row"><button class="btn primary" data-diet-action="save" ${busy}>保存并更新</button><button class="btn ghost" data-diet-action="cancel" ${busy}>取消</button></div>` : pending ? `<button class="btn soft" data-diet-action="confirm" ${busy}>确认这些条件</button>` : ""}</section>
+            ${renderProfileSuggestions(d, busy)}${state.chat.editFields ? `<div class="button-row"><button class="btn primary" data-diet-action="save" ${busy}>保存并更新</button><button class="btn ghost" data-diet-action="cancel" ${busy}>取消</button></div>` : pending ? `<button class="btn soft" data-diet-action="confirm" ${busy}>确认这些条件</button>` : ""}</section>
             ${d?.status === "clarifying" ? `<section class="diet-panel-section"><h4>还需补充</h4><p>${escapeHtml((d.clarifyingQuestions || []).join(" "))}</p><button class="btn soft" data-diet-action="focus">补充一下</button></section>` : ""}
             <section class="diet-panel-section" aria-busy="${state.chat.sending}"><h4>当前比较 ${state.chat.sending ? "· 更新中…" : ""}</h4>${blocks.map(b => `<article class="general-choice"><strong>${escapeHtml(b.name)}</strong><p>${escapeHtml(b.summary || "")}</p>${(b.facts || []).map(f=>`<p class="muted">你补充：${escapeHtml(f.text)}</p>`).join("")}<details class="evidence-details"><summary>查看候选依据</summary>${window.EvidenceView.candidate(b.evidence || [])}</details></article>`).join("") || `<p class="muted">暂无候选。</p>`}</section>
             <p class="muted">${escapeHtml(source?.label || "等待补充信息")}${sourceNote}</p>

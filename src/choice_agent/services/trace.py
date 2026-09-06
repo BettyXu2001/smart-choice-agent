@@ -77,6 +77,7 @@ def _snapshot_decision(decision: Any) -> dict[str, Any]:
         "currentAnalysis",
         "displayBlocks",
         "intent",
+        "profileSuggestions",
         "selection",
         "slots",
         "source",

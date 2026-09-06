@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from choice_agent.agents.base import AgentContext
 from choice_agent.config import Settings
 from choice_agent.decision.commands import apply_command
+from choice_agent.decision.profile_injection import apply_user_profile_to_decision
 from choice_agent.decision.selector import normalize_avoid_recent_count, normalize_strategy
 from choice_agent.decision.state_machine import assert_expected_revision, DecisionRevisionError
 from choice_agent.domains.diet.profile import DietProfile
@@ -24,6 +25,7 @@ from choice_agent.providers.model import DisabledProvider, ModelProvider
 from choice_agent.providers.search import OpenAIWebSearchProvider
 from choice_agent.repositories.decision_repository import DecisionRepository
 from choice_agent.repositories.diet_repository import DietRepository
+from choice_agent.repositories.profile_repository import ProfileRepository
 from choice_agent.schemas import (
     DecisionCommandRequest, DecisionMessage, DecisionState, EditEvent, GenericDecisionMessageRequest,
     GenericDecisionRequest, GenericDecisionResponse, SlotBundle, SourceMode, TraceReference,
@@ -64,6 +66,7 @@ class GenericDecisionOrchestrator:
         self.progress = progress
         self.repository = DecisionRepository(db, commit=False)
         self.diet_repository = DietRepository(db, commit=False)
+        self.profile_repository = ProfileRepository(db, commit=False)
         web_provider = OpenAIWebSearchProvider(
             api_key=self.settings.search_api_key,
             base_url=self.settings.search_base_url,
@@ -102,6 +105,11 @@ class GenericDecisionOrchestrator:
             user_goal=message,
             context=self._safe_context(request.context, defaults=True),
             messages=[DecisionMessage(role="user", content=message)],
+        )
+        apply_user_profile_to_decision(
+            decision,
+            self.profile_repository.get(user_id),
+            diet_options=self.diet_repository.slot_options() if profile.key == "diet" else None,
         )
         decision.domain_state["pendingReceipt"] = receipt
         resolution = self.registry.identify(message, request.domain)
@@ -286,6 +294,16 @@ class GenericDecisionOrchestrator:
                     input_payload={"message": message, "expectedRevision": expected_revision, "context": decision.context},
                     output_payload={"domain": profile.key},
                 )
+                profile_suggestions = decision.domain_state.get("profileSuggestions", [])
+                if profile_suggestions:
+                    trace.node(
+                        "User Profile",
+                        "operation",
+                        "success",
+                        "读取我的资料并生成本次可选偏好",
+                        input_payload={"domain": profile.key},
+                        output_payload={"suggestions": profile_suggestions},
+                    )
                 context = AgentContext(
                     session_id=decision.session_id,
                     trace_id=trace_id,

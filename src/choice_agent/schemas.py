@@ -459,7 +459,7 @@ class UserProfile(ApiModel):
 
 
 class DietFieldState(ApiModel):
-    source: Literal["conversation", "panel", "model", "legacy"] = "legacy"
+    source: Literal["conversation", "panel", "model", "user_profile", "legacy"] = "legacy"
     confirmed: bool = False
     updated_revision: int = 0
     cleared: bool = False
