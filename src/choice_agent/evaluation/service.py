@@ -9,8 +9,8 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from choice_agent.config import Settings
-from choice_agent.evaluation.fixtures import starter_cases
-from choice_agent.evaluation.metrics import EVALUATOR_VERSION, METRIC_BY_ID, metric_definitions_json, summarize_results
+from choice_agent.evaluation.fixtures import CORE_DATASET, starter_cases, starter_dataset_specs
+from choice_agent.evaluation.metrics import EVALUATOR_VERSION, metric_definitions_json, summarize_results
 from choice_agent.evaluation.runner import EvaluationRunner
 from choice_agent.evaluation.schemas import (
     EvaluationCaseCreate,
@@ -51,10 +51,40 @@ class EvaluationService:
         }
 
     def ensure_starter_cases(self, owner_id: int) -> None:
-        if self.repository.list_cases(owner_id, limit=1):
-            return
+        rows = self.repository.list_cases(owner_id, limit=500)
+        by_seed = {_seed_id(self.case_response(row)): row for row in rows if _seed_id(self.case_response(row))}
         for item in starter_cases():
-            self.create_case(owner_id, item)
+            payload = item.model_dump(mode="json", by_alias=True)
+            seed_id = _seed_id(payload)
+            if seed_id and seed_id in by_seed:
+                continue
+            row = self.repository.add_case(owner_id, _case_payload(item))
+            if seed_id:
+                by_seed[seed_id] = row
+        self._ensure_starter_datasets(owner_id)
+
+    def _ensure_starter_datasets(self, owner_id: int) -> None:
+        existing = {(row.name, row.version) for row in self.repository.list_datasets(owner_id, 100)}
+        cases = [self.case_response(row) for row in self.repository.list_cases(owner_id, limit=500)]
+        for spec in starter_dataset_specs():
+            key = (spec["name"], spec["version"])
+            if key in existing:
+                continue
+            snapshots = [case for case in cases if _seed_dataset(case) == spec["name"] and _seed_version(case) == spec["version"]]
+            snapshots.sort(key=lambda case: _seed_id(case) or case["id"])
+            if not snapshots:
+                continue
+            payload = {
+                "name": spec["name"],
+                "version": spec["version"],
+                "description": spec.get("description"),
+                "case_snapshots": snapshots,
+                "dataset_hash": _hash_json({"name": spec["name"], "version": spec["version"], "cases": snapshots}),
+            }
+            try:
+                self.repository.add_dataset(owner_id, payload)
+            except EvaluationConflictError:
+                continue
 
     def create_case(self, owner_id: int, body: EvaluationCaseCreate) -> dict[str, Any]:
         return self.case_response(self.repository.add_case(owner_id, _case_payload(body)))
@@ -96,7 +126,7 @@ class EvaluationService:
             if existing.fingerprint != fingerprint:
                 raise EvaluationConflictError("requestId 已用于不同评估配置")
             return self.run_response(existing, include_results=True)
-        dataset = self.repository.get_dataset(owner_id, body.dataset_id) if body.dataset_id else None
+        dataset = self.repository.get_dataset(owner_id, body.dataset_id) if body.dataset_id else self._default_dataset(owner_id)
         if body.dataset_id and dataset is None:
             raise KeyError("Dataset 不存在或无权限访问")
         snapshots = dataset.case_snapshots if dataset else [self.case_response(row) for row in self.repository.list_cases(owner_id, limit=body.limit)]
@@ -146,6 +176,15 @@ class EvaluationService:
         run = self.repository.update_run(run, status=status, summary_json=summary, finished_at=datetime.now())
         self._sync_case_regression_status(owner_id, run, result_payloads)
         return self.run_response(run, include_results=True)
+
+    def _default_dataset(self, owner_id: int):
+        return next(
+            (
+                row for row in self.repository.list_datasets(owner_id, 100)
+                if row.name == CORE_DATASET["name"] and row.version == CORE_DATASET["version"]
+            ),
+            None,
+        )
 
     def update_review(self, owner_id: int, result_id: str, body: EvaluationReviewUpdate) -> dict[str, Any]:
         row = self.repository.get_result(result_id)
@@ -279,3 +318,24 @@ def _case_payload(body: EvaluationCaseCreate) -> dict[str, Any]:
 def _hash_json(value: Any) -> str:
     encoded = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _seed_id(case: dict[str, Any]) -> str | None:
+    value = case.get("caseData") or case.get("case_data") or {}
+    setup = value.get("setup") or {}
+    seed_id = setup.get("seedId") or setup.get("seed_id")
+    return str(seed_id) if seed_id else None
+
+
+def _seed_dataset(case: dict[str, Any]) -> str | None:
+    value = case.get("caseData") or case.get("case_data") or {}
+    setup = value.get("setup") or {}
+    dataset = setup.get("seedDataset") or setup.get("seed_dataset")
+    return str(dataset) if dataset else None
+
+
+def _seed_version(case: dict[str, Any]) -> str | None:
+    value = case.get("caseData") or case.get("case_data") or {}
+    setup = value.get("setup") or {}
+    version = setup.get("seedVersion") or setup.get("seed_version")
+    return str(version) if version else None

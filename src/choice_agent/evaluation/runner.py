@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from tempfile import TemporaryDirectory
+import json
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -10,13 +9,18 @@ from sqlalchemy.orm import Session
 from choice_agent.config import Settings
 from choice_agent.database import Database
 from choice_agent.domains.diet.seed import seed_legacy_data
+from choice_agent.domains.diet.profile import DietProfile
+from choice_agent.domains.generic import GenericProfile
+from choice_agent.domains.registry import DomainRegistry
+from choice_agent.domains.shopping import ShoppingProfile
+from choice_agent.domains.travel import TravelProfile
 from choice_agent.evaluation.metrics import METRIC_BY_ID, aggregate_metric
 from choice_agent.evaluation.schemas import EvaluationCaseData
 from choice_agent.orchestration.diet import DietOrchestrator
 from choice_agent.orchestration.generic import GenericDecisionOrchestrator
 from choice_agent.providers.model import DisabledProvider, ModelProvider
 from choice_agent.repositories.diet_repository import DietRepository
-from choice_agent.schemas import ChatRequest, GenericDecisionMessageRequest, GenericDecisionRequest, SourceMode
+from choice_agent.schemas import ChatRequest, DecisionCommandRequest, GenericDecisionMessageRequest, GenericDecisionRequest, SourceMode
 
 
 @dataclass
@@ -74,26 +78,55 @@ class EvaluationRunner:
         messages = [message for message in messages if message]
         if not messages:
             raise ValueError("Case 缺少可执行用户问题")
-        with TemporaryDirectory(prefix="choice-agent-eval-") as folder:
-            database = Database(Settings(database_url=f"sqlite:///{Path(folder) / 'evaluation.db'}"))
-            database.create_all()
-            with database.session_factory() as isolated_db:
-                seed_legacy_data(isolated_db)
-                isolated = EvaluationRunner(isolated_db, settings=self.settings, provider=self.provider)
-                outputs = isolated._run_diet(owner_id, messages) if case_data.domain == "diet" else isolated._run_generic(owner_id, case_data.domain, messages)
-                trace_snapshot = isolated._trace_snapshot(owner_id, outputs.get("traceId"))
-                return outputs, trace_snapshot
+        database = Database(Settings(database_url="sqlite:///:memory:"))
+        database.create_all()
+        with database.session_factory() as isolated_db:
+            seed_legacy_data(isolated_db)
+            isolated = EvaluationRunner(
+                isolated_db,
+                settings=self._settings_for(case_data),
+                provider=self._provider_for(case_data),
+            )
+            outputs = isolated._run_diet(owner_id, messages) if case_data.domain == "diet" else isolated._run_generic(owner_id, case_data.domain, messages, case_data)
+            trace_snapshot = isolated._trace_snapshot(owner_id, outputs.get("traceId"))
+            return outputs, trace_snapshot
+    def _settings_for(self, case_data: EvaluationCaseData) -> Settings:
+        setup = case_data.setup or {}
+        if setup.get("mockSearch") == "missing_key":
+            return replace(self.settings, search_api_key="", search_provider="fixture")
+        return self.settings
+
+    def _provider_for(self, case_data: EvaluationCaseData) -> ModelProvider:
+        mock = (case_data.setup or {}).get("mockModel")
+        if mock:
+            return FaultInjectionModel(str(mock))
+        return self.provider
+
+    def _registry_for(self, db: Session, case_data: EvaluationCaseData) -> DomainRegistry | None:
+        mock = (case_data.setup or {}).get("mockSearch")
+        if mock not in {"transport_error", "invalid_response"}:
+            return None
+        search = FaultInjectionSearchProvider(str(mock))
+        diet_repository = DietRepository(db, commit=False)
+        return DomainRegistry([
+            DietProfile(diet_repository, self.settings, self.provider),
+            TravelProfile(search),
+            ShoppingProfile(search),
+            GenericProfile(),
+        ])
 
     def _run_diet(self, owner_id: int, messages: list[str]) -> dict[str, Any]:
         orchestrator = DietOrchestrator(self.db, self.settings, self.provider)
         response = None
         session_id = None
+        turns = []
         for message in messages:
             response = orchestrator.chat(
                 owner_id,
                 ChatRequest(session_id=session_id, message=message, source_mode=SourceMode.PUBLIC),
             )
             session_id = response.session_id
+            turns.append(self._diet_turn(message, response))
         if response is None:
             raise ValueError("Case 没有产生响应")
         state = response.decision_state.model_dump(mode="json", by_alias=True) if response.decision_state else {}
@@ -104,17 +137,39 @@ class EvaluationRunner:
             "speechText": response.speech_text,
             "displayBlocks": [item.model_dump(mode="json", by_alias=True) for item in response.display_blocks],
             "decisionState": state,
+            "turns": turns,
         }
 
-    def _run_generic(self, owner_id: int, domain: str, messages: list[str]) -> dict[str, Any]:
-        orchestrator = GenericDecisionOrchestrator(self.db, settings=self.settings, provider=self.provider)
-        response = orchestrator.create(owner_id, GenericDecisionRequest(message=messages[0], domain=domain, context={"searchMode": "fixture"}))
+    def _run_generic(self, owner_id: int, domain: str, messages: list[str], case_data: EvaluationCaseData) -> dict[str, Any]:
+        setup = case_data.setup or {}
+        context = {"searchMode": "fixture", **dict(setup.get("context") or {})}
+        if setup.get("mockSearch"):
+            context["searchMode"] = "web"
+        orchestrator = GenericDecisionOrchestrator(
+            self.db,
+            registry=self._registry_for(self.db, case_data),
+            settings=self.settings,
+            provider=self.provider,
+        )
+        response = orchestrator.create(owner_id, GenericDecisionRequest(message=messages[0], domain=domain, context=context))
+        turns = [self._generic_turn(messages[0], response)]
         for message in messages[1:]:
             response = orchestrator.message(
                 owner_id,
                 response.decision_state.decision_id,
-                GenericDecisionMessageRequest(message=message, expected_revision=response.decision_state.revision),
+                GenericDecisionMessageRequest(message=message, expected_revision=response.decision_state.revision, context=context),
             )
+            turns.append(self._generic_turn(message, response))
+        for raw_command in case_data.commands:
+            if response.decision_state.domain == "diet":
+                raise ValueError("Evaluation Runner 暂不支持 diet command case")
+            payload = dict(raw_command)
+            payload.setdefault("commandId", payload.get("command_id") or f"eval-command-{len(turns) + 1}")
+            payload.setdefault("expectedRevision", response.decision_state.revision)
+            payload.setdefault("context", context)
+            command = DecisionCommandRequest.model_validate(payload)
+            response = orchestrator.command(owner_id, response.decision_state.decision_id, command)
+            turns.append(self._generic_turn(command.type, response))
         return {
             "mode": "orchestrator",
             "domain": response.decision_state.domain,
@@ -122,6 +177,25 @@ class EvaluationRunner:
             "speechText": response.speech_text,
             "displayBlocks": response.display_blocks,
             "decisionState": response.decision_state.model_dump(mode="json", by_alias=True),
+            "turns": turns,
+        }
+
+    def _generic_turn(self, message: str, response) -> dict[str, Any]:
+        return {
+            "message": message,
+            "traceId": response.trace_id,
+            "speechText": response.speech_text,
+            "displayBlocks": response.display_blocks,
+            "decisionState": response.decision_state.model_dump(mode="json", by_alias=True),
+        }
+
+    def _diet_turn(self, message: str, response) -> dict[str, Any]:
+        return {
+            "message": message,
+            "traceId": response.trace_id,
+            "speechText": response.speech_text,
+            "displayBlocks": [item.model_dump(mode="json", by_alias=True) for item in response.display_blocks],
+            "decisionState": response.decision_state.model_dump(mode="json", by_alias=True) if response.decision_state else {},
         }
 
     def _trace_snapshot(self, owner_id: int, trace_id: str | None) -> dict[str, Any]:
@@ -184,6 +258,51 @@ class EvaluationRunner:
         }
 
 
+class FaultInjectionModel:
+    enabled = True
+
+    def __init__(self, failure: str):
+        self.failure = failure
+
+    def complete_json(self, **kwargs):
+        data = json.loads(kwargs["user_prompt"])
+        if "source_catalog" not in data:
+            return {"fields": {}, "question": None, "intent": "compare", "candidate_updates": []}
+        allowed = data.get("allowed_primary_ids") or []
+        source_catalog = data.get("source_catalog") or {}
+        primary = allowed[0] if allowed else None
+        source_id, source = next(iter(source_catalog.items()))
+        value = {
+            "primary_candidate_id": primary,
+            "summary": "结合已有依据，先考虑当前候选。",
+            "reasons": [{"candidate_id": source["candidateId"], "source_id": source_id, "quote": source["text"], "text": "这项已有信息是当前建议的依据。"}],
+            "tradeoffs": [],
+            "question": None,
+        }
+        if self.failure == "timeout":
+            raise TimeoutError("simulated")
+        if self.failure == "unknown_candidate":
+            value["primary_candidate_id"] = "not-a-candidate"
+        elif self.failure == "false_quote":
+            value["reasons"][0]["quote"] = "编造资料"
+        elif self.failure == "invented_number":
+            value["summary"] = "这个选择保证带来 999999 收益"
+        return value
+
+
+class FaultInjectionSearchProvider:
+    name = "fault_injection_web_search"
+    enabled = True
+
+    def __init__(self, failure: str):
+        self.failure = failure
+
+    def search(self, context):
+        if self.failure == "invalid_response":
+            raise ValueError("Web Search 未返回结构化候选")
+        raise RuntimeError("Web Search 传输失败：simulated")
+
+
 def _path_get(value: Any, path: str | None) -> Any:
     if not path:
         return value
@@ -207,9 +326,9 @@ def _as_list(value: Any) -> list[Any]:
 
 def _contains(actual: Any, expected: Any) -> bool:
     if isinstance(actual, dict):
-        return expected in actual.values() or expected in actual.keys()
+        return any(_contains(key, expected) or _contains(value, expected) for key, value in actual.items())
     if isinstance(actual, list):
-        return expected in actual
+        return any(_contains(item, expected) for item in actual)
     if actual is None:
         return False
     return str(expected) in str(actual)

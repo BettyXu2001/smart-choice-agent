@@ -2,6 +2,7 @@
 
 ### 2026-09-06
 
+- Evaluation Regression Dataset 新增 20 条 Core Regression Cases 和 6 条 Fault Injection / Reliability Cases，Core 默认跑真实 Orchestrator + fixture 数据源，并通过 versioned seed 幂等补齐现有数据库。
 - 顶部主导航调整为首页、历史决策、我的资料，Trace、Evaluation、模型设置和 Debug 收拢到开发者工具。
 - 新增历史决策中心和最终选择记录，支持查看真实决策历史、详情和用户最后实际选择。
 - 新增我的资料页面和用户资料 API，支持保存预算习惯、城市偏好、饮食偏好和长期备注。
