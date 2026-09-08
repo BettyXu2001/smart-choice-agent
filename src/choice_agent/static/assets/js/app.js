@@ -451,6 +451,7 @@
         `;
     }
     function renderHistoryCard(item) {
+        const consistency = historyConsistency(item.currentRecommendation, item.finalChoice);
         return `
             <a class="history-card" href="#/history/${encodeURIComponent(item.decisionId)}">
                 <div>
@@ -460,9 +461,29 @@
                 <div class="history-card-meta">
                     <span>当前推荐：${escapeHtml(item.currentRecommendation || "未形成推荐")}</span>
                     <span>最终选择：${escapeHtml(item.finalChoice || "未记录")}</span>
+                    <span class="history-match ${consistency.className}">${escapeHtml(consistency.label)}</span>
                 </div>
             </a>
         `;
+    }
+    function historyConsistency(recommendation, finalChoice) {
+        if (!recommendation || !finalChoice) {
+            return {className: "unknown", label: "尚未判断一致性"};
+        }
+        const clean = value => String(value || "").trim().toLowerCase();
+        return clean(recommendation) === clean(finalChoice)
+            ? {className: "match", label: "与推荐一致"}
+            : {className: "mismatch", label: "与推荐不同"};
+    }
+    function decisionConsistency(decision, summary = {}) {
+        const recommendedId = decision.recommendation?.primaryCandidateId;
+        const outcome = decision.outcome || {};
+        if (recommendedId && outcome.candidateId) {
+            return outcome.candidateId === recommendedId
+                ? {className: "match", label: "最终选择与系统推荐一致"}
+                : {className: "mismatch", label: "最终选择与系统推荐不同"};
+        }
+        return historyConsistency(summary.currentRecommendation, summary.finalChoice);
     }
     async function renderDecisionHistoryDetail(route) {
         const id = historyRouteId(route);
@@ -490,13 +511,14 @@
         const detail = state.history.detail;
         const decision = detail.decision || {};
         const summary = detail.summary || {};
+        const consistency = decisionConsistency(decision, summary);
         app.innerHTML = `
             <section class="history-detail">
                 <div class="section">
                     <div class="card-title">
                         <div>
                             <h2>${escapeHtml(summary.title || decision.userGoal || "未命名决策")}</h2>
-                            <p>${escapeHtml(formatDateTime(summary.updatedAt || summary.createdAt))} · ${escapeHtml(summary.domain || decision.domain || "generic")} · Revision ${escapeHtml(decision.revision ?? "-")}</p>
+                            <p>${escapeHtml(formatDateTime(summary.updatedAt || summary.createdAt))} · ${escapeHtml(summary.domain || decision.domain || "generic")} · 第 ${escapeHtml(decision.revision ?? "-")} 版</p>
                         </div>
                         <div class="inline-actions">
                             <a class="btn ghost" href="#/history">返回历史</a>
@@ -506,7 +528,7 @@
                     <div class="grid three">
                         ${statCard("当前推荐", summary.currentRecommendation || "未形成推荐", "系统基于当前条件形成的倾向")}
                         ${statCard("最终选择", summary.finalChoice || "未记录", "你最后实际做出的选择")}
-                        ${statCard("状态", decision.status || "draft", "当前保存的决策状态")}
+                        ${statCard("推荐一致性", consistency.label, "最终选择是否跟当时建议一致")}
                     </div>
                 </div>
                 <div class="grid two history-detail-grid">
@@ -782,7 +804,7 @@
                 <div class="hero-panel">
                     <span class="badge">饮食决策</span>
                     <h1>决定今天吃什么</h1>
-                    <p>这是 Choice Agent V2 当前已增强的决策场景。你可以维护个人餐食库，也可以从公共餐食库开始；助手会根据时间、心情、场景、健康目标、口味和便利程度给出推荐，并在信息不足时主动追问。</p>
+                    <p>这是 Choice Agent 当前已增强的决策场景。你可以维护个人餐食库，也可以从公共餐食库开始；助手会根据时间、心情、场景、健康目标、口味和便利程度给出推荐，并在信息不足时主动追问。</p>
                     <div class="hero-actions">
                         <a class="btn primary" href="#/diet/chat">开始决策</a>
                         <a class="btn soft" href="#/diet/meals/personal">管理个人餐食</a>
@@ -865,13 +887,14 @@
         const candidates = [...activeCandidates, ...excludedCandidates];
         const recommendation = decision.recommendation || {};
         const source = decision.domainState?.source || {};
+        const primaryName = candidateDisplayName(decision, recommendation.primaryCandidateId);
         container.innerHTML = `
             <section class="demo-workbench unified-workbench">
                 <header class="demo-header">
                     <div>
                         <span class="badge demo-badge">${escapeHtml(domainLabel)}</span>
                         <h2>${escapeHtml(decision.userGoal || "待补充目标")}</h2>
-                        <p>${escapeHtml(decision.intentKey || decision.status || "")} · Revision ${escapeHtml(decision.revision)}</p>
+                        <p>${escapeHtml(decision.intentKey || decision.status || "")} · 第 ${escapeHtml(decision.revision)} 版</p>
                     </div>
                     <div class="inline-actions">
                         <button class="btn ghost" type="button" data-command="refresh_candidates">刷新候选</button>
@@ -905,7 +928,8 @@
                     </aside>
                     <main class="demo-main">
                         ${decision.status === "clarifying" ? `<form id="genericAnswerForm" class="inline-form"><input name="answer" required placeholder="${escapeHtml((decision.clarifyingQuestions || [])[0] || "补充关键信息")}"><button class="btn primary" type="submit">提交</button></form>` : ""}
-                        <div class="card-title"><div><h3>候选比较</h3><p>${activeCandidates.length} 个可用</p></div></div>
+                        <div class="card-title"><div><h3>候选比较</h3><p>${activeCandidates.length} 个进入比较</p></div></div>
+                        ${renderCandidateFunnel(decision, activeCandidates, candidates, source)}
                         <div class="demo-candidates">${candidates.map((candidate) => renderGenericCandidate(candidate, decision)).join("") || `<div class="empty">暂无候选</div>`}</div>
                         ${decision.domain !== "diet" ? `<form id="genericCandidateForm" class="inline-form">
                             <input name="name" required placeholder="候选名称">
@@ -915,7 +939,7 @@
                         </form>` : ""}
                         <div class="demo-recommendation">
                             <span class="badge demo-badge">推荐结论</span>
-                            <h4>${escapeHtml(recommendation.primaryCandidateId || "待定")}</h4>
+                            <h4>${escapeHtml(primaryName || "待定")}</h4>
                             <p>${escapeHtml(recommendation.summary || "暂无结论")}</p>
                             <div class="demo-list">
                                 ${(recommendation.reasons || []).map((item) => `<div><span>${escapeHtml(item.text)}</span></div>`).join("")}
@@ -966,6 +990,37 @@
 
     function sendGenericCommand(type, payload) { return sendDietCommand(type, payload); }
 
+    function candidateDisplayName(decision, candidateId) {
+        if (!candidateId) return "";
+        const candidates = []
+            .concat(decision.candidates || [])
+            .concat(decision.domainState?.candidatePool || [])
+            .concat(decision.domainState?.displayBlocks || []);
+        const found = candidates.find((item) => String(item.candidateId || item.id) === String(candidateId));
+        return found?.name || candidateId;
+    }
+
+    function renderCandidateFunnel(decision, activeCandidates, candidates, source) {
+        const poolCount = Array.isArray(decision.domainState?.candidatePool) ? decision.domainState.candidatePool.length : 0;
+        const foundCount = Math.max(poolCount, candidates.length, activeCandidates.length);
+        const excludedCount = Math.max(0, foundCount - activeCandidates.length);
+        const evidenceIds = new Set();
+        for (const item of decision.evidence || []) {
+            if (item?.evidenceId) evidenceIds.add(item.evidenceId);
+        }
+        for (const candidate of candidates) {
+            for (const item of candidate.evidence || []) {
+                if (item?.evidenceId) evidenceIds.add(item.evidenceId);
+            }
+        }
+        const realtime = source?.realTime || source?.mode === "web";
+        return `<div class="candidate-funnel">
+            <span>找到 ${escapeHtml(foundCount)} 个候选</span>
+            <span>硬约束排除 ${escapeHtml(excludedCount)} 个</span>
+            <span>${escapeHtml(activeCandidates.length)} 个进入比较</span>
+            ${realtime ? `<span class="funnel-live">实时搜索</span><span>${escapeHtml(evidenceIds.size)} 条 Evidence</span>` : ""}
+        </div>`;
+    }
     function renderGenericCandidate(candidate, decision) {
         const attrs = Object.entries(candidate.attributes || {});
         const excluded = (decision.excludedCandidates || []).includes(candidate.candidateId);

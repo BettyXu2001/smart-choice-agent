@@ -249,6 +249,9 @@ window.createConversation = function(deps) {
                 const prompt = String(target.dataset.prompt || input?.value || "").trim();
                 if (prompt) await runDietOperation({kind: "chat", body: {requestId: crypto.randomUUID(), message: prompt, sourceMode: state.chat.sourceMode, expectedRevision: state.chat.decision?.revision || 0, context: {analysisMode: "what_if", scenarioId: target.dataset.scenarioId || "custom"}}});
             }
+            else if (action === "quick-followup") {
+                await sendChatMessage(target.dataset.message);
+            }
             else if (action === "edit") { state.chat.editFields = structuredClone(dietFieldValues()); renderChat(); }
             else if (action === "cancel") { state.chat.editFields = null; renderChat(); }
             else if (action === "clear") { state.chat.editFields[target.dataset.field] = isGeneral() ? null : []; renderChat(); }
@@ -412,24 +415,38 @@ window.createConversation = function(deps) {
         const whatIf = assistance.whatIfAnalysis;
         const scenarios = assistance.whatIfScenarios || [];
         const blocks = d?.status === "clarifying" ? [] : d?.domainState?.displayBlocks || [];
-        const candidateName = id => (blocks.find(b => b.id === id)?.name || (d?.candidates || []).find(c => c.candidateId === id)?.name || id);
+        const candidateName = id => (blocks.find(b => String(b.id) === String(id))?.name || (d?.candidates || []).find(c => String(c.candidateId) === String(id))?.name || (d?.domainState?.candidatePool || []).find(c => String(c.candidateId) === String(id))?.name || id);
         const primaryId = current?.primaryCandidateId || d?.recommendation?.primaryCandidateId;
         const currentLabel = primaryId ? `当前更推荐 ${candidateName(primaryId)}。` : "当前还不适合给确定推荐。";
+        const alternatives = []
+            .concat(blocks.map(item => ({id: item.id, name: item.name})))
+            .concat((d?.candidates || []).map(item => ({id: item.candidateId, name: item.name})))
+            .filter(item => item.id && String(item.id) !== String(primaryId) && item.name);
+        const firstAlternative = alternatives[0];
+        const quickPrompts = [
+            firstAlternative ? `为什么不选 ${firstAlternative.name}？` : "",
+            "如果更看重成长呢？"
+        ].filter(Boolean);
         const keyReasons = (current?.keyReasons || current?.reasons || d?.recommendation?.reasons || []).slice(0, 4);
         const tradeoffs = (current?.tradeoffs || d?.recommendation?.tradeoffs?.map(text => ({text})) || []).slice(0, 4);
         const missing = (current?.missingInfo || (current?.question ? [current.question] : [])).slice(0, 3);
         const change = assistance.lastOfficialChange || current?.lastChange;
+        const changeFrom = change?.from?.label || candidateName(change?.from?.primaryCandidateId || change?.before?.primaryCandidateId);
+        const changeTo = change?.to?.label || candidateName(change?.to?.primaryCandidateId || change?.after?.primaryCandidateId);
+        const changeText = changeFrom && changeTo && changeFrom !== "-" && changeTo !== "-"
+            ? `${changeFrom} → ${changeTo}`
+            : "本轮没有改变当前倾向";
         const sourceNote = source?.mode === "web" ? " · 来源已校验，价格与库存需核实" : source?.mode === "fixture" ? " · 离线模拟数据，未核验实际价格、出发路线和行程费用" : source?.mode === "manual" ? " · 由你提供，未经外部核实" : "";
         const renderPoints = (items, empty, analysis = current) => items.length ? `<ul class="evidence-linked-list">${items.map(item => typeof item === "string" ? `<li>${escapeHtml(item)}</li>` : window.EvidenceView.point(item, analysis, d)).join("")}</ul>` : `<p class="muted">${escapeHtml(empty)}</p>`;
-        return `<aside id="dietPanel" class="diet-panel decision-canvas ${state.chat.panelOpen ? "is-open" : ""}" tabindex="-1" aria-label="Decision Canvas">
-            <div class="card-title"><div><span class="eyebrow">${labels[d?.domain] || "通用"}决策${d?.context?.demoMode ? " · 演示数据" : ""}</span><h3>Decision Canvas</h3></div><button class="btn ghost diet-panel-close" data-diet-action="close">关闭</button></div>
+        return `<aside id="dietPanel" class="diet-panel decision-canvas ${state.chat.panelOpen ? "is-open" : ""}" tabindex="-1" aria-label="当前选择">
+            <div class="card-title"><div><span class="eyebrow">${labels[d?.domain] || "通用"}决策${d?.context?.demoMode ? " · 演示数据" : ""}</span><h3>当前选择</h3></div><button class="btn ghost diet-panel-close" data-diet-action="close">关闭</button></div>
             <p class="diet-goal">${escapeHtml(goal || "一起想清楚这次选择")}</p>
             ${d?.context?.demoMode ? '<p class="muted">正在体验演示数据，候选说明与属性不代表真实情况。<a href="#/demo">换个示例</a></p>' : ""}
             ${suggestion ? `<section class="diet-pending"><p>这次想切换到${labels[suggestion.domain] || "饮食"}场景吗？会新建会话，保留当前选择。</p><button class="btn soft" data-diet-action="switch" ${busy}>新建${labels[suggestion.domain] || "饮食"}决策</button></section>` : ""}
-            <section class="canvas-block canvas-advice"><span class="eyebrow">当前建议</span><h4>${escapeHtml(currentLabel)}</h4>${current?.summary ? `<p>${escapeHtml(current.summary)}</p>` : `<p class="muted">随着对话补充，我会更新这里的比较。</p>`}</section>
+            <section class="canvas-block canvas-advice"><span class="eyebrow">当前建议</span><h4>${escapeHtml(currentLabel)}</h4>${current?.summary ? `<p>${escapeHtml(current.summary)}</p>` : `<p class="muted">随着对话补充，我会更新这里的比较。</p>`}${quickPrompts.length ? `<div class="quick-followups">${quickPrompts.map(prompt => `<button class="chip" type="button" data-diet-action="quick-followup" data-message="${escapeHtml(prompt)}" ${busy}>${escapeHtml(prompt)}</button>`).join("")}</div>` : ""}</section>
             <section class="canvas-block"><h4>为什么</h4>${renderPoints(keyReasons, "还没有足够依据提炼关键理由。")}</section>
             <section class="canvas-block"><h4>选择它的代价</h4>${renderPoints(tradeoffs, "当前还没有明确代价；继续补充候选差异后会更新。")}</section>
-            <section class="canvas-block"><h4>当前结论为什么发生变化</h4><p>${escapeHtml(change?.reason || "本轮没有改变当前倾向。")}</p></section>
+            <section class="canvas-block"><h4>当前结论为什么发生变化</h4><p><strong>${escapeHtml(changeText)}</strong></p><p>${escapeHtml(change?.reason || "本轮没有改变当前倾向。")}</p></section>
             <section class="canvas-block"><h4>还缺什么关键信息</h4>${renderPoints(missing, "暂时没有必须追问的信息。")}</section>
             <section class="canvas-block what-if-block"><div class="card-title"><h4>什么会改变我的决定？</h4></div>${scenarios.length ? `<div class="what-if-list">${scenarios.map(item => `<button class="what-if-option" type="button" data-diet-action="what-if" data-scenario-id="${escapeHtml(item.id)}" data-prompt="${escapeHtml(item.prompt)}"><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.impact || "假设比较")}</small></button>`).join("")}</div>` : `<p class="muted">还缺少可比较的数据，暂时无法生成可靠的决策边界。</p>`}<div class="what-if-custom"><input id="generalWhatIfInput" type="text" placeholder="例如：假设我可以接受两小时通勤" ${busy}><button class="btn soft" data-diet-action="what-if" ${busy}>分析假设</button></div></section>
             ${whatIf ? `<section class="canvas-block what-if-result"><span class="eyebrow">假设结果${whatIf.stale ? " · 已过期" : ""}</span><h4>${escapeHtml(whatIf.summary || "已完成假设比较")}</h4><p class="muted">${escapeHtml(whatIf.notice || "这是一次假设比较，没有修改当前保存的正式条件。")}</p>${renderPoints((whatIf.keyReasons || whatIf.reasons || []).slice(0, 3), "这次假设没有足够依据改变判断。", whatIf)}</section>` : ""}

@@ -1564,6 +1564,51 @@ body[data-theme="pop"] .candidate-draft-row,
     gap: 14px;
 }
 
+.candidate-funnel {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: -6px;
+}
+
+.candidate-funnel span,
+.history-match,
+.quick-followups .chip {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted);
+    background: var(--surface-soft);
+    font-size: 12px;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+}
+
+.candidate-funnel .funnel-live,
+.history-match.match {
+    color: var(--primary-dark);
+    background: var(--primary-soft);
+}
+
+.history-match.mismatch {
+    color: #9f1239;
+    background: #ffe4e6;
+}
+
+.quick-followups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.quick-followups .chip {
+    cursor: pointer;
+}
+
 .demo-candidate {
     display: grid;
     gap: 14px;
