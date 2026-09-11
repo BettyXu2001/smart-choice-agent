@@ -728,9 +728,9 @@
                         <div><strong>用户 ID</strong><span>${escapeHtml(DietApi.getUserId())}</span></div>
                         <div><strong>当前路由</strong><span>${escapeHtml(currentRoute())}</span></div>
                         <div><strong>Developer Mode</strong><span>${state.developerMode ? "开启" : "关闭"}</span></div>
-                        <div><strong>模型配置</strong><span>${model.enabled && model.apiKey ? "已启用" : "演示模式"}</span></div>
+                        <div><strong>真实 API</strong><span>${model.enabled && model.apiKey ? "模型已启用" : "演示模式"}</span></div>
                         <div><strong>主模型</strong><span>${escapeHtml(model.mainModel || "-")}</span></div>
-                        <div><strong>Base URL</strong><span>${escapeHtml(model.baseUrl || "-")}</span></div>
+                        <div><strong>实时搜索</strong><span>${model.searchEnabled && model.searchApiKey ? "已启用" : "未启用"}</span></div>
                         <div><strong>当前决策</strong><span>${escapeHtml(decision?.decisionId || "-")}</span></div>
                         <div><strong>Session</strong><span>${escapeHtml(decision?.sessionId || state.chat.sessionId || "-")}</span></div>
                         <div><strong>Revision</strong><span>${escapeHtml(decision?.revision ?? "-")}</span></div>
@@ -741,7 +741,7 @@
                     ${statCard("Evaluation", "保留", "生成评估报告")}
                     <a class="btn soft" href="#/admin/traces">Trace</a>
                     <a class="btn soft" href="#/admin/evaluations">Evaluation</a>
-                    <a class="btn ghost" href="#/settings">API / Model 设置</a>
+                    <a class="btn ghost" href="#/settings">真实 API 设置</a>
                 </aside>
             </section>
         `;
@@ -749,28 +749,30 @@
     function renderSettings() {
         const settings = DietApi.getModelSettings();
         state.settings.model = settings;
-        const configured = settings.enabled && Boolean(settings.apiKey);
+        const modelConfigured = settings.enabled && Boolean(settings.apiKey);
+        const searchConfigured = settings.searchEnabled && Boolean(settings.searchApiKey);
+        const configured = modelConfigured || searchConfigured;
         app.innerHTML = `
             <section class="settings-layout">
                 <div class="section settings-panel">
                     <div class="card-title">
                         <div>
                             <h2>设置</h2>
-                            <p>浏览器模型配置</p>
+                            <p>浏览器真实 API 配置</p>
                         </div>
-                        <span class="settings-status" data-mode="${configured ? "model" : "demo"}">${configured ? "模型模式" : "演示模式"}</span>
+                        <span class="settings-status" data-mode="${configured ? "model" : "demo"}">${configured ? "真实 API" : "演示模式"}</span>
                     </div>
                     <form id="modelSettingsForm" class="settings-form">
                         <label class="toggle-row">
                             <input type="checkbox" name="enabled" ${settings.enabled ? "checked" : ""}>
-                            <span>启用浏览器模型配置</span>
+                            <span>使用真实 API 生成理解和解释</span>
                         </label>
                         <label class="field full secret-field">
-                            <span>API Key</span>
+                            <span>模型 API Key</span>
                             <input type="password" name="apiKey" value="${escapeHtml(settings.apiKey)}" autocomplete="off" placeholder="sk-...">
                         </label>
                         <label class="field full">
-                            <span>Base URL</span>
+                            <span>模型 Base URL</span>
                             <input type="url" name="baseUrl" value="${escapeHtml(settings.baseUrl)}" placeholder="https://api.openai.com/v1">
                         </label>
                         <div class="form-grid two">
@@ -783,7 +785,25 @@
                                 <input type="text" name="lightModel" value="${escapeHtml(settings.lightModel)}" placeholder="gpt-5-mini">
                             </label>
                         </div>
-                        <p class="field-hint">API Key 只保存在当前浏览器的 localStorage 中，请不要在共享设备上保存个人密钥。前端设置会随饮食聊天和评估请求通过请求头发送给本地后端，不会写入请求 body。</p>
+                        <label class="toggle-row">
+                            <input type="checkbox" name="searchEnabled" ${settings.searchEnabled ? "checked" : ""}>
+                            <span>启用真实实时搜索</span>
+                        </label>
+                        <label class="field full secret-field">
+                            <span>搜索 API Key</span>
+                            <input type="password" name="searchApiKey" value="${escapeHtml(settings.searchApiKey)}" autocomplete="off" placeholder="sk-...">
+                        </label>
+                        <div class="form-grid two">
+                            <label class="field">
+                                <span>搜索 Base URL</span>
+                                <input type="url" name="searchBaseUrl" value="${escapeHtml(settings.searchBaseUrl)}" placeholder="https://api.openai.com/v1">
+                            </label>
+                            <label class="field">
+                                <span>搜索模型</span>
+                                <input type="text" name="searchModel" value="${escapeHtml(settings.searchModel)}" placeholder="gpt-5-mini">
+                            </label>
+                        </div>
+                        <p class="field-hint">API Key 只保存在当前浏览器的 localStorage 中，请不要在共享设备上保存个人密钥。启用后配置会通过请求头发送给本地后端，不会写入请求 body 或服务端配置。</p>
                         <div class="button-row">
                             <button class="btn primary" type="submit">保存设置</button>
                             <button class="btn ghost" type="button" data-action="clear-model-settings">清除设置</button>
@@ -791,8 +811,8 @@
                     </form>
                 </div>
                 <aside class="grid settings-side">
-                    ${statCard("当前模式", configured ? "模型模式" : "演示模式", configured ? "饮食助手会尝试调用你配置的模型。" : "本地规则与离线数据")}
-                    ${statCard("通用决策", "服务端工作台", "旅行、购物与自定义候选")}
+                    ${statCard("模型", modelConfigured ? "真实 API" : "演示模式", modelConfigured ? "请求会使用浏览器配置的模型。" : "本地规则与离线数据")}
+                    ${statCard("实时搜索", searchConfigured ? "已启用" : "未启用", searchConfigured ? "旅行和购物可使用 Web Search。" : "继续使用演示候选")}
                     ${statCard("服务端配置", ".env 保留", "后端环境变量仍可作为部署配置。")}
                 </aside>
             </section>
@@ -2050,21 +2070,28 @@
                 apiKey: formData.get("apiKey"),
                 baseUrl: formData.get("baseUrl"),
                 mainModel: formData.get("mainModel"),
-                lightModel: formData.get("lightModel")
+                lightModel: formData.get("lightModel"),
+                searchEnabled: formData.get("searchEnabled") === "on",
+                searchApiKey: formData.get("searchApiKey"),
+                searchBaseUrl: formData.get("searchBaseUrl"),
+                searchModel: formData.get("searchModel")
             });
-            showToast(DietApi.hasConfiguredModel() ? "模型设置已保存" : "设置已保存，当前为演示模式");
+            state.home.searchCapabilities = null;
+            const active = DietApi.hasConfiguredModel() || DietApi.hasConfiguredSearch();
+            showToast(active ? "真实 API 设置已保存" : "设置已保存，当前为演示模式");
             renderSettings();
         } catch (error) {
-            showToast("模型设置保存失败", "error");
+            showToast("真实 API 设置保存失败", "error");
         }
     }
     function clearModelSettings() {
         try {
             state.settings.model = DietApi.clearModelSettings();
-            showToast("模型设置已清除，当前为演示模式");
+            state.home.searchCapabilities = null;
+            showToast("真实 API 设置已清除，当前为演示模式");
             renderSettings();
         } catch (error) {
-            showToast("模型设置清除失败", "error");
+            showToast("真实 API 设置清除失败", "error");
         }
     }
     async function saveFeedback(button) {

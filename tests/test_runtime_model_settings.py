@@ -78,3 +78,54 @@ def test_browser_model_key_header_value_is_not_part_of_chat_trace(database):
     assert trace is not None
     trace_json = json.dumps(trace.trace_json, ensure_ascii=False)
     assert secret not in trace_json
+
+
+def test_runtime_search_headers_create_temporary_search_settings():
+    base_settings = Settings(
+        database_url="sqlite:///./test.db",
+        search_provider="fixture",
+        search_base_url="https://server.example/v1",
+        search_model="server-search",
+    )
+
+    runtime_settings, provider = runtime_model_from_headers(
+        base_settings,
+        DisabledProvider(),
+        "false",
+        "",
+        None,
+        None,
+        None,
+        "true",
+        " browser-search-key ",
+        "https://browser-search.example/v1/",
+        "browser-search",
+    )
+
+    assert runtime_settings.search_provider == "openai"
+    assert runtime_settings.search_api_key == "browser-search-key"
+    assert runtime_settings.search_base_url == "https://browser-search.example/v1/"
+    assert runtime_settings.search_model == "browser-search"
+    assert provider.enabled is False
+
+
+def test_runtime_search_headers_fall_back_without_enabled_key():
+    base_settings = Settings(database_url="sqlite:///./test.db", search_provider="fixture")
+    base_provider = DisabledProvider()
+
+    runtime_settings, provider = runtime_model_from_headers(
+        base_settings,
+        base_provider,
+        "false",
+        "",
+        None,
+        None,
+        None,
+        "false",
+        "browser-search-key",
+        "https://browser-search.example/v1",
+        "browser-search",
+    )
+
+    assert runtime_settings is base_settings
+    assert provider is base_provider

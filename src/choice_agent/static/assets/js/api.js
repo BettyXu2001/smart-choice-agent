@@ -13,7 +13,11 @@
         apiKey: "",
         baseUrl: "https://api.openai.com/v1",
         mainModel: "gpt-5",
-        lightModel: "gpt-5-mini"
+        lightModel: "gpt-5-mini",
+        searchEnabled: false,
+        searchApiKey: "",
+        searchBaseUrl: "https://api.openai.com/v1",
+        searchModel: "gpt-5-mini"
     };
 
     function getUserId() {
@@ -33,7 +37,11 @@
             apiKey: String(source.apiKey || "").trim(),
             baseUrl: String(source.baseUrl || DEFAULT_MODEL_SETTINGS.baseUrl).trim() || DEFAULT_MODEL_SETTINGS.baseUrl,
             mainModel: String(source.mainModel || DEFAULT_MODEL_SETTINGS.mainModel).trim() || DEFAULT_MODEL_SETTINGS.mainModel,
-            lightModel: String(source.lightModel || DEFAULT_MODEL_SETTINGS.lightModel).trim() || DEFAULT_MODEL_SETTINGS.lightModel
+            lightModel: String(source.lightModel || DEFAULT_MODEL_SETTINGS.lightModel).trim() || DEFAULT_MODEL_SETTINGS.lightModel,
+            searchEnabled: source.searchEnabled === true,
+            searchApiKey: String(source.searchApiKey || "").trim(),
+            searchBaseUrl: String(source.searchBaseUrl || DEFAULT_MODEL_SETTINGS.searchBaseUrl).trim() || DEFAULT_MODEL_SETTINGS.searchBaseUrl,
+            searchModel: String(source.searchModel || DEFAULT_MODEL_SETTINGS.searchModel).trim() || DEFAULT_MODEL_SETTINGS.searchModel
         };
     }
 
@@ -65,6 +73,12 @@
         return settings.enabled && Boolean(settings.apiKey);
     }
 
+    function hasConfiguredSearch() {
+        const settings = getModelSettings();
+        return settings.searchEnabled && Boolean(settings.searchApiKey);
+    }
+
+
     function attachModelHeaders(headers) {
         const settings = getModelSettings();
         if (!settings.enabled || !settings.apiKey) {
@@ -77,11 +91,24 @@
         headers.set("X-Choice-Agent-Light-Model", settings.lightModel);
     }
 
+    function attachSearchHeaders(headers) {
+        const settings = getModelSettings();
+        if (!settings.searchEnabled || !settings.searchApiKey) {
+            return;
+        }
+        headers.set("X-Choice-Agent-Search-Enabled", "true");
+        headers.set("X-Choice-Agent-Search-Api-Key", settings.searchApiKey);
+        headers.set("X-Choice-Agent-Search-Base-Url", settings.searchBaseUrl);
+        headers.set("X-Choice-Agent-Search-Model", settings.searchModel);
+    }
+
+
     async function request(baseUrl, path, options) {
         const config = options || {};
         const headers = new Headers(config.headers || {});
         headers.set("X-User-Id", getUserId());
         attachModelHeaders(headers);
+        attachSearchHeaders(headers);
 
         if (config.body !== undefined && !(config.body instanceof FormData)) {
             headers.set("Content-Type", "application/json");
@@ -151,6 +178,7 @@
         headers.set("X-User-Id", getUserId());
         headers.set("Content-Type", "application/json");
         attachModelHeaders(headers);
+        attachSearchHeaders(headers);
         const response = await fetch(`${baseUrl}${path}`, {
             method: "POST",
             headers,
@@ -235,6 +263,7 @@
         saveModelSettings,
         clearModelSettings,
         hasConfiguredModel,
+        hasConfiguredSearch,
         state: (sessionId) => dietRequest(`/sessions/${encodeURIComponent(sessionId)}/state`),
         command: (sessionId, payload) => dietRequest(`/sessions/${encodeURIComponent(sessionId)}/commands`, { method: "POST", body: payload }),
         createSession: () => dietRequest("/sessions", { method: "POST" }),

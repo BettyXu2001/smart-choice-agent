@@ -50,6 +50,21 @@ def test_search_capabilities_hide_provider_details():
     assert "base" not in json.dumps(payload).lower()
 
 
+def test_search_capabilities_use_runtime_search_settings():
+    runtime_settings = Settings(search_provider="openai", search_api_key="browser-secret")
+    payload = search_capabilities(
+        Settings(search_provider="fixture", search_api_key=""),
+        (runtime_settings, DisabledProvider()),
+    ).model_dump(by_alias=True)
+
+    assert payload == {
+        "supportedDomains": ["shopping", "travel"],
+        "webSearchConfigured": True,
+        "defaultSearchMode": "web",
+    }
+    assert "browser-secret" not in json.dumps(payload)
+
+
 def test_stream_create_emits_progress_and_final_for_fixture(database):
     events = _stream_events(database, GenericDecisionRequest(
         message="预算 7000 的轻便通勤电脑",
