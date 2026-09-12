@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Choice Agent 交互 Demo</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2317212f'/%3E%3Cpath d='M9 16.5 14 21l9-11' fill='none' stroke='%2349d39a' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body class="demo-body">
+    <header class="site-header">
+      <nav class="site-nav" aria-label="主导航">
+        <a class="site-brand" href="index.html"><strong>Choice Agent</strong><span>Product Portfolio</span></a>
+        <div class="site-links">
+          <a href="index.html">首页</a>
+          <a href="product-positioning.html">产品定位</a>
+          <a href="solution-process.html">处理方式</a>
+          <a href="interactive-demo.html" aria-current="page">交互 Demo</a>
+          <a href="evaluation.html">体验衡量</a>
+        </div>
+      </nav>
+    </header>
+
+    <main class="demo-shell">
+      <section class="left-panel" aria-labelledby="title">
+        <div class="brand-block">
+          <p class="eyebrow">Live Simulation</p>
+          <h1 id="title">模拟一次真实的选择过程</h1>
+          <p class="intro">选择一个典型案例后，系统会演示如何理解需求、准备候选、校验证据、比较取舍，并生成一个可保存、可调整的首版决策。</p>
+        </div>
+        <div class="input-card">
+          <label for="queryInput">用户原始输入</label>
+          <textarea id="queryInput" rows="4"></textarea>
+          <div class="control-row">
+            <button id="runDemo" class="primary-action" type="button">生成决策</button>
+            <button id="pauseDemo" class="ghost-action" type="button" disabled>暂停</button>
+            <button id="resetDemo" class="ghost-action" type="button">重置</button>
+          </div>
+        </div>
+        <article class="chat-card" aria-live="polite">
+          <div class="chat-line user"><span>用户</span><p id="chatQuery"></p></div>
+          <div class="chat-line ai" id="aiQuestion"><span>Choice Agent</span><p>已选择典型案例。点击生成决策，查看系统如何从模糊约束走到可采用方案。</p></div>
+          <div class="quick-actions" aria-label="选择案例">
+            <button class="chip active" data-case="offer">Offer 选择</button>
+            <button class="chip" data-case="travel">周末旅行</button>
+            <button class="chip" data-case="shopping">轻便电脑</button>
+          </div>
+        </article>
+        <article class="responsibility-card">
+          <h2>协同边界</h2>
+          <dl>
+            <div><dt>用户</dt><dd>提供真实目标和可接受代价，在关键约束上确认或修正。</dd></div>
+            <div><dt>系统</dt><dd>维护决策状态，展示候选、证据、排序、取舍和下一步问题。</dd></div>
+          </dl>
+        </article>
+      </section>
+
+      <section class="workspace" aria-label="查询流程模拟">
+        <header class="top-bar">
+          <div><p class="eyebrow">Decision Pipeline</p><h2 id="stageTitle">等待生成</h2></div>
+          <div class="run-state" id="runState">未开始</div>
+        </header>
+        <div class="progress-track" aria-label="生成进度"><span class="progress-fill" id="progressFill"></span></div>
+
+        <section class="pipeline-grid">
+          <article class="panel understanding">
+            <div class="panel-title"><span>01</span><h3>需求理解与信息分层</h3></div>
+            <div class="pill-row" id="extractedPills"></div>
+            <div class="classification-grid">
+              <div><h4>必须确认</h4><ul id="mustConfirm"></ul></div>
+              <div><h4>可以推断</h4><ul id="canInfer"></ul></div>
+              <div><h4>可以默认</h4><ul id="defaults"></ul></div>
+            </div>
+          </article>
+          <article class="panel tools">
+            <div class="panel-title"><span>02</span><h3>调用能力与证据校验</h3></div>
+            <div class="tool-list" id="toolList"></div>
+          </article>
+          <article class="panel candidates">
+            <div class="panel-title"><span>03</span><h3>候选召回与粗排</h3></div>
+            <div class="candidate-list" id="candidateList"></div>
+          </article>
+          <article class="panel tradeoffs">
+            <div class="panel-title"><span>04</span><h3>冲突处理与取舍</h3></div>
+            <div class="conflict-list" id="conflictList"></div>
+          </article>
+        </section>
+
+        <section class="result-panel hidden" id="resultPanel">
+          <article class="final-plan">
+            <div class="final-head">
+              <div><p class="eyebrow">首版可采用决策</p><h3 id="planTitle"></h3></div>
+              <strong id="planBudget"></strong>
+            </div>
+            <p class="reason" id="planReason"></p>
+            <div class="timeline" id="timeline"></div>
+          </article>
+          <aside class="decision-panel">
+            <h3>推荐背后的取舍</h3>
+            <ul id="keptDropped"></ul>
+            <button class="primary-action" id="savePlan" type="button">保存决策</button>
+            <button class="ghost-action" id="switchPlan" type="button">切换备选方案</button>
+            <p class="saved-state" id="savedState" aria-live="polite"></p>
+          </aside>
+        </section>
+      </section>
+    </main>
+    <script src="script.js"></script>
+  </body>
+</html>

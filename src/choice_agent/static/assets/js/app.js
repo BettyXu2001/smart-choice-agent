@@ -518,7 +518,7 @@
                     <div class="card-title">
                         <div>
                             <h2>${escapeHtml(summary.title || decision.userGoal || "未命名决策")}</h2>
-                            <p>${escapeHtml(formatDateTime(summary.updatedAt || summary.createdAt))} · ${escapeHtml(summary.domain || decision.domain || "generic")} · 第 ${escapeHtml(decision.revision ?? "-")} 版</p>
+                            <p>${escapeHtml(formatDateTime(summary.updatedAt || summary.createdAt))} · ${escapeHtml(summary.domain || decision.domain || "generic")}</p>
                         </div>
                         <div class="inline-actions">
                             <a class="btn ghost" href="#/history">返回历史</a>
@@ -914,7 +914,7 @@
                     <div>
                         <span class="badge demo-badge">${escapeHtml(domainLabel)}</span>
                         <h2>${escapeHtml(decision.userGoal || "待补充目标")}</h2>
-                        <p>${escapeHtml(decision.intentKey || decision.status || "")} · 第 ${escapeHtml(decision.revision)} 版</p>
+                        <p>${escapeHtml(decision.intentKey || decision.status || "")}</p>
                     </div>
                     <div class="inline-actions">
                         <button class="btn ghost" type="button" data-command="refresh_candidates">刷新候选</button>
@@ -1021,9 +1021,15 @@
     }
 
     function renderCandidateFunnel(decision, activeCandidates, candidates, source) {
+        const rankingCounts = decision.domainState?.rankingCounts || {};
+        const countValue = (value, fallback = 0) => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : fallback;
         const poolCount = Array.isArray(decision.domainState?.candidatePool) ? decision.domainState.candidatePool.length : 0;
-        const foundCount = Math.max(poolCount, candidates.length, activeCandidates.length);
-        const excludedCount = Math.max(0, foundCount - activeCandidates.length);
+        const hardConstraintExcluded = countValue(rankingCounts.hardConstraintExcluded);
+        const userExcluded = countValue(rankingCounts.userExcluded);
+        const missingDataExcluded = countValue(rankingCounts.missingDataExcluded);
+        const remaining = countValue(rankingCounts.remaining, activeCandidates.length);
+        const countedTotal = hardConstraintExcluded + userExcluded + missingDataExcluded + remaining;
+        const foundCount = Math.max(poolCount, candidates.length, activeCandidates.length, countedTotal);
         const evidenceIds = new Set();
         for (const item of decision.evidence || []) {
             if (item?.evidenceId) evidenceIds.add(item.evidenceId);
@@ -1036,8 +1042,10 @@
         const realtime = source?.realTime || source?.mode === "web";
         return `<div class="candidate-funnel">
             <span>找到 ${escapeHtml(foundCount)} 个候选</span>
-            <span>硬约束排除 ${escapeHtml(excludedCount)} 个</span>
-            <span>${escapeHtml(activeCandidates.length)} 个进入比较</span>
+            <span>硬约束排除 ${escapeHtml(hardConstraintExcluded)} 个</span>
+            <span>用户排除 ${escapeHtml(userExcluded)} 个</span>
+            <span>缺少数据排除 ${escapeHtml(missingDataExcluded)} 个</span>
+            <span>${escapeHtml(remaining)} 个进入比较</span>
             ${realtime ? `<span class="funnel-live">实时搜索</span><span>${escapeHtml(evidenceIds.size)} 条 Evidence</span>` : ""}
         </div>`;
     }

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Choice Agent：产品定位与采纳判据</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2317212f'/%3E%3Cpath d='M9 16.5 14 21l9-11' fill='none' stroke='%2349d39a' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <nav class="site-nav" aria-label="主导航">
+        <a class="site-brand" href="index.html"><strong>Choice Agent</strong><span>Product Portfolio</span></a>
+        <div class="site-links">
+          <a href="index.html">首页</a>
+          <a href="product-positioning.html" aria-current="page">产品定位</a>
+          <a href="solution-process.html">处理方式</a>
+          <a href="interactive-demo.html">交互 Demo</a>
+          <a href="evaluation.html">体验衡量</a>
+        </div>
+      </nav>
+    </header>
+
+    <main class="content-main">
+      <header class="page-hero">
+        <div>
+          <p class="eyebrow">Product Positioning</p>
+          <h1>把选择题从“给答案”升级为“可解释决策”</h1>
+          <p>Choice Agent 面向用户还没想清楚、候选信息不完整、取舍标准互相冲突的选择场景。它的目标不是替用户拍板，而是把选择过程结构化，让用户知道为什么推荐、代价是什么、什么变化会改变结论。</p>
+        </div>
+        <aside class="definition">
+          <strong>产品定义</strong>
+          <p>一个用于结构化、可解释决策的 AI Agent：理解目标，抽取条件，召回候选，过滤硬约束，排序比较，展示证据，并支持多轮调整。</p>
+        </aside>
+      </header>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>产品边界</h2>
+          <p>Choice Agent 不做泛问答，也不是只输出榜单的推荐器。它处理的是“我该怎么选”这类需要约束、候选、证据和取舍一起成立的问题。</p>
+        </div>
+        <div class="position-grid">
+          <article class="card"><h3>解决的问题</h3><p>用户面对 Offer、旅行、购物、学习路径、饮食等选择时，不知道关键条件、候选差异和真实代价。</p></article>
+          <article class="card"><h3>不解决的问题</h3><p>不替代最终承诺、合同签署、医疗法律判断或实时库存保证；不把模型猜测包装成已验证事实。</p></article>
+          <article class="card"><h3>核心用户</h3><p>时间有限但选择复杂的人：求职者、临时出行者、高频消费决策者、学习路径规划者和需要饮食建议的个人用户。</p></article>
+          <article class="card"><h3>核心价值</h3><p>把候选项、硬约束、偏好权重、证据来源、推荐理由和可调整入口放在同一张决策画布上。</p></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>和普通聊天 AI 的区别</h2>
+          <p>聊天 AI 擅长表达，Choice Agent 需要对决策状态负责：它要记住条件、维护候选、暴露证据，并允许用户改一处而不是重来一遍。</p>
+        </div>
+        <div class="compare">
+          <article class="compare-card">
+            <h3>普通聊天 AI</h3>
+            <ul>
+              <li><span>输入</span><b>自然语言问题</b></li>
+              <li><span>输出</span><b>一次性建议或解释</b></li>
+              <li><span>风险</span><b>理由好听但候选、数据和约束不可检查</b></li>
+              <li><span>修改</span><b>用户通常需要重新描述上下文</b></li>
+            </ul>
+          </article>
+          <article class="compare-card strong">
+            <h3>Choice Agent</h3>
+            <ul>
+              <li><span>输入</span><b>目标、候选、偏好、限制和后续修正</b></li>
+              <li><span>输出</span><b>推荐、排序、证据、代价、问题和可编辑状态</b></li>
+              <li><span>风险</span><b>显式标注未证实、演示数据、推断和缺口</b></li>
+              <li><span>修改</span><b>保留历史，只重排受影响的条件和候选</b></li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>答案形态</h2>
+          <p>一个可采用的首版决策不是“推荐 A”，而是可检查的结构化对象。</p>
+        </div>
+        <div class="answer-shape">
+          <article class="shape-step"><span>01</span><h3>明确倾向</h3><p>给出当前推荐和置信边界，说明是否还缺关键问题。</p></article>
+          <article class="shape-step"><span>02</span><h3>候选比较</h3><p>展示进入比较的候选、被排除的候选和每个维度的差异。</p></article>
+          <article class="shape-step"><span>03</span><h3>证据与代价</h3><p>区分用户输入、外部搜索、系统推断和演示数据，说明推荐需要接受什么代价。</p></article>
+          <article class="shape-step"><span>04</span><h3>可调整入口</h3><p>用户可以改预算、改优先级、排除候选、补充事实或做 What-if 假设。</p></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>首版可采纳判据</h2>
+          <p>可采纳不是“看起来合理”，而是用户是否从继续问泛泛建议，进入保存、比较、执行或轻量修改。</p>
+        </div>
+        <div class="formula">首版可采纳率 = 有采纳行为且无强否定行为的首版曝光会话 / 首版方案曝光会话</div>
+        <div class="signal-grid">
+          <article class="signal-card strong"><h3>强采纳信号</h3><p>保存决策、记录最终选择、点击执行入口、复制方案、分享给他人。</p></article>
+          <article class="signal-card"><h3>弱采纳信号</h3><p>继续追问某个细节、要求便宜一点、减少风险、只替换一个候选。</p></article>
+          <article class="signal-card negative"><h3>强否定信号</h3><p>完全重来、纠正核心事实、否认候选相关性、指出硬约束被违反。</p></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>首版质量底线</h2>
+          <p>只要下面任一项不成立，就不能把结果当成可采纳决策。</p>
+        </div>
+        <ul class="judge-list">
+          <li><span>需求覆盖</span><b>目标、候选、硬约束和偏好被明确回应。</b></li>
+          <li><span>候选可比</span><b>候选进入同一套维度，不用无法比较的描述混在一起。</b></li>
+          <li><span>证据透明</span><b>事实 claim 可追溯来源，演示数据和推断有清楚标记。</b></li>
+          <li><span>取舍具体</span><b>说明为什么选 A 不选 B，以及推荐结果牺牲了什么。</b></li>
+          <li><span>可局部修改</span><b>用户提出新约束时，系统能保留上下文并重排相关模块。</b></li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

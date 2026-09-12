@@ -95,6 +95,22 @@ window.createConversation = function(deps) {
         if (!suggestions.length) return "";
         return `<section class="diet-pending profile-suggestions"><strong>来自我的资料</strong>${suggestions.map(item => `<p>${escapeHtml(item.label || "偏好")}：${escapeHtml(displayProfileValue(item.value))}</p><div class="button-row"><button class="btn soft" data-diet-action="profile-adopt" data-profile-field="${escapeHtml(item.fieldKey)}" ${busy}>本次采用</button><button class="btn ghost" data-diet-action="profile-modify" ${busy}>修改</button><button class="btn ghost" data-diet-action="profile-ignore" data-profile-field="${escapeHtml(item.fieldKey)}" ${busy}>本次忽略</button></div>`).join("")}</section>`;
     }
+    function criterionFollowupLabel(criterion) {
+        const label = String(criterion?.label || criterion?.name || criterion?.key || "").replace(/\s*[（(].*?[）)]\s*/g, "").trim();
+        return label.length >= 2 && label.length <= 12 ? label : "";
+    }
+
+    function buildQuickFollowupPrompts(decision, firstAlternative) {
+        const prompts = [];
+        if (firstAlternative?.name) prompts.push(`为什么不选 ${firstAlternative.name}？`);
+        const weightedCriteria = (decision?.criteria || [])
+            .map(item => ({ label: criterionFollowupLabel(item), weight: Number(item.weight || 0) }))
+            .filter(item => item.label && item.weight > 0)
+            .sort((left, right) => right.weight - left.weight);
+        if (weightedCriteria.length) prompts.push(`如果更看重${weightedCriteria[0].label}呢？`);
+        return [...new Set(prompts)].filter(Boolean);
+    }
+
     function renderDietPanel() {
         if (isGeneral()) return renderGeneralPanel();
         const d = state.chat.decision;
@@ -423,10 +439,7 @@ window.createConversation = function(deps) {
             .concat((d?.candidates || []).map(item => ({id: item.candidateId, name: item.name})))
             .filter(item => item.id && String(item.id) !== String(primaryId) && item.name);
         const firstAlternative = alternatives[0];
-        const quickPrompts = [
-            firstAlternative ? `为什么不选 ${firstAlternative.name}？` : "",
-            "如果更看重成长呢？"
-        ].filter(Boolean);
+        const quickPrompts = buildQuickFollowupPrompts(d, firstAlternative);
         const keyReasons = (current?.keyReasons || current?.reasons || d?.recommendation?.reasons || []).slice(0, 4);
         const tradeoffs = (current?.tradeoffs || d?.recommendation?.tradeoffs?.map(text => ({text})) || []).slice(0, 4);
         const missing = (current?.missingInfo || (current?.question ? [current.question] : [])).slice(0, 3);

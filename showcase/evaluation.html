@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Choice Agent：体验评测体系</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2317212f'/%3E%3Cpath d='M9 16.5 14 21l9-11' fill='none' stroke='%2349d39a' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <nav class="site-nav" aria-label="主导航">
+        <a class="site-brand" href="index.html"><strong>Choice Agent</strong><span>Product Portfolio</span></a>
+        <div class="site-links">
+          <a href="index.html">首页</a>
+          <a href="product-positioning.html">产品定位</a>
+          <a href="solution-process.html">处理方式</a>
+          <a href="interactive-demo.html">交互 Demo</a>
+          <a href="evaluation.html" aria-current="page">体验衡量</a>
+        </div>
+      </nav>
+    </header>
+
+    <main class="content-main">
+      <header class="page-hero">
+        <div>
+          <p class="eyebrow">Evaluation Loop</p>
+          <h1>Choice Agent 体验评测体系</h1>
+          <p>评测目标不是给模型打一个总分，而是判断首版决策能否被采纳，并把失败样本归因到需求理解、候选召回、证据校验、排序规划、解释呈现或产品交互。</p>
+        </div>
+      </header>
+
+      <section class="section">
+        <div class="section-head"><h2>1. 评测目标与通过标准</h2><p>首版结果要让用户进入执行或轻量修改，而不是继续从零解释需求。</p></div>
+        <div class="goal-grid">
+          <article><span>结果</span><strong>用户保存、复制、分享、记录最终选择或点击执行入口。</strong></article>
+          <article><span>过程</span><strong>系统留下可回放的条件、候选、证据、排序和 fallback Trace。</strong></article>
+          <article><span>底线</span><strong>不得违反硬约束，不得把未验证信息写成确定事实。</strong></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2>2. 核心评测维度</h2><p>指标要覆盖理解、候选、事实、规划、个性化、解释和多轮稳定性。</p></div>
+        <div class="metric-grid">
+          <article class="metric-card"><span>理解</span><h3>条件抽取准确率</h3><p>目标、候选、硬约束、偏好和禁忌是否被正确结构化。</p></article>
+          <article class="metric-card"><span>候选</span><h3>候选覆盖率</h3><p>高质量候选是否进入候选池，被排除候选是否有清晰原因。</p></article>
+          <article class="metric-card"><span>证据</span><h3>事实错误率</h3><p>关键 claim 是否能追到用户输入、演示数据或外部来源。</p></article>
+          <article class="metric-card"><span>决策</span><h3>行程/方案可执行率</h3><p>推荐是否满足硬约束，时间、成本、风险和优先级是否自洽。</p></article>
+          <article class="metric-card"><span>解释</span><h3>取舍可理解率</h3><p>用户是否看得懂为什么选 A、不选 B，以及推荐牺牲了什么。</p></article>
+          <article class="metric-card"><span>多轮</span><h3>局部修改成功率</h3><p>用户新增约束、排除候选或做 What-if 后，系统能否保留上下文并正确重排。</p></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2>3. 人工评分 Rubric</h2><p>用于作品集汇报和回归集标注，避免只靠主观满意度。</p></div>
+        <div class="rubric-grid">
+          <article><div><h3>需求理解</h3><b>20</b></div><p>正确识别选择类型、目标、候选和约束。</p></article>
+          <article><div><h3>事实与证据</h3><b>25</b></div><p>事实可追溯，证据状态清楚，未知项不伪装确定。</p></article>
+          <article><div><h3>决策可执行性</h3><b>25</b></div><p>排序与推荐满足硬条件，取舍和风险能落到行动。</p></article>
+          <article><div><h3>个性化与取舍</h3><b>20</b></div><p>推荐理由对应用户本次条件，而不是通用模板。</p></article>
+          <article><div><h3>最终表达</h3><b>10</b></div><p>结论、理由、代价和下一步清晰，不需要用户重新整理。</p></article>
+          <article><div><h3>门槛规则</h3><b>Gate</b></div><p>硬约束违反、关键事实错误、危险建议直接判不通过。</p></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2>4. Bad Case 归因方法</h2><p>Bad Case 不只写“答案不好”，要回放中间状态，定位最早出错的一层。</p></div>
+        <div class="diagnosis">
+          <article><span>Query 解析</span><h3>用户条件被漏抽或误抽</h3><p>表现：忽略通勤、预算、地点、健康禁忌、候选名称。</p></article>
+          <article><span>候选召回</span><h3>好候选没有进入候选池</h3><p>表现：只比较热门项，漏掉更匹配的冷门或用户手工候选。</p></article>
+          <article><span>证据校验</span><h3>事实没有可用来源</h3><p>表现：价格、时间、开放状态或岗位信息无法追溯。</p></article>
+          <article><span>排序规划</span><h3>候选正确但组织成错误结论</h3><p>表现：硬约束没有过滤、权重错误、方案不可执行。</p></article>
+          <article><span>表达呈现</span><h3>方案可用但用户看不懂或不信</h3><p>表现：结论藏太深、代价不明确、证据不可展开。</p></article>
+          <article><span>产品交互</span><h3>用户无法继续调整或保存</h3><p>表现：缺少排除、修改、What-if、保存和历史回看入口。</p></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2>5. 埋点与看板分层</h2><p>一个总分无法指导改进。看板应按任务类型、数据来源和失败层级拆开看。</p></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>层级</th><th>看什么</th><th>用于回答</th></tr></thead>
+            <tbody>
+              <tr><td>任务类型</td><td>Offer、旅行、购物、学习、饮食</td><td>哪个领域最容易失败？</td></tr>
+              <tr><td>输入完整度</td><td>只有目标、有候选、有硬约束、有历史资料</td><td>系统在低信息输入下是否过度自信？</td></tr>
+              <tr><td>数据来源</td><td>fixture、manual、web、user_profile</td><td>失败来自模型理解还是信息源质量？</td></tr>
+              <tr><td>用户行为</td><td>保存、重做、排除、追问、最终选择</td><td>首版有没有推动决策收敛？</td></tr>
+              <tr><td>失败归因</td><td>解析、召回、证据、排序、表达、交互</td><td>下一轮应该改产品、算法还是数据？</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

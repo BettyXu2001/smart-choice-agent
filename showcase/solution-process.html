@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Choice Agent：从模糊选择到完整决策</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2317212f'/%3E%3Cpath d='M9 16.5 14 21l9-11' fill='none' stroke='%2349d39a' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <nav class="site-nav" aria-label="主导航">
+        <a class="site-brand" href="index.html"><strong>Choice Agent</strong><span>Product Portfolio</span></a>
+        <div class="site-links">
+          <a href="index.html">首页</a>
+          <a href="product-positioning.html">产品定位</a>
+          <a href="solution-process.html" aria-current="page">处理方式</a>
+          <a href="interactive-demo.html">交互 Demo</a>
+          <a href="evaluation.html">体验衡量</a>
+        </div>
+      </nav>
+    </header>
+
+    <main class="content-main">
+      <header class="page-hero">
+        <div>
+          <p class="eyebrow">Decision Workflow</p>
+          <h1>从一句模糊选择到可解释决策</h1>
+          <p>处理原则是少问关键问题、先形成可检查状态、用候选和证据支撑推荐，并把用户、Agent、规则引擎和外部信息源的责任边界说清楚。</p>
+        </div>
+      </header>
+
+      <section class="section">
+        <div class="section-head"><h2>角色分工</h2><p>用户不需要把需求写成表单；系统负责把自然语言拆成可维护的决策状态。</p></div>
+        <div class="lane-grid">
+          <article class="lane"><h3>用户主动线</h3><p>提出目标，确认关键约束，补充候选，纠正事实，保存最终选择。</p></article>
+          <article class="lane"><h3>AI 与产品系统线</h3><p>识别领域，抽取条件，生成候选，调用搜索，执行硬筛选，排序解释，保存 Trace。</p></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2>端到端流程图</h2><p>每一步都输出可检查的状态，而不是只把模型文本传给下一步。</p></div>
+        <div class="flow">
+          <article><span>1</span><h3>接收模糊需求</h3><p>例如“我在纠结两个 Offer，想选更适合长期发展的”。</p></article>
+          <article><span>2</span><h3>领域识别</h3><p>判断是职业、旅行、购物、学习、饮食或通用比较。</p></article>
+          <article><span>3</span><h3>条件抽取</h3><p>拆出目标、候选、硬约束、软偏好、已知事实和不确定假设。</p></article>
+          <article><span>4</span><h3>缺口分层</h3><p>区分必须追问、可以推断、可以默认的信息。</p></article>
+          <article><span>5</span><h3>候选准备</h3><p>使用用户给出的候选、领域 fixture、实时搜索或手工补充。</p></article>
+          <article><span>6</span><h3>证据校验</h3><p>标记用户输入、外部来源、系统推断、演示数据和核验状态。</p></article>
+          <article><span>7</span><h3>排序与取舍</h3><p>硬约束先过滤，剩余候选按权重、风险和证据质量比较。</p></article>
+          <article><span>8</span><h3>交付与调整</h3><p>输出推荐、代价、追问和可编辑画布，支持多轮局部修改。</p></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2>缺失信息的三类处理</h2><p>不是所有缺失字段都应该追问。过度追问会让用户回到填表负担。</p></div>
+        <div class="triad">
+          <article><h3>必须确认</h3><p>会改变可行性的条件：硬预算、地点、时间、不可接受风险、真实候选身份。</p><strong>例：B 公司通勤两小时是否是硬约束？</strong></article>
+          <article><h3>可以推断</h3><p>从表达中有较高置信度的偏好：稳定优先、成长优先、轻松节奏、低维护成本。</p><strong>例：“不想太累”可先推断为路线密度低。</strong></article>
+          <article><h3>可以默认</h3><p>对首版影响有限且可后续修改的参数：展示排序、默认权重、演示候选属性。</p><strong>例：未知领域先默认两到三个手工候选入口。</strong></article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2>每一步的输入与输出</h2><p>作品集汇报时，这张表能说明系统不是黑盒回答，而是可观测的产品链路。</p></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>阶段</th><th>输入</th><th>输出</th><th>可观测证据</th></tr></thead>
+            <tbody>
+              <tr><td>需求理解</td><td>用户原话、历史资料</td><td>领域、目标、候选线索</td><td>解析字段、置信度、原文引用</td></tr>
+              <tr><td>约束确认</td><td>目标与候选</td><td>硬约束、软偏好、追问</td><td>confirmed/source/updatedRevision</td></tr>
+              <tr><td>候选召回</td><td>领域、关键词、已知候选</td><td>候选池与来源</td><td>fixture/manual/web source</td></tr>
+              <tr><td>排序比较</td><td>候选、条件、评分维度</td><td>推荐、排除、排名变化</td><td>scoreBreakdown、filter reason</td></tr>
+              <tr><td>解释生成</td><td>排序结果与证据目录</td><td>理由、代价、问题、What-if</td><td>evidenceIds、fallback 标记</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head"><h2>示例链路</h2><p>同一个机制可以覆盖不同选择类型，区别在于领域画像、候选属性和风险维度。</p></div>
+        <div class="example-board">
+          <article><h3>Offer 选择</h3><p>输入：A 公司更匹配 AI 产品，B 公司稳定但通勤两小时。输出：如果通勤是硬约束，B 被排除；如果稳定权重提高，系统展示结论变化。</p></article>
+          <article><h3>旅行选择</h3><p>输入：周末从上海出发，不想太累，预算别太高。输出：候选按交通、强度、成本和人流比较，并提示天气、票务等动态风险。</p></article>
+          <article><h3>购物选择</h3><p>输入：轻便电脑，通勤携带，预算可控。输出：先过滤超预算和重量，再比较性能、续航、价格与维护风险。</p></article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
