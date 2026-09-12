@@ -34,3 +34,16 @@ def test_revision_only_visible_in_developer_or_trace_views():
     assert "第 ${escapeHtml(decision.revision ??" not in app_source
     assert "<strong>Revision</strong>" in app_source
     assert "<span>Revision</span>" in trace_source
+
+def test_general_decision_process_visualization_is_user_facing():
+    source = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+
+    assert "function renderHomeDecisionProcess" in source
+    assert "Choice Agent 决策流程" in source
+    assert "function buildDecisionProcess" in source
+    assert "function renderDecisionProcess" in source
+    assert "这次决策是怎么走到结论的" in source
+    assert "function renderDecisionResultCard" in source
+    assert "什么会改变结论" in source
+    assert "candidate-compare-card" in source
+    assert "score-breakdown" in source

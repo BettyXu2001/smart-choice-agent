@@ -397,12 +397,7 @@
                     ${statCard("理解推荐边界", "可解释结论", "说明为什么推荐、要接受什么代价，以及哪些条件变化会改变结果。")}
                 </aside>
             </section>
-            <section class="grid three decision-flow value-flow" style="margin-top: 18px;">
-                ${featureCard("过程可检查", "把候选、约束、偏好和当前倾向拆开呈现，避免只得到一句无法追踪的结论。", "#/")}
-                ${featureCard("条件可修改", "你可以继续补充顾虑、调整偏好或修正候选，结果会随着条件重新组织。", "#/")}
-                ${featureCard("结论可解释", "推荐会同时展示依据、代价和变化边界，方便你判断是否接受。", "#/")}
-                ${featureCard("查看完整示例", "体验旅行、Offer、学习路径和购物等场景下的可编辑结果侧栏。", "#/demo")}
-            </section>
+            ${renderHomeDecisionProcess()}
         `;
     }
     function formatDateTime(value) {
@@ -893,6 +888,146 @@
         return decodeURIComponent(route.replace("/decisions/", "").split("/")[0] || "");
     }
 
+    function renderHomeDecisionProcess() {
+        const steps = [
+            ["说出纠结点", "不用先整理成表格，一句话说明目标、候选或顾虑。"],
+            ["拆出条件", "识别目标、候选、偏好和硬约束，把模糊问题变成可检查结构。"],
+            ["补关键缺口", "只追问会改变结论的问题，其余先作为假设或默认值。"],
+            ["召回候选", "按场景整理可选项，并标注来源、证据和实时信息状态。"],
+            ["比较取舍", "过滤不合适的候选，解释分数、代价和冲突点。"],
+            ["给出建议", "输出当前更推荐什么，以及哪些变化会改变这个结论。"]
+        ];
+        return `
+            <section class="decision-flow value-flow home-process" aria-label="Choice Agent 决策流程">
+                <div class="card-title">
+                    <div>
+                        <span class="eyebrow">Decision Flow</span>
+                        <h2>从一句纠结，到一个能解释的选择</h2>
+                    </div>
+                    <a class="btn soft" href="#/demo">查看完整示例</a>
+                </div>
+                <div class="home-process-rail">
+                    ${steps.map(([title, desc], index) => `
+                        <article class="home-process-step">
+                            <span>${index + 1}</span>
+                            <h3>${escapeHtml(title)}</h3>
+                            <p>${escapeHtml(desc)}</p>
+                        </article>
+                    `).join("")}
+                </div>
+            </section>
+        `;
+    }
+
+    function toArray(value) {
+        if (Array.isArray(value)) return value.filter(Boolean);
+        if (value === null || value === undefined || value === "") return [];
+        return [value];
+    }
+    function displayText(value) {
+        if (value === null || value === undefined || value === "") return "";
+        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+        return value.text || value.label || value.name || value.summary || value.question || value.reason || safeJson(value);
+    }
+    function renderSignalList(items, emptyText) {
+        const normalized = toArray(items).map(displayText).filter(Boolean).slice(0, 4);
+        if (!normalized.length) return `<p class="muted">${escapeHtml(emptyText)}</p>`;
+        return `<ul>${normalized.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+    }
+    function evidenceCount(decision, candidates) {
+        const ids = new Set();
+        for (const item of decision.evidence || []) {
+            if (item?.evidenceId) ids.add(item.evidenceId);
+        }
+        for (const candidate of candidates || []) {
+            for (const item of candidate.evidence || []) {
+                if (item?.evidenceId) ids.add(item.evidenceId);
+            }
+        }
+        return ids.size;
+    }
+    function sourceModeText(source) {
+        if (source?.realTime || source?.mode === "web") return "实时搜索";
+        if (source?.mode === "manual") return "用户输入";
+        if (source?.mode === "database") return "数据库";
+        return "离线模拟数据";
+    }
+    function topCriteria(decision) {
+        return [...(decision.criteria || [])]
+            .sort((a, b) => Number(b.weight || 0) - Number(a.weight || 0))
+            .slice(0, 4)
+            .map((item) => `${item.label || item.key} · 权重 ${Number(item.weight || 0).toFixed(1)}`);
+    }
+    function buildDecisionProcess(decision, activeCandidates, candidates, source) {
+        const assistance = decision.domainState?.assistance || {};
+        const analysis = assistance.currentAnalysis || assistance.analysis || {};
+        const questions = toArray(decision.clarifyingQuestions)
+            .concat(toArray(assistance.missingInfo), toArray(analysis.missingInfo))
+            .map(displayText)
+            .filter(Boolean);
+        const constraints = (decision.constraints || []).map((item) => {
+            const value = item.value != null ? `${item.operator || ""} ${item.value}` : toArray(item.values).join("、");
+            return `${item.label || item.key}${value ? `：${value}` : ""}`;
+        });
+        const assumptions = toArray(assistance.assumptions || analysis.assumptions).map(displayText).filter(Boolean);
+        const rankingCounts = decision.domainState?.rankingCounts || {};
+        const countValue = (value, fallback = 0) => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : fallback;
+        const poolCount = Array.isArray(decision.domainState?.candidatePool) ? decision.domainState.candidatePool.length : candidates.length;
+        const entered = countValue(rankingCounts.remaining, activeCandidates.length);
+        const totalEvidence = evidenceCount(decision, candidates);
+        const tradeoffs = toArray(decision.recommendation?.tradeoffs || analysis.tradeoffs).map(displayText).filter(Boolean);
+        return [
+            { key: "understanding", title: "需求理解", status: decision.userGoal ? "active" : "muted", summary: decision.userGoal || "等待你描述正在纠结的选择。", meta: [decision.intentKey || decision.status || "意图待确认", decision.domain || "generic"] },
+            { key: "gaps", title: "信息分层", status: questions.length ? "active" : "done", summary: questions.length ? "先补会影响方向的问题。" : "已有信息足够推进首版判断。", groups: [["需要你确认", questions.slice(0, 3), "暂时没有必须追问的问题。"], ["我先做的假设", assumptions.slice(0, 3), "本轮没有记录可展示假设。"], ["已知硬约束", constraints.slice(0, 3), "暂无明确硬约束。"]] },
+            { key: "retrieval", title: "候选召回", status: candidates.length ? "done" : "muted", summary: `找到 ${Math.max(poolCount, candidates.length)} 个候选，${entered} 个进入比较。`, meta: [sourceModeText(source), totalEvidence ? `${totalEvidence} 条 Evidence` : "暂无证据记录"] },
+            { key: "filtering", title: "过滤与比较", status: candidates.length ? "done" : "muted", summary: "按硬约束、用户排除和缺失数据整理候选池。", meta: [`硬约束排除 ${countValue(rankingCounts.hardConstraintExcluded)} 个`, `用户排除 ${countValue(rankingCounts.userExcluded)} 个`, `缺少数据排除 ${countValue(rankingCounts.missingDataExcluded)} 个`] },
+            { key: "ranking", title: "冲突取舍", status: tradeoffs.length || topCriteria(decision).length ? "done" : "muted", summary: tradeoffs[0] || "等待更多候选或评分标准后展示取舍。", meta: topCriteria(decision) },
+            { key: "recommendation", title: "最终建议", status: decision.recommendation?.primaryCandidateId ? "active" : "muted", summary: decision.recommendation?.summary || "推荐结论还在整理中。", meta: decision.recommendation?.primaryCandidateId ? [candidateDisplayName(decision, decision.recommendation.primaryCandidateId)] : [] }
+        ];
+    }
+    function renderDecisionProcess(decision, activeCandidates, candidates, source) {
+        const steps = buildDecisionProcess(decision, activeCandidates, candidates, source);
+        return `
+            <section class="decision-process" aria-label="决策流程">
+                <div class="card-title"><div><span class="eyebrow">Process</span><h3>这次决策是怎么走到结论的</h3></div></div>
+                <div class="process-rail">
+                    ${steps.map((step, index) => `
+                        <article class="process-step process-step-${escapeHtml(step.status)}">
+                            <span class="process-index">${index + 1}</span>
+                            <div>
+                                <h4>${escapeHtml(step.title)}</h4>
+                                <p>${escapeHtml(step.summary)}</p>
+                                ${step.groups ? `<div class="process-signal-grid">${step.groups.map(([label, items, empty]) => `<section><strong>${escapeHtml(label)}</strong>${renderSignalList(items, empty)}</section>`).join("")}</div>` : ""}
+                                ${step.meta?.length ? `<div class="process-meta">${step.meta.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+                            </div>
+                        </article>
+                    `).join("")}
+                </div>
+            </section>
+        `;
+    }
+    function renderDecisionResultCard(decision, primaryName) {
+        const recommendation = decision.recommendation || {};
+        const assistance = decision.domainState?.assistance || {};
+        const analysis = assistance.currentAnalysis || assistance.analysis || {};
+        const reasons = toArray(recommendation.reasons || analysis.keyReasons || analysis.reasons).map(displayText).filter(Boolean);
+        const tradeoffs = toArray(recommendation.tradeoffs || analysis.tradeoffs).map(displayText).filter(Boolean);
+        const missing = toArray(assistance.missingInfo || analysis.missingInfo || decision.clarifyingQuestions).map(displayText).filter(Boolean);
+        const changeHints = toArray(assistance.whatIfScenarios || analysis.whatIfScenarios || analysis.changeBoundaries).map(displayText).filter(Boolean);
+        return `
+            <section class="decision-result-card">
+                <span class="badge demo-badge">推荐结论</span>
+                <h3>${escapeHtml(primaryName || "待定")}</h3>
+                <p>${escapeHtml(recommendation.summary || analysis.summary || "暂无结论")}</p>
+                <div class="result-grid">
+                    <section><h4>为什么是它</h4>${renderSignalList(reasons, "还没有足够理由形成稳定结论。")}</section>
+                    <section><h4>需要接受的代价</h4>${renderSignalList(tradeoffs, "本轮没有记录明显代价。")}</section>
+                    <section><h4>还缺什么信息</h4>${renderSignalList(missing, "暂无必须补充的信息。")}</section>
+                    <section><h4>什么会改变结论</h4>${renderSignalList(changeHints, "暂未记录变化边界，可继续补充偏好后重算。")}</section>
+                </div>
+            </section>
+        `;
+    }
     function renderGenericDecision(route) { conversation.enter("general", genericRouteId(route)); }
 
     function renderGeneralDetails(decision) {
@@ -948,6 +1083,8 @@
                     </aside>
                     <main class="demo-main">
                         ${decision.status === "clarifying" ? `<form id="genericAnswerForm" class="inline-form"><input name="answer" required placeholder="${escapeHtml((decision.clarifyingQuestions || [])[0] || "补充关键信息")}"><button class="btn primary" type="submit">提交</button></form>` : ""}
+                        ${renderDecisionResultCard(decision, primaryName)}
+                        ${renderDecisionProcess(decision, activeCandidates, candidates, source)}
                         <div class="card-title"><div><h3>候选比较</h3><p>${activeCandidates.length} 个进入比较</p></div></div>
                         ${renderCandidateFunnel(decision, activeCandidates, candidates, source)}
                         <div class="demo-candidates">${candidates.map((candidate) => renderGenericCandidate(candidate, decision)).join("") || `<div class="empty">暂无候选</div>`}</div>
@@ -1054,14 +1191,16 @@
         const excluded = (decision.excludedCandidates || []).includes(candidate.candidateId);
         const breakdown = candidate.scoreBreakdown || [];
         const evidence = candidate.evidence || [];
+        const scoreLabel = decision.domainState?.qualitative || !breakdown.some(p => p.rawValue != null) ? "待比较" : Math.round(Number(candidate.score || 0) * 100) + "%";
         return `
-            <article class="demo-candidate${excluded ? " is-eliminated" : ""}">
+            <article class="demo-candidate candidate-compare-card${excluded ? " is-eliminated" : ""}">
                 <div class="demo-candidate-head">
                     <div><h3>${escapeHtml(candidate.name)}</h3><p>${escapeHtml(candidate.summary || "")}</p></div>
-                    <div class="score-block"><span class="score">${decision.domainState?.qualitative || !breakdown.some(p => p.rawValue != null) ? "待比较" : Math.round(Number(candidate.score || 0) * 100) + "%"}</span><button class="btn ghost" type="button" data-candidate-action="${excluded ? "restore_candidate" : "exclude_candidate"}" data-candidate-id="${escapeHtml(candidate.candidateId)}">${excluded ? "恢复" : "排除"}</button></div>
+                    <div class="score-block"><span class="score">${escapeHtml(scoreLabel)}</span><button class="btn ghost" type="button" data-candidate-action="${excluded ? "restore_candidate" : "exclude_candidate"}" data-candidate-id="${escapeHtml(candidate.candidateId)}">${excluded ? "恢复" : "排除"}</button></div>
                 </div>
-                <div class="attribute-grid">${attrs.map(([key, value]) => `<span><strong>${escapeHtml(key)}</strong>${escapeHtml(Array.isArray(value) ? value.join("、") : value)}</span>`).join("")}</div>
-                ${breakdown.length ? `<div class="demo-list">${breakdown.map((item) => `<div><strong>${escapeHtml(item.criterionKey)}</strong><span>${Math.round(Number(item.normalizedScore || 0))}</span></div>`).join("")}</div>` : ""}
+                ${excluded ? `<p class="candidate-status">已从本轮比较中移除。</p>` : ""}
+                <div class="attribute-grid">${attrs.slice(0, 4).map(([key, value]) => `<span><strong>${escapeHtml(key)}</strong>${escapeHtml(Array.isArray(value) ? value.join("、") : value)}</span>`).join("") || `<span><strong>可比信息</strong>暂缺关键属性</span>`}</div>
+                ${breakdown.length ? `<div class="score-breakdown">${breakdown.slice(0, 4).map((item) => `<div><span>${escapeHtml(item.criterionKey)}</span><meter min="0" max="100" value="${Math.round(Number(item.normalizedScore || 0))}"></meter><strong>${Math.round(Number(item.normalizedScore || 0))}</strong></div>`).join("")}</div>` : `<p class="muted">缺少可比数据，暂不展示评分拆解。</p>`}
                 ${candidate.origin === "manual" ? `<form class="candidate-edit inline-form" data-candidate-id="${escapeHtml(candidate.candidateId)}"><label>候选说明<input name="summary" value="${escapeHtml(candidate.summary || "")}" placeholder="优点与顾虑"></label><button class="btn ghost">保存说明</button></form>` : ""}
                 <details class="evidence-details"><summary>查看候选依据</summary>${window.EvidenceView.candidate(evidence)}</details>
             </article>
