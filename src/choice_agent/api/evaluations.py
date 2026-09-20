@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from choice_agent.api.routes import get_db, get_provider, get_settings, user_id
 from choice_agent.config import Settings
+from choice_agent.evaluation.comparison import EvaluationComparisonError
 from choice_agent.evaluation.schemas import (
     EvaluationCaseCreate,
     EvaluationCaseUpdate,
@@ -14,7 +15,7 @@ from choice_agent.evaluation.schemas import (
     EvaluationReviewUpdate,
     EvaluationRunCreate,
 )
-from choice_agent.evaluation.service import EvaluationService
+from choice_agent.evaluation.service import EvaluationConfigurationError, EvaluationService
 from choice_agent.providers.model import ModelProvider
 from choice_agent.repositories.evaluation_repository import EvaluationConflictError
 
@@ -134,6 +135,23 @@ def create_run(
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except EvaluationConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except EvaluationConfigurationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.get("/comparisons")
+def compare_runs(
+    baseline_run_id: str = Query(alias="baselineRunId"),
+    candidate_run_id: str = Query(alias="candidateRunId"),
+    uid: int = Depends(user_id),
+    evaluation: EvaluationService = Depends(service),
+) -> dict[str, Any]:
+    try:
+        return evaluation.compare_runs(uid, baseline_run_id, candidate_run_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except EvaluationComparisonError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 

@@ -18,6 +18,7 @@ def test_evaluation_metric_catalog_contains_all_dashboard_metrics():
         "correction_coverage",
         "what_if_isolation",
         "llm_fallback_success",
+        "search_fallback_success",
         "agent_execution_failure_rate",
         "average_response_time_ms",
     ]
@@ -43,3 +44,84 @@ def test_evaluation_summary_scores_quality_metrics_and_marks_missing():
     assert summary["coverage"]["evaluatedQualityMetrics"] == 3
     assert summary["caseCounts"]["failed"] == 1
     assert summary["overallScore"] is not None
+
+
+def test_evaluation_summary_aggregates_latency_tokens_cost_and_coverage():
+    summary = summarize_results([
+        {
+            "status": "passed",
+            "assertions": [],
+            "traceSnapshot": {"observability": {
+                "latencyMs": 100,
+                "providerCallCount": 1,
+                "totalTokens": 50,
+                "estimatedCost": 0.001,
+                "knownEstimatedCost": 0.001,
+                "unreportedUsageCallCount": 0,
+                "unknownPriceCallCount": 0,
+            }},
+        },
+        {
+            "status": "passed",
+            "assertions": [],
+            "traceSnapshot": {"observability": {
+                "latencyMs": 300,
+                "providerCallCount": 1,
+                "totalTokens": 150,
+                "estimatedCost": None,
+                "knownEstimatedCost": None,
+                "unreportedUsageCallCount": 0,
+                "unknownPriceCallCount": 1,
+            }},
+        },
+    ])
+
+    performance = summary["performance"]
+    assert performance["averageLatencyMs"] == 200
+    assert performance["p95LatencyMs"] == 300
+    assert performance["totalTokens"] == 200
+    assert performance["averageTokensPerCase"] == 100
+    assert performance["knownEstimatedCost"] == 0.001
+    assert performance["estimatedTotalCost"] is None
+    assert performance["unknownPriceCallCount"] == 1
+
+
+def test_evaluation_summary_uses_trace_observations_for_agent_failure_rate_and_latency():
+    summary = summarize_results([
+        {
+            "status": "passed",
+            "assertions": [],
+            "metrics": {
+                "agent_execution_failure_rate": {
+                    "numerator": 1, "denominator": 4, "eligibleCount": 4,
+                    "evaluatedCount": 4, "failures": [{"agentName": "CandidateAgent"}],
+                },
+                "average_response_time_ms": {
+                    "numerator": 120, "denominator": 1, "eligibleCount": 1,
+                    "evaluatedCount": 1, "failures": [],
+                },
+            },
+        },
+        {
+            "status": "passed",
+            "assertions": [],
+            "metrics": {
+                "agent_execution_failure_rate": {
+                    "numerator": 0, "denominator": 6, "eligibleCount": 6,
+                    "evaluatedCount": 6, "failures": [],
+                },
+                "average_response_time_ms": {
+                    "numerator": 280, "denominator": 1, "eligibleCount": 1,
+                    "evaluatedCount": 1, "failures": [],
+                },
+            },
+        },
+    ])
+
+    metrics = {item["id"]: item for item in summary["metrics"]}
+    assert metrics["agent_execution_failure_rate"]["value"] == 0.1
+    assert metrics["agent_execution_failure_rate"]["numerator"] == 1
+    assert metrics["agent_execution_failure_rate"]["denominator"] == 10
+    assert metrics["agent_execution_failure_rate"]["failures"] == [{"agentName": "CandidateAgent"}]
+    assert metrics["average_response_time_ms"]["value"] == 200
+    assert metrics["average_response_time_ms"]["method"] == "trace_observation"

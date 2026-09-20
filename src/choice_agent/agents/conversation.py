@@ -110,5 +110,7 @@ def interpret(context, provider=None, model=None):
         model_understand(context)
     understood = bool(patch or state(d).get("changes") or operation != "compare" or context.data.get("turn_intent") == "explain")
     context.data["unhandled_turn"] = not understood and not any(w in text for w in ["比较", "帮我选", "选哪个", "推荐", "继续", "谢谢"])
+    if question:
+        context.data["blocking_question"] = question
     context.data["conversation_question"] = question or context.data.get("fact_question")
     return {"intent":operation,"confidence":1.0 if patch else 0.7}

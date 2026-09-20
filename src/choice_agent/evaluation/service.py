@@ -9,6 +9,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from choice_agent.config import Settings
+from choice_agent.evaluation.comparison import EvaluationComparisonError, compare_runs as build_run_comparison
 from choice_agent.evaluation.fixtures import CORE_DATASET, starter_cases, starter_dataset_specs
 from choice_agent.evaluation.metrics import EVALUATOR_VERSION, metric_definitions_json, summarize_results
 from choice_agent.evaluation.runner import EvaluationRunner
@@ -17,10 +18,17 @@ from choice_agent.evaluation.schemas import (
     EvaluationCaseUpdate,
     EvaluationDatasetCreate,
     EvaluationReviewUpdate,
+    CURRENT_PROMPT_VERSION,
+    CURRENT_RULE_VERSION,
+    EvaluationRunConfiguration,
     EvaluationRunCreate,
 )
-from choice_agent.providers.model import ModelProvider
+from choice_agent.providers.model import DisabledProvider, ModelProvider
 from choice_agent.repositories.evaluation_repository import EvaluationConflictError, EvaluationRepository
+
+
+class EvaluationConfigurationError(ValueError):
+    pass
 
 
 class EvaluationService:
@@ -35,14 +43,39 @@ class EvaluationService:
         runs = [self.run_response(row) for row in self.repository.list_runs(owner_id, 20)]
         cases = [self.case_response(row) for row in self.repository.list_cases(owner_id, limit=100)]
         datasets = [self.dataset_response(row) for row in self.repository.list_datasets(owner_id, 50)]
-        latest = next((run for run in runs if run["status"] in {"completed", "partial"}), None)
-        previous = next((run for run in runs if latest and run["id"] != latest["id"] and self._comparable(run, latest)), None)
+        completed = [run for run in runs if run["status"] in {"completed", "partial"}]
+        latest = completed[0] if completed else None
+        candidate = next(
+            (run for run in completed if run["runConfiguration"].get("runLabel") == "candidate"),
+            None,
+        )
+        baseline = next(
+            (run for run in completed if run["runConfiguration"].get("runLabel") == "baseline"),
+            None,
+        )
+        comparison = None
+        comparison_error = None
+        if baseline and candidate:
+            try:
+                full_comparison = self.compare_runs(owner_id, baseline["id"], candidate["id"])
+                comparison = {
+                    "baselineRunId": baseline["id"],
+                    "candidateRunId": candidate["id"],
+                    "scoreDelta": full_comparison["aggregateDelta"]["overallScore"],
+                    "comparable": True,
+                    "caseDiffCounts": full_comparison["caseDiffCounts"],
+                    "baselineSummary": full_comparison["baselineRun"]["summary"],
+                    "candidateSummary": full_comparison["candidateRun"]["summary"],
+                }
+            except EvaluationComparisonError as error:
+                comparison_error = str(error)
         return {
             "evaluatorVersion": EVALUATOR_VERSION,
             "metricDefinitions": metric_definitions_json(),
             "latestRun": latest,
-            "previousRun": previous,
-            "comparison": self._comparison(latest, previous),
+            "previousRun": baseline,
+            "comparison": comparison,
+            "comparisonError": comparison_error,
             "runs": runs,
             "cases": cases,
             "datasets": datasets,
@@ -119,8 +152,19 @@ class EvaluationService:
 
     def create_run(self, owner_id: int, body: EvaluationRunCreate) -> dict[str, Any]:
         self.ensure_starter_cases(owner_id)
+        run_configuration = self._effective_run_configuration(body)
+        if run_configuration.provider == "configured" and (
+            self.provider is None or not self.provider.enabled
+        ):
+            raise EvaluationConfigurationError("configured provider 未启用")
         request_id = body.request_id or uuid4().hex
-        fingerprint = _hash_json(body.model_dump(mode="json", by_alias=True, exclude={"request_id"}))
+        fingerprint_payload = body.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude={"request_id", "run_configuration", "model_name"},
+        )
+        fingerprint_payload["runConfiguration"] = run_configuration.model_dump(mode="json", by_alias=True)
+        fingerprint = _hash_json(fingerprint_payload)
         existing = self.repository.run_by_request(owner_id, request_id)
         if existing is not None:
             if existing.fingerprint != fingerprint:
@@ -131,6 +175,12 @@ class EvaluationService:
             raise KeyError("Dataset 不存在或无权限访问")
         snapshots = dataset.case_snapshots if dataset else [self.case_response(row) for row in self.repository.list_cases(owner_id, limit=body.limit)]
         snapshots = snapshots[: body.limit]
+        stored_config = {
+            **body.config,
+            "limit": body.limit,
+            "repeat": body.repeat,
+            "runConfiguration": run_configuration.model_dump(mode="json", by_alias=True),
+        }
         run = self.repository.add_run(
             owner_id,
             {
@@ -144,8 +194,8 @@ class EvaluationService:
                 "dataset_version": dataset.version if dataset else "adhoc",
                 "dataset_hash": dataset.dataset_hash if dataset else _hash_json(snapshots),
                 "mode": body.mode,
-                "model_name": body.model_name,
-                "config_json": {**body.config, "limit": body.limit, "repeat": body.repeat},
+                "model_name": run_configuration.model,
+                "config_json": stored_config,
                 "status": "running",
                 "summary_json": {},
             },
@@ -154,7 +204,7 @@ class EvaluationService:
         runner = EvaluationRunner(self.db, settings=self.settings, provider=self.provider)
         for snapshot in snapshots:
             for repetition in range(1, body.repeat + 1):
-                output = runner.run_case(owner_id, snapshot)
+                output = runner.run_case(owner_id, snapshot, run_configuration)
                 result = self.repository.add_result(
                     {
                         "run_id": run.id,
@@ -184,6 +234,39 @@ class EvaluationService:
                 if row.name == CORE_DATASET["name"] and row.version == CORE_DATASET["version"]
             ),
             None,
+        )
+
+    def compare_runs(self, owner_id: int, baseline_run_id: str, candidate_run_id: str) -> dict[str, Any]:
+        baseline_row = self.repository.get_run(owner_id, baseline_run_id)
+        candidate_row = self.repository.get_run(owner_id, candidate_run_id)
+        if baseline_row is None or candidate_row is None:
+            raise KeyError("Run 不存在或无权限访问")
+        baseline_run = self.run_response(baseline_row)
+        candidate_run = self.run_response(candidate_row)
+        baseline_results = [self.result_response(item) for item in self.repository.list_results(baseline_row.id)]
+        candidate_results = [self.result_response(item) for item in self.repository.list_results(candidate_row.id)]
+        case_ids = {item["caseId"] for item in baseline_results + candidate_results}
+        case_titles = {}
+        if baseline_row.dataset_id:
+            dataset = self.repository.get_dataset(owner_id, baseline_row.dataset_id)
+            if dataset is not None:
+                case_titles.update(
+                    {
+                        snapshot["id"]: snapshot.get("title") or snapshot["id"]
+                        for snapshot in dataset.case_snapshots or []
+                        if snapshot.get("id") in case_ids
+                    }
+                )
+        for case_id in case_ids - case_titles.keys():
+            row = self.repository.get_case(owner_id, case_id)
+            if row is not None:
+                case_titles[case_id] = row.title
+        return build_run_comparison(
+            baseline_run,
+            candidate_run,
+            baseline_results,
+            candidate_results,
+            case_titles=case_titles,
         )
 
     def update_review(self, owner_id: int, result_id: str, body: EvaluationReviewUpdate) -> dict[str, Any]:
@@ -235,6 +318,7 @@ class EvaluationService:
         }
 
     def run_response(self, row, *, include_results: bool = False) -> dict[str, Any]:
+        run_configuration = self._run_configuration_from_row(row)
         response = {
             "id": row.id,
             "requestId": row.request_id,
@@ -248,6 +332,7 @@ class EvaluationService:
             "datasetHash": row.dataset_hash,
             "mode": row.mode,
             "modelName": row.model_name,
+            "runConfiguration": run_configuration,
             "config": row.config_json or {},
             "status": row.status,
             "summary": row.summary_json or {},
@@ -289,23 +374,30 @@ class EvaluationService:
             elif result["status"] == "failed" and row.status == "verified":
                 self.repository.update_case(row, row.revision, {"status": "reopened"})
 
-    @staticmethod
-    def _comparable(left: dict[str, Any], right: dict[str, Any]) -> bool:
-        keys = ["datasetHash", "evaluatorVersion", "mode", "modelName"]
-        return all(left.get(key) == right.get(key) for key in keys)
+    def _effective_run_configuration(self, body: EvaluationRunCreate) -> EvaluationRunConfiguration:
+        if body.run_configuration is not None:
+            return body.run_configuration
+        provider = "configured" if self.provider is not None and self.provider.enabled else "disabled"
+        return EvaluationRunConfiguration(
+            model=body.model_name or self.settings.main_model,
+            provider=provider,
+            prompt_version=CURRENT_PROMPT_VERSION,
+            rule_version=CURRENT_RULE_VERSION,
+            run_label="candidate",
+        )
 
     @staticmethod
-    def _comparison(latest: dict[str, Any] | None, previous: dict[str, Any] | None) -> dict[str, Any] | None:
-        if not latest or not previous:
-            return None
-        latest_score = latest.get("summary", {}).get("overallScore")
-        previous_score = previous.get("summary", {}).get("overallScore")
-        if latest_score is None or previous_score is None:
-            return None
+    def _run_configuration_from_row(row) -> dict[str, Any]:
+        config = row.config_json or {}
+        stored = config.get("runConfiguration")
+        if isinstance(stored, dict):
+            return stored
         return {
-            "baselineRunId": previous["id"],
-            "scoreDelta": round(latest_score - previous_score, 2),
-            "comparable": True,
+            "model": row.model_name or "unknown",
+            "provider": "legacy",
+            "promptVersion": "legacy-unversioned",
+            "ruleVersion": "legacy-unversioned",
+            "runLabel": "candidate",
         }
 
 

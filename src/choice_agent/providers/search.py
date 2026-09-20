@@ -9,10 +9,21 @@ from uuid import uuid4
 
 from choice_agent.agents.base import AgentContext
 from choice_agent.providers.candidates import CandidateSearchResult
+from choice_agent.providers.observability import (
+    ProviderCallResult,
+    ProviderResponseError,
+    metadata_from_usage,
+    prompt_fingerprint,
+)
 from choice_agent.schemas import Candidate, Evidence, SearchRun, SourceDocument
 
 
 Transport = Callable[[Request, float], dict[str, Any]]
+SEARCH_INSTRUCTION = (
+    "Research real options for this decision. Return strict JSON with a candidates array. "
+    "Each candidate needs id, name, summary, attributes, and evidence. Each evidence item "
+    "needs key, value, claim, sourceTitle, and sourceUrl. Use only URLs returned by web search."
+)
 
 
 class SearchProviderError(RuntimeError):
@@ -24,13 +35,15 @@ class OpenAIWebSearchProvider:
 
     def __init__(self, api_key: str, base_url: str, model: str,
                  timeout_seconds: float = 20.0, max_queries: int = 2,
-                 transport: Transport | None = None):
+                 transport: Transport | None = None,
+                 pricing: dict[str, dict[str, float]] | None = None):
         self.api_key = api_key.strip()
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.max_queries = max(1, max_queries)
         self.transport = transport or self._send
+        self.pricing = pricing or {}
 
     @property
     def enabled(self) -> bool:
@@ -46,9 +59,7 @@ class OpenAIWebSearchProvider:
             "tool_choice": "required",
             "max_tool_calls": self.max_queries,
             "input": (
-                "Research real options for this decision. Return strict JSON with a candidates array. "
-                "Each candidate needs id, name, summary, attributes, and evidence. Each evidence item "
-                "needs key, value, claim, sourceTitle, and sourceUrl. Use only URLs returned by web search.\n"
+                SEARCH_INSTRUCTION + "\n"
                 f"Domain: {context.decision.domain}\nGoal: {context.decision.user_goal}\n"
                 f"Confirmed/current fields (override original goal): {json.dumps(context.decision.domain_state.get('conversationFields', {}), ensure_ascii=False)}\n"
                 f"Current message: {context.message}\nCriteria: "
@@ -64,40 +75,50 @@ class OpenAIWebSearchProvider:
         )
         last_error: Exception | None = None
         for attempt in range(2):
-            node_id = (
-                context.trace.start_node(
-                    "Candidate Retrieval",
-                    "operation",
-                    f"Web Search 尝试 {attempt + 1}",
-                    input_payload={"provider": self.name, "model": self.model, "body": body},
-                )
-                if context.trace
-                else None
-            )
             try:
-                payload = self.transport(request, self.timeout_seconds)
-                result = self._parse(payload, context)
-                if node_id and context.trace:
-                    context.trace.finish_node(
-                        node_id,
-                        "success",
-                        output_payload={
-                            "candidateCount": len(result.candidates),
-                            "sourceCount": len(result.sources),
-                            "runId": result.run.run_id if result.run else None,
+                execute = lambda: self._attempt(request, context, attempt)
+                result = (
+                    context.trace.provider_call(
+                        stage="Candidate Retrieval",
+                        kind="search",
+                        provider=self.name,
+                        model=self.model,
+                        prompt_template=SEARCH_INSTRUCTION,
+                        input_payload={"body": body, "attempt": attempt + 1},
+                        call=execute,
+                        retry_count=attempt,
+                        output_mapper=lambda item: {
+                            "candidateCount": len(item.candidates),
+                            "sourceCount": len(item.sources),
+                            "runId": item.run.run_id if item.run else None,
                         },
                     )
+                    if context.trace
+                    else execute().value
+                )
                 return result
             except (HTTPError, URLError, TimeoutError, ValueError, KeyError, TypeError) as error:
                 last_error = error
-                if node_id and context.trace:
-                    context.trace.finish_node(
-                        node_id,
-                        "failed",
-                        output_payload={"errorType": type(error).__name__, "error": str(error)},
-                        error=f"{type(error).__name__}: {error}",
-                    )
         raise SearchProviderError(f"Web Search 失败：{last_error}") from last_error
+
+    def _attempt(self, request: Request, context: AgentContext, retry_count: int) -> ProviderCallResult[CandidateSearchResult]:
+        payload = self.transport(request, self.timeout_seconds)
+        metadata = metadata_from_usage(
+            payload.get("usage"),
+            provider=self.name,
+            model=str(payload.get("model") or self.model),
+            prompt_version=prompt_fingerprint(SEARCH_INSTRUCTION),
+            pricing=self.pricing,
+            retry_count=retry_count,
+        )
+        try:
+            result = self._parse(payload, context)
+        except (ValueError, KeyError, TypeError) as error:
+            raise ProviderResponseError(
+                f"Invalid search response: {type(error).__name__}: {error}",
+                metadata,
+            ) from error
+        return ProviderCallResult(result, metadata)
 
     def _send(self, request: Request, timeout: float) -> dict[str, Any]:
         with urlopen(request, timeout=timeout) as response:

@@ -298,7 +298,9 @@
         list: (params) => decisionHistoryRequest(`${toQuery(params)}`),
         get: (decisionId) => decisionHistoryRequest(`/${encodeURIComponent(decisionId)}`),
         saveOutcome: (decisionId, payload) => decisionHistoryRequest(`/${encodeURIComponent(decisionId)}/outcome`, { method: "PUT", body: payload }),
-        clearOutcome: (decisionId, revision) => decisionHistoryRequest(`/${encodeURIComponent(decisionId)}/outcome${toQuery({ revision })}`, { method: "DELETE" })
+        clearOutcome: (decisionId, revision) => decisionHistoryRequest(`/${encodeURIComponent(decisionId)}/outcome${toQuery({ revision })}`, { method: "DELETE" }),
+        saveOutcomeReview: (decisionId, payload) => decisionHistoryRequest(`/${encodeURIComponent(decisionId)}/outcome/review`, { method: "PUT", body: payload }),
+        clearOutcomeReview: (decisionId, revision) => decisionHistoryRequest(`/${encodeURIComponent(decisionId)}/outcome/review${toQuery({ revision })}`, { method: "DELETE" })
     };
 
     window.EvaluationApi = {

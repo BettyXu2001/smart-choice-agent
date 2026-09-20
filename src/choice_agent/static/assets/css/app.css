@@ -2737,3 +2737,52 @@ body[data-theme="pop"] .demo-trace span {
         text-align: left;
     }
 }
+
+.decision-quality .quality-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin: 10px 0;
+}
+
+.decision-quality .quality-grid > div {
+    display: grid;
+    gap: 3px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--field-bg);
+}
+
+.decision-quality .quality-grid span,
+.decision-quality .quality-grid small {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.decision-quality .quality-grid strong {
+    color: var(--text);
+    font-size: 16px;
+}
+
+.decision-quality .quality-high { color: var(--success, #2f7d4a); }
+.decision-quality .quality-medium { color: var(--warning, #9a6700); }
+.decision-quality .quality-low { color: var(--danger, #b42318); }
+
+.quality-warning {
+    margin: 5px 0 0;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.outcome-review {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+}
+
+@media (max-width: 620px) {
+    .decision-quality .quality-grid {
+        grid-template-columns: 1fr;
+    }
+}

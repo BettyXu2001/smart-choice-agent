@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from choice_agent.database import Base
@@ -135,6 +135,15 @@ class AgentRunRecord(Base):
     decision_id: Mapped[str] = mapped_column(String(64), index=True)
     agent_name: Mapped[str] = mapped_column(String(128))
     model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    retry_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fallback_used: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    fallback_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32))
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     input_payload: Mapped[dict[str, Any] | str | None] = mapped_column(JSON, nullable=True)

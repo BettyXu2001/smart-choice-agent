@@ -58,8 +58,9 @@ class ComparisonProfile(DomainProfile):
         }
 
     def clarify(self, context: AgentContext) -> dict[str, Any]:
-        if context.data.get("conversation_question") or self.needs_clarification(context):
-            question = context.data.get("conversation_question") or self.clarification_question
+        blocking_question = context.data.get("blocking_question")
+        if blocking_question or self.needs_clarification(context):
+            question = blocking_question or self.clarification_question
             context.decision.clarifying_questions = [question]
             context.decision.unanswered_questions = [
                 UnansweredQuestion(key=f"{self.key}_context", question=question, asked_by="ClarificationAgent")
@@ -141,6 +142,7 @@ class ComparisonProfile(DomainProfile):
             context.decision, candidates, self.evaluator, diagnostics=ranking_diagnostics
         )
         sync_decision_evidence(context.decision)
+        self._update_decision_quality(context.decision)
         counts = context.decision.domain_state.get("rankingCounts", {})
         if context.trace:
             context.trace.node(
@@ -185,6 +187,7 @@ class ComparisonProfile(DomainProfile):
             context.decision, pool, self.evaluator, diagnostics=ranking_diagnostics
         )
         sync_decision_evidence(context.decision)
+        self._update_decision_quality(context.decision)
         counts = context.decision.domain_state.get("rankingCounts", {})
         if context.trace:
             context.trace.node(
@@ -243,6 +246,20 @@ class ComparisonProfile(DomainProfile):
         ]
 
     @staticmethod
+    def _update_decision_quality(decision) -> None:
+        from choice_agent.decision.assistance import state
+        from choice_agent.decision.clarification import select_decision_question
+        from choice_agent.decision.quality import assess_decision_quality
+
+        decision.quality_assessment = assess_decision_quality(decision)
+        info = state(decision)
+        question = select_decision_question(decision)
+        if question:
+            info["decisionQuestion"] = question.model_dump(mode="json", by_alias=True)
+        else:
+            info.pop("decisionQuestion", None)
+
+    @staticmethod
     def _source_label(mode: str, sources: list[Any]) -> str:
         if mode == "web":
             return "实时 Web Search"
@@ -265,13 +282,12 @@ class ComparisonProfile(DomainProfile):
                 result = self.candidate_provider.search(context)
                 result.warnings.append(f"Web Search 失败，已回退 fixture：{error}")
                 if context.trace:
-                    context.trace.node(
-                        "Fallback",
-                        "operation",
-                        "fallback",
-                        "Web Search 失败，已回退 fixture 候选",
-                        input_payload={"mode": mode, "provider": getattr(self.web_provider, "name", "web")},
-                        output_payload={"fallbackProvider": self.candidate_provider.name, "error": str(error)},
+                    context.trace.fallback(
+                        stage="Fallback",
+                        reason=f"Web Search 失败，已回退 fixture 候选：{type(error).__name__}: {error}",
+                        from_path=f"web_search:{getattr(self.web_provider, 'name', 'web')}",
+                        to_path=f"fixture_search:{self.candidate_provider.name}",
+                        details={"mode": mode, "error": str(error)},
                     )
                 return result
         return self.candidate_provider.search(context)

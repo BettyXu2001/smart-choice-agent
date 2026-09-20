@@ -47,3 +47,68 @@ def test_general_decision_process_visualization_is_user_facing():
     assert "什么会改变结论" in source
     assert "candidate-compare-card" in source
     assert "score-breakdown" in source
+
+
+def test_general_details_has_only_one_recommendation_card():
+    source = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    details = source[source.index("function renderGeneralDetails") : source.index("function sendGenericCommand")]
+
+    assert details.count("${renderDecisionResultCard(decision, primaryName)}") == 1
+    assert "demo-recommendation" not in details
+
+
+def test_general_details_reuses_complete_domain_labels():
+    source = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    demo = (STATIC_JS / "demo.js").read_text(encoding="utf-8")
+    index = (STATIC_JS.parents[1] / "index.html").read_text(encoding="utf-8")
+    details = source[source.index("function renderGeneralDetails") : source.index("function sendGenericCommand")]
+    labels = demo[demo.index("const domainLabels") : demo.index("function nowIso")]
+
+    assert "ChoiceAgentDemo.domainLabels[decision.domain] || decision.domain" in details
+    assert "const labels =" not in details
+    for key, label in {"career": "职业选择", "learning": "学习路径", "diet": "饮食决策"}.items():
+        assert f'{key}: "{label}"' in labels
+    assert index.index("assets/js/demo.js") < index.index("assets/js/app.js")
+
+
+def test_candidate_fields_use_criteria_labels_units_and_key_fallback():
+    source = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    candidate = source[source.index("function renderGenericCandidate") : source.index("function renderDemoWorkbench")]
+
+    assert "item.key === key" in candidate
+    assert "criterion.key === item.criterionKey" in candidate
+    assert "escapeHtml(criterion?.label || key)" in candidate
+    assert "escapeHtml(criterion?.label || item.criterionKey)" in candidate
+    assert 'criterion?.unit || ""' in candidate
+    assert "escapeHtml(unit)" in candidate
+    assert 'value != null && value !== ""' in candidate
+    assert "escapeHtml(key)</strong>" not in candidate
+    assert "${escapeHtml(item.criterionKey)}" not in candidate
+
+
+def test_general_details_preserves_candidate_weight_and_evidence_controls():
+    source = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    details = source[source.index("function renderGeneralDetails") : source.index("function sendGenericCommand")]
+    candidate = source[source.index("function renderGenericCandidate") : source.index("function renderDemoWorkbench")]
+
+    assert 'excluded ? "restore_candidate" : "exclude_candidate"' in candidate
+    assert 'data-candidate-id="${escapeHtml(candidate.candidateId)}"' in candidate
+    assert "sendGenericCommand(button.dataset.candidateAction, { candidateId: button.dataset.candidateId })" in details
+    assert 'data-weight="${escapeHtml(item.key)}"' in details
+    assert 'sendGenericCommand("set_criterion_weight", { criterionKey: input.dataset.weight, weight: Number(input.value) })' in details
+    assert '<details class="evidence-details"><summary>查看候选依据</summary>${window.EvidenceView.candidate(evidence)}</details>' in candidate
+
+
+def test_decision_quality_and_outcome_review_are_wired_to_user_ui():
+    conversation = (STATIC_JS / "conversation.js").read_text(encoding="utf-8")
+    app = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    api = (STATIC_JS / "api.js").read_text(encoding="utf-8")
+
+    assert "数据完整度" in conversation
+    assert "结论稳健度" in conversation
+    assert "不是 AI 正确概率" in conversation
+    assert "补充这个信息" in conversation
+    assert "decisionOutcomeReviewForm" in app
+    assert "待复盘实际结果" in app
+    assert "saveOutcomeReview" in api
+    assert "clearOutcomeReview" in api

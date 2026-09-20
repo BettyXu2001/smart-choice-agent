@@ -61,21 +61,11 @@ def official_change(decision, baseline: dict[str, Any] | None, analysis: dict[st
 
 
 def missing_info(decision, analysis: dict[str, Any]) -> list[str]:
+    decision_question = analysis.get("decisionQuestion")
+    if isinstance(decision_question, dict) and decision_question.get("question"):
+        return [str(decision_question["question"])]
     question = analysis.get("question")
-    items: list[str] = [question] if question else []
-    if decision.domain == "generic":
-        facts = decision.domain_state.get("assistance", {}).get("facts", [])
-        commute_known = {fact.get("candidateId") for fact in facts if fact.get("kind") == "commute"}
-        salary_known = {fact.get("candidateId") for fact in facts if fact.get("kind") == "salary"}
-        pool = decision.domain_state.get("manualCandidates") or decision.domain_state.get("candidatePool", [])
-        if len(pool) >= 2 and 0 < len(commute_known) < len(pool):
-            items.append("仍缺少部分候选的通勤时间，若通勤是硬条件，结论可能变化。")
-        if len(pool) >= 2 and 0 < len(salary_known) < len(pool):
-            items.append("仍缺少部分候选的薪资信息，若薪资权重提高，结论可能变化。")
-        if not any("工作强度" in str(fact.get("text", "")) or "加班" in str(fact.get("text", "")) for fact in facts):
-            items.append("当前仍缺少实际工作强度信息，如果这一点很重要，结论可能发生变化。")
-    return list(dict.fromkeys(item for item in items if item))[:3]
-
+    return [str(question)] if question else []
 
 def scenarios(decision, analysis: dict[str, Any]) -> list[dict[str, Any]]:
     current = decision.domain_state.get("conversationFields", {})

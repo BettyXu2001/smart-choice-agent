@@ -7,6 +7,13 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from choice_agent.db_models import AgentRunRecord, TraceRecord
+from choice_agent.providers.observability import (
+    ProviderCallMetadata,
+    ProviderCallResult,
+    ProviderResponseError,
+    prompt_fingerprint,
+    result_metadata,
+)
 from choice_agent.repositories.trace_repository import TraceRepository
 from choice_agent.schemas import AgentRun
 
@@ -46,7 +53,12 @@ def _limit_text(value: str, limit: int = _TEXT_LIMIT) -> str | dict[str, Any]:
 
 def _redact(value: Any, key_hint: str | None = None) -> Any:
     key_lower = (key_hint or "").lower()
-    if key_lower and any(marker.lower() in key_lower for marker in _SENSITIVE_KEYS):
+    compact_key = key_lower.replace("_", "").replace("-", "")
+    is_token_count = (
+        compact_key in {"inputtokens", "outputtokens", "totaltokens"}
+        and (value is None or (isinstance(value, int) and not isinstance(value, bool) and value >= 0))
+    )
+    if key_lower and not is_token_count and any(marker.lower() in key_lower for marker in _SENSITIVE_KEYS):
         return "[REDACTED]"
     value = _jsonable(value)
     if isinstance(value, dict):
@@ -166,7 +178,7 @@ class TraceScope:
         self.started = perf_counter()
         self.events: list[dict[str, Any]] = []
         self.timeline: list[dict[str, Any]] = []
-        self.metadata: dict[str, Any] = {"schemaVersion": 2}
+        self.metadata: dict[str, Any] = {"schemaVersion": 3}
         self.turn_summary: dict[str, Any] = {}
         self.recommendation_before: dict[str, Any] | None = None
         self.initial_snapshot: dict[str, Any] | None = None
@@ -174,6 +186,7 @@ class TraceScope:
         self.status = "SUCCESS"
         self.error_message: str | None = None
         self.closed = False
+        self._agent_calls: list[dict[str, Any]] = []
 
     def begin_turn(
         self,
@@ -300,6 +313,97 @@ class TraceScope:
             status = "unchanged"
         return {"status": status, "before": before, "after": after}
 
+    def begin_agent_call(self) -> None:
+        self._agent_calls.append({"providerCalls": [], "fallbackReasons": []})
+
+    def end_agent_call(self) -> dict[str, Any]:
+        state = self._agent_calls.pop() if self._agent_calls else {"providerCalls": [], "fallbackReasons": []}
+        calls: list[ProviderCallMetadata] = state["providerCalls"]
+        providers = {item.provider for item in calls if item.provider}
+        models = {item.model for item in calls if item.model}
+        prompt_versions = {item.prompt_version for item in calls if item.prompt_version}
+        input_values = [item.input_tokens for item in calls if item.input_tokens is not None]
+        output_values = [item.output_tokens for item in calls if item.output_tokens is not None]
+        total_values = [item.total_tokens for item in calls if item.total_tokens is not None]
+        costs = [item.estimated_cost for item in calls if item.estimated_cost is not None]
+        complete_cost = bool(calls) and len(costs) == len(calls)
+        reasons = list(dict.fromkeys(state["fallbackReasons"]))
+        return {
+            "provider": next(iter(providers)) if len(providers) == 1 else None,
+            "model_name": next(iter(models)) if len(models) == 1 else None,
+            "prompt_version": next(iter(prompt_versions)) if len(prompt_versions) == 1 else None,
+            "input_tokens": sum(input_values) if input_values else None,
+            "output_tokens": sum(output_values) if output_values else None,
+            "total_tokens": sum(total_values) if total_values else None,
+            "estimated_cost": round(sum(costs), 12) if complete_cost else None,
+            "retry_count": max((item.retry_count for item in calls), default=0),
+            "fallback_used": bool(reasons),
+            "fallback_reason": "; ".join(reasons) if reasons else None,
+        }
+
+    def provider_call(
+        self,
+        *,
+        stage: str,
+        kind: str,
+        provider: Any,
+        model: str | None,
+        prompt_template: str | None,
+        input_payload: Any,
+        call: Callable[[], Any],
+        retry_count: int = 0,
+        output_mapper: Callable[[Any], Any] | None = None,
+    ) -> Any:
+        provider_name = provider if isinstance(provider, str) else getattr(provider, "name", type(provider).__name__)
+        fallback_metadata = ProviderCallMetadata(
+            provider=provider_name,
+            model=model,
+            prompt_version=prompt_fingerprint(prompt_template) if prompt_template is not None else None,
+            retry_count=max(0, retry_count),
+        )
+        node_id = self.start_node(
+            stage,
+            kind,
+            f"调用 {provider_name} / {model or 'unknown'}",
+            input_payload={
+                "provider": provider_name,
+                "model": model,
+                "promptVersion": fallback_metadata.prompt_version,
+                "retryCount": fallback_metadata.retry_count,
+                "request": input_payload,
+            },
+        )
+        try:
+            raw_result = call()
+        except Exception as error:
+            metadata = error.metadata if isinstance(error, ProviderResponseError) else fallback_metadata
+            self._record_provider_call(metadata)
+            self.finish_node(
+                node_id,
+                "failed",
+                output_payload={
+                    **metadata.as_dict(),
+                    "errorType": type(error).__name__,
+                    "error": str(error),
+                },
+                error=f"{type(error).__name__}: {error}",
+            )
+            raise
+        if isinstance(raw_result, ProviderCallResult):
+            result = raw_result.value
+            metadata = raw_result.metadata
+        else:
+            result = raw_result
+            metadata = result_metadata(raw_result) or fallback_metadata
+        self._record_provider_call(metadata)
+        rendered = output_mapper(result) if output_mapper else result
+        self.finish_node(
+            node_id,
+            "success",
+            output_payload={**metadata.as_dict(), "result": rendered},
+        )
+        return result
+
     def model_call(
         self,
         stage: str,
@@ -307,29 +411,48 @@ class TraceScope:
         system_prompt: str,
         user_prompt: str,
         call: Callable[[], Any],
+        *,
+        provider: Any = "model-provider",
     ) -> Any:
-        node_id = self.start_node(
+        return self.provider_call(
+            stage=stage,
+            kind="model",
+            provider=provider,
+            model=model,
+            prompt_template=system_prompt,
+            input_payload={"systemPrompt": system_prompt, "userPrompt": user_prompt},
+            call=call,
+        )
+
+    def fallback(
+        self,
+        *,
+        stage: str,
+        reason: str,
+        from_path: str,
+        to_path: str,
+        details: Any = None,
+    ) -> str:
+        if self._agent_calls:
+            self._agent_calls[-1]["fallbackReasons"].append(reason)
+        return self.node(
             stage,
-            "model",
-            f"调用模型 {model or 'unknown'}",
-            input_payload={
-                "model": model,
-                "systemPrompt": system_prompt,
-                "userPrompt": user_prompt,
+            "operation",
+            "fallback",
+            reason,
+            input_payload={"fromPath": from_path},
+            output_payload={
+                "fallbackUsed": True,
+                "fallbackReason": reason,
+                "fromPath": from_path,
+                "toPath": to_path,
+                "details": details,
             },
         )
-        try:
-            result = call()
-        except Exception as error:
-            self.finish_node(
-                node_id,
-                "failed",
-                output_payload={"errorType": type(error).__name__, "error": str(error)},
-                error=f"{type(error).__name__}: {error}",
-            )
-            raise
-        self.finish_node(node_id, "success", output_payload={"result": result})
-        return result
+
+    def _record_provider_call(self, metadata: ProviderCallMetadata) -> None:
+        if self._agent_calls:
+            self._agent_calls[-1]["providerCalls"].append(metadata)
 
     def event(self, event_type: str, phase: str, input_payload: Any, output_payload: Any) -> None:
         self.events.append(
@@ -359,6 +482,15 @@ class TraceScope:
                 decision_id=decision_id,
                 agent_name=run.agent_name,
                 model_name=run.model_name,
+                provider=run.provider,
+                prompt_version=run.prompt_version,
+                input_tokens=run.input_tokens,
+                output_tokens=run.output_tokens,
+                total_tokens=run.total_tokens,
+                estimated_cost=run.estimated_cost,
+                retry_count=run.retry_count,
+                fallback_used=run.fallback_used,
+                fallback_reason=run.fallback_reason,
                 status=run.status,
                 latency_ms=run.latency_ms,
                 input_payload=_jsonable(run.input_payload),
@@ -386,7 +518,7 @@ class TraceScope:
             "userId": self.user_id,
             "status": self.status,
             "durationMs": duration_ms,
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "metadata": {**self.metadata, "commitStatus": self.commit_status},
             "turnSummary": self.turn_summary,
             "recommendationChange": self.turn_summary.get("recommendationChange"),

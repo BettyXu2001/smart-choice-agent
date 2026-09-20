@@ -1,5 +1,17 @@
 # Changelog
 
+### 2026-09-20
+
+- Reliability Regression Dataset 升级至 v2，新增 LLM invalid JSON、Search fallback/非法响应和 Agent execution failure 等真实 Orchestrator Case，并补齐 Search fallback、Agent 失败率与响应延迟指标。
+- 模型与 Search 调用 Trace 新增 Provider、Prompt 版本、真实 Token usage、可配置成本、重试和统一 Fallback 记录，Evaluation Run 可聚合延迟、P95、Token 与成本，并兼容旧 AgentRun 数据库。
+- Evaluation Run 新增 model、provider、promptVersion、ruleVersion 和 baseline/candidate 标签的独立配置，模型与 provider 配置会真实作用于隔离回归执行。
+- Evaluation 新增同 Dataset 双 Run 的严格版本比较、五类逐 Case Diff，以及 overall、category、metric 和 Case 状态的双版本聚合结果。
+
+### 2026-09-19
+
+- 移除通用决策详情重复的推荐结论，复用领域中文标签，候选属性和评分维度优先显示标准名称及属性单位。
+- 通用决策新增匹配分、数据完整度与有限扰动稳健度，追问仅保留可能改变第一名的关键信息，并支持在历史决策中记录实际结果复盘。
+
 ### 2026-09-12
 
 - 通用决策前端新增用户侧流程可视化：首页展示决策流程预览，详情页展示信息分层、候选召回、过滤比较、取舍和推荐结果卡。

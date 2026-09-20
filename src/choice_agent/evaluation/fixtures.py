@@ -4,7 +4,7 @@ from choice_agent.evaluation.schemas import EvaluationCaseCreate
 
 
 CORE_DATASET = {"name": "core-regression", "version": "v1"}
-FAULT_DATASET = {"name": "fault-injection-reliability", "version": "v1"}
+FAULT_DATASET = {"name": "fault-injection-reliability", "version": "v2"}
 
 OFFER = "比较两个 Offer\n以下为演示候选：\nA 公司：AI 产品方向更匹配，成长空间更大，但业务阶段较早；B 公司：平台成熟、薪酬稳定，岗位内容更偏传统产品。"
 LEARNING = "选择入门 AI Agent 的学习路径\n以下为演示候选：\n结构化在线课程：路径完整、上手稳定，适合需要系统框架的学习者；开源项目实战：实践反馈快，但需要自行补齐概念和调试能力；文档与论文路线：信息质量高、自由度大，但学习路径容易分散。"
@@ -113,24 +113,57 @@ def core_regression_cases() -> list[EvaluationCaseCreate]:
 
 def fault_injection_cases() -> list[EvaluationCaseCreate]:
     return [
-        _case("fault-injection-v1.model-timeout", "模型 timeout 后规则降级", OFFER, "模型解释 timeout 时应使用 rules_fallback。", [OFFER, "更看重稳定"], [
+        _case("fault-injection-v2.model-timeout", "模型 timeout 后规则降级", OFFER, "模型 timeout 时应返回有效规则结果、保持 DecisionState 并记录 fallback。", [OFFER, "更看重稳定"], [
             _a("llm_fallback_success", "decisionState.domainState.assistance.analysis.mode", "equals", "rules_fallback"),
-            _a("agent_execution_failure_rate", "decisionState.domainState.assistance.warning", "contains", "TimeoutError", required=False),
+            _a("llm_fallback_success", "decisionState.recommendation.primaryCandidateId", "non_empty"),
+            _a("llm_fallback_success", "decisionState.revision", "non_empty"),
+            _a("llm_fallback_success", "execution.status", "equals", "success"),
+            _a("llm_fallback_success", "traceSnapshot.traceJson.timeline", "contains", "fallback"),
+            _a("llm_fallback_success", "traceSnapshot.traceJson.metadata.commitStatus", "equals", "committed"),
         ], setup={"mockModel": "timeout"}, dataset=FAULT_DATASET, tags=["fault_injection", "model"]),
-        _case("fault-injection-v1.model-unknown-candidate", "模型未知候选被拒绝", OFFER, "模型返回未知候选 id 时应回退规则解释。", [OFFER, "更看重稳定"], [
+        _case("fault-injection-v2.model-invalid-json", "模型 invalid JSON 后规则降级", OFFER, "模型结构化解析失败时不应导致请求 500，应返回有效规则结果并记录 fallback。", [OFFER, "更看重稳定"], [
+            _a("llm_fallback_success", "decisionState.domainState.assistance.analysis.mode", "equals", "rules_fallback"),
+            _a("llm_fallback_success", "decisionState.recommendation.primaryCandidateId", "non_empty"),
+            _a("llm_fallback_success", "execution.status", "equals", "success"),
+            _a("llm_fallback_success", "traceSnapshot.traceJson.timeline", "contains", "JSONDecodeError"),
+            _a("llm_fallback_success", "traceSnapshot.traceJson.timeline", "contains", "fallback"),
+        ], setup={"mockModel": "invalid_json"}, dataset=FAULT_DATASET, tags=["fault_injection", "model", "invalid_json"]),
+        _case("fault-injection-v2.model-unknown-candidate", "模型未知候选被拒绝", OFFER, "模型返回未知候选 id 时应回退规则解释。", [OFFER, "更看重稳定"], [
             _a("llm_fallback_success", "decisionState.domainState.assistance.analysis.mode", "equals", "rules_fallback"),
             _a("excluded_candidate_recommend_rate", "decisionState.recommendation.primaryCandidateId", "not_equals", "not-a-candidate"),
         ], setup={"mockModel": "unknown_candidate"}, dataset=FAULT_DATASET, tags=["fault_injection", "model"]),
-        _case("fault-injection-v1.model-false-quote", "模型 false quote 被拒绝", OFFER, "模型引用不存在原文时应回退规则解释。", [OFFER, "更看重稳定"], [
+        _case("fault-injection-v2.model-false-quote", "模型 false quote 被拒绝", OFFER, "模型引用不存在原文时应回退规则解释。", [OFFER, "更看重稳定"], [
             _a("llm_fallback_success", "decisionState.domainState.assistance.analysis.mode", "equals", "rules_fallback"),
             _a("evidence_reference_validity", "decisionState.domainState.assistance.warning", "contains", "ValueError", required=False),
         ], setup={"mockModel": "false_quote"}, dataset=FAULT_DATASET, tags=["fault_injection", "model", "evidence"]),
-        _case("fault-injection-v1.model-invented-number", "模型无依据数字被拒绝", OFFER, "模型生成无来源数字时应回退规则解释。", [OFFER, "更看重稳定"], [
+        _case("fault-injection-v2.model-invented-number", "模型无依据数字被拒绝", OFFER, "模型生成无来源数字时应回退规则解释。", [OFFER, "更看重稳定"], [
             _a("llm_fallback_success", "decisionState.domainState.assistance.analysis.mode", "equals", "rules_fallback"),
             _a("unsupported_fact_rate", "speechText", "not_contains", "999999"),
         ], setup={"mockModel": "invented_number"}, dataset=FAULT_DATASET, tags=["fault_injection", "model"]),
-        _case("fault-injection-v1.search-missing-key", "Web Search 缺 Key 可观察", "买电脑，预算 8000", "受控进入 web search 且缺 API Key 时，应记录 case error。", ["买电脑，预算 8000"], [], domain="shopping", setup={"mockSearch": "missing_key"}, dataset=FAULT_DATASET, tags=["fault_injection", "search", "web_search"]),
-        _case("fault-injection-v1.search-transport-error", "Web Search 传输失败可观察", "周末从上海出发两天一夜", "受控进入 web search 且 provider 传输失败时，应记录 case error。", ["周末从上海出发两天一夜"], [], domain="travel", setup={"mockSearch": "transport_error"}, dataset=FAULT_DATASET, tags=["fault_injection", "search", "web_search"]),
+        _case("fault-injection-v2.search-transport-error", "Web Search 传输失败回退 fixture", "周末从上海出发两天一夜", "Web Search transport error 应按 auto 策略回退 fixture，结果和 Trace 明示来源变化。", ["周末从上海出发两天一夜"], [
+            _a("search_fallback_success", "execution.status", "equals", "success"),
+            _a("search_fallback_success", "decisionState.domainState.source.mode", "equals", "fixture"),
+            _a("search_fallback_success", "decisionState.domainState.source.label", "equals", "演示候选数据"),
+            _a("search_fallback_success", "decisionState.domainState.source.warnings", "contains", "Web Search 失败，已回退 fixture"),
+            _a("search_fallback_success", "decisionState.recommendation.primaryCandidateId", "non_empty"),
+            _a("search_fallback_success", "traceSnapshot.traceJson.timeline", "contains", "fallback"),
+        ], domain="travel", setup={"mockSearch": "transport_error", "context": {"searchMode": "auto"}}, dataset=FAULT_DATASET, tags=["fault_injection", "search", "web_search", "fallback"]),
+        _case("fault-injection-v2.search-invalid-response", "Web Search 非法响应被拒绝", "买电脑，预算 8000", "非法 Search 响应不得进入排序，应保留明确 CandidateAgent failure 和 rolled_back Trace。", ["买电脑，预算 8000"], [
+            _a("agent_execution_failure_rate", "execution.status", "equals", "error"),
+            _a("agent_execution_failure_rate", "execution.errorMessage", "contains", "Web Search 未返回结构化候选"),
+            _a("agent_execution_failure_rate", "traceSnapshot.status", "equals", "FAILED"),
+            _a("agent_execution_failure_rate", "traceSnapshot.traceJson.metadata.commitStatus", "equals", "rolled_back"),
+            _a("agent_execution_failure_rate", "traceSnapshot.traceJson.timeline", "contains", "CandidateAgent"),
+            _a("agent_execution_failure_rate", "traceSnapshot.traceJson.timeline", "not_contains", "完成比较"),
+        ], domain="shopping", setup={"mockSearch": "invalid_response", "context": {"searchMode": "web"}, "expectedExecutionStatus": "error"}, dataset=FAULT_DATASET, tags=["fault_injection", "search", "web_search", "invalid_response"]),
+        _case("fault-injection-v2.agent-execution-failure", "CandidateAgent 执行失败可定位", "买电脑，预算 8000", "Agent execution failure 应定位 CandidateAgent、保留完整错误并且不误报成功。", ["买电脑，预算 8000"], [
+            _a("agent_execution_failure_rate", "execution.status", "equals", "error"),
+            _a("agent_execution_failure_rate", "execution.errorType", "equals", "RuntimeError"),
+            _a("agent_execution_failure_rate", "execution.errorMessage", "contains", "CandidateAgent execution failed: simulated"),
+            _a("agent_execution_failure_rate", "traceSnapshot.status", "equals", "FAILED"),
+            _a("agent_execution_failure_rate", "traceSnapshot.traceJson.metadata.commitStatus", "equals", "rolled_back"),
+            _a("agent_execution_failure_rate", "traceSnapshot.traceJson.events", "contains", "CandidateAgent"),
+        ], domain="shopping", setup={"mockAgent": "CandidateAgent", "expectedExecutionStatus": "error"}, dataset=FAULT_DATASET, tags=["fault_injection", "agent", "candidate_agent"]),
     ]
 
 

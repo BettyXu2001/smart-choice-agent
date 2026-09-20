@@ -5,6 +5,7 @@
     const LAST_ID_KEY = "choiceAgentLastDemoDecisionId";
     const retrievedAt = "2026-08-27T00:00:00.000Z";
     const domainLabels = {
+        diet: "饮食决策",
         travel: "旅行决策",
         career: "职业选择",
         learning: "学习路径",

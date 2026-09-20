@@ -126,13 +126,16 @@ def prepare_turn(context):
         focus=info.get("focusCandidateId")
         pool=d.domain_state.get("candidatePool",[])
         matches=[c for c in pool if c["candidateId"]==focus]
-        if not matches and fact_cue: context.data["fact_question"]="你说的是哪个候选？告诉我名称后，我再更新它的信息。"
+        if not matches and fact_cue:
+            context.data["fact_question"]="你说的是哪个候选？告诉我名称后，我再更新它的信息。"
+            context.data["blocking_question"]=context.data["fact_question"]
     if fact_cue and not question:
         if len(matches)==1:
             concern = any(w in text for w in ["不能接受", "无法接受", "不太能接受", "不接受", "担心", "顾虑"])
             add_fact(d,matches[0]["candidateId"],text,concern)
         elif len(matches)>1:
             context.data["fact_question"]="请分别说明每个候选要补充的信息，以免我把条件记错。"
+            context.data["blocking_question"]=context.data["fact_question"]
 
 
 def model_context(context):
@@ -181,6 +184,7 @@ def model_understand(context):
                 SYSTEM_PROMPT,
                 user_prompt,
                 lambda: provider.complete_json(system_prompt=SYSTEM_PROMPT,user_prompt=user_prompt,model=context.data.get("model_name")),
+                provider=provider,
             )
             if context.trace
             else provider.complete_json(system_prompt=SYSTEM_PROMPT,user_prompt=user_prompt,model=context.data.get("model_name"))
@@ -189,6 +193,7 @@ def model_understand(context):
         if parsed.intent=="what_if":
             # A model cannot retroactively undo deterministic changes; ambiguous intent is clarified.
             context.data["fact_question"]="你想暂时比较一个假设，还是修改当前条件？"
+            context.data["blocking_question"]=context.data["fact_question"]
             return
         known={c["candidateId"] for c in model_context(context)["candidates"]}
         for update in parsed.candidate_updates:
@@ -215,13 +220,12 @@ def model_understand(context):
         d.domain_state["interpretationWarning"]=warning
         state(d)["warning"]=warning
         if context.trace:
-            context.trace.node(
-                "Fallback",
-                "operation",
-                "fallback",
-                "模型理解不可用，保留已确认条件",
-                input_payload={"agent": "ConversationInterpretation"},
-                output_payload={"warning": warning},
+            context.trace.fallback(
+                stage="Fallback",
+                reason=f"模型理解不可用，保留已确认条件：{type(error).__name__}: {error}",
+                from_path="model_understanding",
+                to_path="confirmed_rules",
+                details={"agent": "ConversationInterpretation", "warning": warning},
             )
 
 
@@ -501,6 +505,7 @@ def explain(context, profile):
                     EXPLANATION_PROMPT,
                     user_prompt,
                     lambda: provider.complete_json(system_prompt=EXPLANATION_PROMPT,user_prompt=user_prompt,model=model_name),
+                    provider=provider,
                 )
                 if context.trace
                 else provider.complete_json(system_prompt=EXPLANATION_PROMPT,user_prompt=user_prompt,model=model_name)
@@ -529,13 +534,12 @@ def explain(context, profile):
             info["warning"]=f"模型解释不可用，已按现有事实继续比较：{type(error).__name__}"
             analysis["mode"]="rules_fallback"
             if context.trace:
-                context.trace.node(
-                    "Fallback",
-                    "operation",
-                    "fallback",
-                    "模型解释不可用，按已核对事实继续比较",
-                    input_payload={"agent": "AssistanceExplanation"},
-                    output_payload={"warning": info["warning"], "mode": analysis["mode"]},
+                context.trace.fallback(
+                    stage="Fallback",
+                    reason=f"模型解释不可用，按已核对事实继续比较：{type(error).__name__}: {error}",
+                    from_path="model_explanation",
+                    to_path="rules_explanation",
+                    details={"agent": "AssistanceExplanation", "warning": info["warning"], "mode": analysis["mode"]},
                 )
     if not (d.context.get("demoMode") or any(c.origin=="fixture" for c in target.candidates)) and any(c.origin=="manual" for c in target.candidates):
         analysis["summary"]+="依据用户输入，尚未经外部核实。"
@@ -548,7 +552,16 @@ def explain(context, profile):
     for key,label in [("reasons","依据"),("tradeoffs","取舍")]:
         lines=[r["text"] for r in analysis[key]][:2]
         if lines: speech+="\n"+label+"："+"；".join(lines)
-    question=context.data.get("fact_question") or analysis.get("question")
+    decision_question = info.get("decisionQuestion") if not analysis["hypothetical"] else None
+    if isinstance(decision_question, dict):
+        analysis["decisionQuestion"] = decision_question
+        question = decision_question.get("question")
+    elif analysis["hypothetical"]:
+        question = analysis.get("question")
+    elif not d.quality_assessment or d.quality_assessment.status == "insufficient_data" or not analysis.get("primaryCandidateId"):
+        question = analysis.get("question")
+    else:
+        question = None
     if context.data.get("unhandled_turn") and analysis["mode"]!="model" and not info.get("changes"):
         question="这句话我还没整理成可比较的信息。你想修改哪个候选的哪一点，或最看重什么？"
     analysis["question"]=question

@@ -57,6 +57,7 @@ class IntentAgent(BaseAgent):
                         system_prompt,
                         user_prompt,
                         lambda: self.provider.complete_json(system_prompt, user_prompt, self.model_name),
+                        provider=self.provider,
                     )
                     if context.trace
                     else self.provider.complete_json(system_prompt, user_prompt, self.model_name)
@@ -70,15 +71,14 @@ class IntentAgent(BaseAgent):
                     intent = model_intent
                     confidence = model_confidence
                 slots = model_slots
-            except (ValueError, KeyError, TypeError):
+            except (ValueError, RuntimeError, OSError, KeyError, TypeError) as error:
                 if context.trace:
-                    context.trace.node(
-                        "Fallback",
-                        "operation",
-                        "fallback",
-                        "模型意图输出无效，保留规则识别结果",
-                        input_payload={"agent": self.name},
-                        output_payload={"intent": intent.value, "slots": slots.model_dump(by_alias=True)},
+                    context.trace.fallback(
+                        stage="Fallback",
+                        reason=f"模型意图不可用，保留规则识别结果：{type(error).__name__}: {error}",
+                        from_path="model_intent",
+                        to_path="rules_intent",
+                        details={"agent": self.name, "intent": intent.value, "slots": slots.model_dump(by_alias=True)},
                     )
                 logger.warning("Invalid model intent output; preserving rule-based intent and slots")
         context.decision.intent = intent
@@ -212,6 +212,7 @@ class ExplanationAgent(BaseAgent):
                         system_prompt,
                         user_prompt,
                         lambda: self.provider.complete_json(system_prompt, user_prompt, self.model_name),
+                        provider=self.provider,
                     )
                     if context.trace
                     else self.provider.complete_json(system_prompt, user_prompt, self.model_name)
@@ -220,15 +221,14 @@ class ExplanationAgent(BaseAgent):
                     meal_id = int(option.get("mealId", option.get("itemId", 0)))
                     if meal_id in reasons and str(option.get("reason", "")).strip():
                         reasons[meal_id] = str(option["reason"]).strip()
-            except (ValueError, KeyError, TypeError):
+            except (ValueError, RuntimeError, OSError, KeyError, TypeError) as error:
                 if context.trace:
-                    context.trace.node(
-                        "Fallback",
-                        "operation",
-                        "fallback",
-                        "模型解释输出无效，保留规则解释",
-                        input_payload={"agent": self.name},
-                        output_payload={"candidateIds": [item.meal.id for item in selected]},
+                    context.trace.fallback(
+                        stage="Fallback",
+                        reason=f"模型解释不可用，保留规则解释：{type(error).__name__}: {error}",
+                        from_path="model_explanation",
+                        to_path="rules_explanation",
+                        details={"agent": self.name, "candidateIds": [item.meal.id for item in selected]},
                     )
                 logger.warning("Invalid model explanation output; preserving available rule-based reasons")
         blocks = [_meal_response(item, reasons[item.meal.id]) for item in selected]

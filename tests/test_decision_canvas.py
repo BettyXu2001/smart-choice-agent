@@ -25,7 +25,9 @@ def test_canvas_keeps_official_analysis_and_decision_boundaries(database):
         assert info["analysis"] == current
         assert current["primaryCandidateId"] == result.decision_state.recommendation.primary_candidate_id
         assert 1 <= len(current["keyReasons"]) <= 4
-        assert current["missingInfo"]
+        assert current["missingInfo"] == []
+        assert "decisionQuestion" not in current
+        assert result.decision_state.recommendation is not None
         assert info["lastOfficialChange"]["to"]["label"] == "B 公司"
         assert info["whatIfScenarios"]
 

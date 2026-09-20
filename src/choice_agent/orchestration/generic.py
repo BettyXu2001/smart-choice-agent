@@ -73,6 +73,7 @@ class GenericDecisionOrchestrator:
             model=self.settings.search_model,
             timeout_seconds=self.settings.search_timeout_seconds,
             max_queries=self.settings.search_max_queries,
+            pricing=self.settings.model_pricing,
         )
         self.registry = registry or DomainRegistry([
             DietProfile(self.diet_repository, self.settings, self.provider),

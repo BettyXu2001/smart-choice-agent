@@ -54,6 +54,8 @@ class AgentRuntime:
         started = perf_counter()
         input_payload = _safe_payload({"message": context.message, "data": context.data})
         before = self.trace_scope.snapshot(context.decision) if hasattr(self.trace_scope, "snapshot") else None
+        if hasattr(self.trace_scope, "begin_agent_call"):
+            self.trace_scope.begin_agent_call()
         node_id = (
             self.trace_scope.start_node(agent.name, "agent", f"调用 {agent.name}", input_payload)
             if hasattr(self.trace_scope, "start_node")
@@ -61,22 +63,26 @@ class AgentRuntime:
         )
         try:
             output = agent.execute(context)
+            telemetry = self.trace_scope.end_agent_call() if hasattr(self.trace_scope, "end_agent_call") else {}
             run = AgentRun(
                 agent_name=agent.name,
-                model_name=agent.model_name,
+                model_name=telemetry.pop("model_name", None) or agent.model_name,
                 latency_ms=int((perf_counter() - started) * 1000),
                 input_payload=input_payload,
                 output_payload=output,
+                **telemetry,
             )
         except Exception as error:
+            telemetry = self.trace_scope.end_agent_call() if hasattr(self.trace_scope, "end_agent_call") else {}
             changes = self.trace_scope.diff(before, context.decision) if before is not None and hasattr(self.trace_scope, "diff") else []
             run = AgentRun(
                 agent_name=agent.name,
-                model_name=agent.model_name,
+                model_name=telemetry.pop("model_name", None) or agent.model_name,
                 status="FAILED",
                 latency_ms=int((perf_counter() - started) * 1000),
                 input_payload=input_payload,
                 error_message=f"{type(error).__name__}: {error}",
+                **telemetry,
             )
             context.decision.agent_runs.append(run)
             self.trace_scope.agent_run(run, context.decision.decision_id)

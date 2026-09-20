@@ -445,6 +445,14 @@
             </section>
         `;
     }
+    function outcomeReviewLabel(status) {
+        return {
+            no_outcome: "尚未记录选择",
+            not_due: "可随时复盘",
+            due: "待复盘实际结果",
+            reviewed: "已复盘"
+        }[status] || "可随时复盘";
+    }
     function renderHistoryCard(item) {
         const consistency = historyConsistency(item.currentRecommendation, item.finalChoice);
         return `
@@ -456,6 +464,7 @@
                 <div class="history-card-meta">
                     <span>当前推荐：${escapeHtml(item.currentRecommendation || "未形成推荐")}</span>
                     <span>最终选择：${escapeHtml(item.finalChoice || "未记录")}</span>
+                    <span>结果复盘：${escapeHtml(outcomeReviewLabel(item.outcomeReviewStatus))}</span>
                     <span class="history-match ${consistency.className}">${escapeHtml(consistency.label)}</span>
                 </div>
             </a>
@@ -534,6 +543,7 @@
                     <section class="section">
                         <h3>最终选择</h3>
                         ${renderOutcomeForm(decision)}
+                        ${renderOutcomeReview(decision, summary)}
                     </section>
                 </div>
                 <section class="section">
@@ -587,6 +597,42 @@
             </form>
         `;
     }
+    function renderOutcomeReview(decision, summary = {}) {
+        if (!decision.outcome) {
+            return `<p class="muted">记录最终选择后，可以回来复盘实际结果。</p>`;
+        }
+        const review = decision.outcome.review || {};
+        return `
+            <section class="outcome-review">
+                <div class="card-title">
+                    <div><h4>实际结果复盘</h4><p>${escapeHtml(outcomeReviewLabel(summary.outcomeReviewStatus))} · 可以随时更新。</p></div>
+                </div>
+                <form id="decisionOutcomeReviewForm" class="settings-form">
+                    <label class="field full"><span>结果状态</span>
+                        <select name="status" required>
+                            <option value="">请选择</option>
+                            ${Object.entries({successful:"结果不错",mixed:"有得有失",unsuccessful:"结果不理想",changed:"后来改选"}).map(([value, label]) => `<option value="${value}" ${review.status === value ? "selected" : ""}>${label}</option>`).join("")}
+                        </select>
+                    </label>
+                    <label class="field full"><span>满意度（1–5）</span><input name="satisfaction" type="number" min="1" max="5" value="${escapeHtml(review.satisfaction ?? "")}" placeholder="可选"></label>
+                    <label class="field full"><span>如果重来还会这样选吗？</span>
+                        <select name="wouldChooseAgain">
+                            <option value="">暂不确定</option>
+                            <option value="true" ${review.wouldChooseAgain === true ? "selected" : ""}>会</option>
+                            <option value="false" ${review.wouldChooseAgain === false ? "selected" : ""}>不会</option>
+                        </select>
+                    </label>
+                    <label class="field full"><span>实际结果</span><textarea name="note" placeholder="可选：后来发生了什么？">${escapeHtml(review.note || "")}</textarea></label>
+                    <input type="hidden" name="decisionId" value="${escapeHtml(decision.decisionId)}">
+                    <input type="hidden" name="revision" value="${escapeHtml(decision.revision)}">
+                    <div class="button-row">
+                        <button class="btn primary" type="submit">保存复盘</button>
+                        ${decision.outcome.review ? `<button class="btn ghost" type="button" data-action="clear-outcome-review" data-decision-id="${escapeHtml(decision.decisionId)}" data-revision="${escapeHtml(decision.revision)}">清除复盘</button>` : ""}
+                    </div>
+                </form>
+            </section>
+        `;
+    }
     function renderHistoryCandidate(candidate, decision) {
         const recommendation = decision.recommendation || {};
         const primary = recommendation.primaryCandidateId === candidate.candidateId;
@@ -598,7 +644,7 @@
                         <h3>${escapeHtml(candidate.name)}${primary ? " · 当前推荐" : ""}</h3>
                         <p>${escapeHtml(candidate.summary || "")}</p>
                     </div>
-                    <span class="score">${Number.isFinite(Number(candidate.score)) ? Math.round(Number(candidate.score) * 100) + "%" : "待比较"}</span>
+                    <span class="score">${Number.isFinite(Number(candidate.score)) ? "匹配分 " + Math.round(Number(candidate.score) * 100) + "%" : "待比较"}</span>
                 </div>
                 <div class="attribute-grid">${Object.entries(candidate.attributes || {}).map(([key, value]) => `<span><strong>${escapeHtml(key)}</strong>${escapeHtml(Array.isArray(value) ? value.join("、") : value)}</span>`).join("")}</div>
                 ${reasons.length ? `<div class="demo-list">${reasons.map((item) => `<div><strong>理由</strong><span>${escapeHtml(item.text)}</span></div>`).join("")}</div>` : ""}
@@ -632,6 +678,33 @@
             state.history.items = [];
             renderDecisionHistoryDetail(`/history/${encodeURIComponent(decisionId)}`);
         }, "最终选择已清除");
+    }
+    async function saveDecisionOutcomeReview(form) {
+        const formData = new FormData(form);
+        const decisionId = formData.get("decisionId");
+        const chooseAgain = formData.get("wouldChooseAgain");
+        const satisfaction = String(formData.get("satisfaction") || "").trim();
+        const payload = {
+            status: formData.get("status"),
+            satisfaction: satisfaction ? Number(satisfaction) : null,
+            wouldChooseAgain: chooseAgain === "" ? null : chooseAgain === "true",
+            note: String(formData.get("note") || "").trim() || null,
+            revision: Number(formData.get("revision"))
+        };
+        await guard(async () => {
+            state.history.detail = await DecisionHistoryApi.saveOutcomeReview(decisionId, payload);
+            state.history.items = [];
+            renderDecisionHistoryDetail(`/history/${encodeURIComponent(decisionId)}`);
+        }, "实际结果复盘已保存");
+    }
+    async function clearDecisionOutcomeReview(button) {
+        const decisionId = button.dataset.decisionId;
+        const revision = Number(button.dataset.revision);
+        await guard(async () => {
+            state.history.detail = await DecisionHistoryApi.clearOutcomeReview(decisionId, revision);
+            state.history.items = [];
+            renderDecisionHistoryDetail(`/history/${encodeURIComponent(decisionId)}`);
+        }, "实际结果复盘已清除");
     }
     async function renderProfile() {
         if (!state.profile.data && !state.profile.loading) {
@@ -1033,8 +1106,7 @@
     function renderGeneralDetails(decision) {
         const container = document.getElementById("generalDetails");
         if (!container || !decision) return;
-        const labels = { diet: "饮食决策", travel: "旅行决策", shopping: "购物决策", generic: "通用决策" };
-        const domainLabel = labels[decision.domain] || decision.domain;
+        const domainLabel = ChoiceAgentDemo.domainLabels[decision.domain] || decision.domain;
         const activeCandidates = decision.candidates || [];
         const excludedIds = new Set(decision.excludedCandidates || []);
         const pool = decision.domainState?.candidatePool || [];
@@ -1094,15 +1166,6 @@
                             ${(decision.criteria || []).map((item) => `<label class="field"><span>${escapeHtml(item.label)}</span><input type="number" step="any" name="attribute:${escapeHtml(item.key)}" placeholder="${escapeHtml(item.unit || item.label)}"></label>`).join("")}
                             <button class="btn ghost" type="submit">添加候选</button>
                         </form>` : ""}
-                        <div class="demo-recommendation">
-                            <span class="badge demo-badge">推荐结论</span>
-                            <h4>${escapeHtml(primaryName || "待定")}</h4>
-                            <p>${escapeHtml(recommendation.summary || "暂无结论")}</p>
-                            <div class="demo-list">
-                                ${(recommendation.reasons || []).map((item) => `<div><span>${escapeHtml(item.text)}</span></div>`).join("")}
-                                ${(recommendation.tradeoffs || []).map((item) => `<div><span>${escapeHtml(item)}</span></div>`).join("")}
-                            </div>
-                        </div>
                     </main>
                 </div>
             </section>
@@ -1199,8 +1262,15 @@
                     <div class="score-block"><span class="score">${escapeHtml(scoreLabel)}</span><button class="btn ghost" type="button" data-candidate-action="${excluded ? "restore_candidate" : "exclude_candidate"}" data-candidate-id="${escapeHtml(candidate.candidateId)}">${excluded ? "恢复" : "排除"}</button></div>
                 </div>
                 ${excluded ? `<p class="candidate-status">已从本轮比较中移除。</p>` : ""}
-                <div class="attribute-grid">${attrs.slice(0, 4).map(([key, value]) => `<span><strong>${escapeHtml(key)}</strong>${escapeHtml(Array.isArray(value) ? value.join("、") : value)}</span>`).join("") || `<span><strong>可比信息</strong>暂缺关键属性</span>`}</div>
-                ${breakdown.length ? `<div class="score-breakdown">${breakdown.slice(0, 4).map((item) => `<div><span>${escapeHtml(item.criterionKey)}</span><meter min="0" max="100" value="${Math.round(Number(item.normalizedScore || 0))}"></meter><strong>${Math.round(Number(item.normalizedScore || 0))}</strong></div>`).join("")}</div>` : `<p class="muted">缺少可比数据，暂不展示评分拆解。</p>`}
+                <div class="attribute-grid">${attrs.slice(0, 4).map(([key, value]) => {
+                    const criterion = (decision.criteria || []).find((item) => item.key === key);
+                    const unit = value != null && value !== "" ? criterion?.unit || "" : "";
+                    return `<span><strong>${escapeHtml(criterion?.label || key)}</strong>${escapeHtml(Array.isArray(value) ? value.join("、") : value)}${escapeHtml(unit)}</span>`;
+                }).join("") || `<span><strong>可比信息</strong>暂缺关键属性</span>`}</div>
+                ${breakdown.length ? `<div class="score-breakdown">${breakdown.slice(0, 4).map((item) => {
+                    const criterion = (decision.criteria || []).find((criterion) => criterion.key === item.criterionKey);
+                    return `<div><span>${escapeHtml(criterion?.label || item.criterionKey)}</span><meter min="0" max="100" value="${Math.round(Number(item.normalizedScore || 0))}"></meter><strong>${Math.round(Number(item.normalizedScore || 0))}</strong></div>`;
+                }).join("")}</div>` : `<p class="muted">缺少可比数据，暂不展示评分拆解。</p>`}
                 ${candidate.origin === "manual" ? `<form class="candidate-edit inline-form" data-candidate-id="${escapeHtml(candidate.candidateId)}"><label>候选说明<input name="summary" value="${escapeHtml(candidate.summary || "")}" placeholder="优点与顾虑"></label><button class="btn ghost">保存说明</button></form>` : ""}
                 <details class="evidence-details"><summary>查看候选依据</summary>${window.EvidenceView.candidate(evidence)}</details>
             </article>
@@ -2348,6 +2418,8 @@
             clearModelSettings();
         } else if (action === "clear-outcome") {
             clearDecisionOutcome(target);
+        } else if (action === "clear-outcome-review") {
+            clearDecisionOutcomeReview(target);
         }
     }
     async function submitGeneralDecision(form) {
@@ -2411,6 +2483,9 @@
         } else if (form.id === "decisionOutcomeForm") {
             event.preventDefault();
             saveDecisionOutcome(form);
+        } else if (form.id === "decisionOutcomeReviewForm") {
+            event.preventDefault();
+            saveDecisionOutcomeReview(form);
         } else if (form.id === "profileForm") {
             event.preventDefault();
             saveProfile(form);

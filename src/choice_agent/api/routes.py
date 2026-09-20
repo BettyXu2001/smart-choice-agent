@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
@@ -24,6 +25,7 @@ from choice_agent.repositories.profile_repository import ProfileRepository
 from choice_agent.schemas import (
     ChatRequest, ChatResponse, DecisionHistoryDetailResponse, DecisionHistoryListResponse,
     DecisionHistorySummary, DecisionCommandRequest, DecisionOutcome, DecisionOutcomeRequest,
+    DecisionOutcomeReview, DecisionOutcomeReviewRequest,
     DecisionState, DietPanelCommand, EvaluationRequest, FeedbackRequest, GenericDecisionMessageRequest,
     GenericDecisionRequest, GenericDecisionResponse, MealRequest, MealResponse, SearchCapabilitiesResponse,
     SlotBundle, SourceMode, TraceLabelRequest, UserProfile,
@@ -66,39 +68,22 @@ def runtime_model_from_headers(
 ) -> tuple[Settings, ModelProvider]:
     api_key = (model_api_key or "").strip()
     use_runtime_model = _truthy_header(model_enabled) and bool(api_key)
-    runtime_settings = Settings(
-        database_url=base_settings.database_url,
+    runtime_settings = replace(
+        base_settings,
         model_api_key=api_key if use_runtime_model else base_settings.model_api_key,
         model_base_url=((model_base_url or base_settings.model_base_url).strip() or base_settings.model_base_url) if use_runtime_model else base_settings.model_base_url,
         main_model=((main_model or base_settings.main_model).strip() or base_settings.main_model) if use_runtime_model else base_settings.main_model,
         light_model=((light_model or base_settings.light_model).strip() or base_settings.light_model) if use_runtime_model else base_settings.light_model,
-        model_timeout_seconds=base_settings.model_timeout_seconds,
         enable_llm=True if use_runtime_model else base_settings.enable_llm,
-        debug=base_settings.debug,
-        search_provider=base_settings.search_provider,
-        search_api_key=base_settings.search_api_key,
-        search_base_url=base_settings.search_base_url,
-        search_model=base_settings.search_model,
-        search_timeout_seconds=base_settings.search_timeout_seconds,
-        search_max_queries=base_settings.search_max_queries,
     )
     search_key = (search_api_key or "").strip()
     if _truthy_header(search_enabled) and search_key:
-        runtime_settings = Settings(
-            database_url=runtime_settings.database_url,
-            model_api_key=runtime_settings.model_api_key,
-            model_base_url=runtime_settings.model_base_url,
-            main_model=runtime_settings.main_model,
-            light_model=runtime_settings.light_model,
-            model_timeout_seconds=runtime_settings.model_timeout_seconds,
-            enable_llm=runtime_settings.enable_llm,
-            debug=runtime_settings.debug,
+        runtime_settings = replace(
+            runtime_settings,
             search_provider="openai",
             search_api_key=search_key,
             search_base_url=(search_base_url or runtime_settings.search_base_url).strip() or runtime_settings.search_base_url,
             search_model=(search_model or runtime_settings.search_model).strip() or runtime_settings.search_model,
-            search_timeout_seconds=runtime_settings.search_timeout_seconds,
-            search_max_queries=runtime_settings.search_max_queries,
         )
     if runtime_settings == base_settings:
         return base_settings, base_provider
@@ -185,6 +170,17 @@ def trace_response(row: TraceRecord) -> dict[str, Any]:
     }
 
 
+def outcome_review_status(decision: DecisionState, now: datetime | None = None) -> str:
+    if decision.outcome is None:
+        return "no_outcome"
+    if decision.outcome.review is not None:
+        return "reviewed"
+    recorded_at = decision.outcome.recorded_at
+    if recorded_at is not None and (now or datetime.now()) - recorded_at >= timedelta(days=7):
+        return "due"
+    return "not_due"
+
+
 def decision_history_summary(row: Any, decision: DecisionState) -> DecisionHistorySummary:
     title = decision.user_goal.strip()
     if not title:
@@ -204,6 +200,7 @@ def decision_history_summary(row: Any, decision: DecisionState) -> DecisionHisto
         status=decision.status,
         current_recommendation=recommendation,
         final_choice=decision.outcome.label if decision.outcome else None,
+        outcome_review_status=outcome_review_status(decision),
     )
 
 
@@ -648,11 +645,19 @@ def save_decision_outcome(
         raise HTTPException(status_code=409, detail="Decision 已被其他请求更新，请刷新后重试")
     if body.candidate_id and not any(item.candidate_id == body.candidate_id for item in decision.candidates):
         raise HTTPException(status_code=400, detail="最终选择的候选不存在")
+    label = body.label.strip()
+    previous = decision.outcome
+    same_choice = bool(
+        previous
+        and previous.candidate_id == body.candidate_id
+        and previous.label == label
+    )
     decision.outcome = DecisionOutcome(
         candidate_id=body.candidate_id,
-        label=body.label.strip(),
+        label=label,
         reason=body.reason.strip() if body.reason else None,
-        recorded_at=datetime.now(),
+        recorded_at=previous.recorded_at if same_choice and previous else datetime.now(),
+        review=previous.review if same_choice and previous else None,
     )
     decision.revision += 1
     try:
@@ -685,6 +690,78 @@ def clear_decision_outcome(
     if decision.revision != revision:
         raise HTTPException(status_code=409, detail="Decision 已被其他请求更新，请刷新后重试")
     decision.outcome = None
+    decision.revision += 1
+    try:
+        repository.save(decision)
+    except DecisionRevisionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    public = public_decision(decision)
+    return DecisionHistoryDetailResponse(
+        summary=decision_history_summary(row, public),
+        decision=public,
+    )
+
+
+@router.put("/api/v1/decision-history/{decision_id}/outcome/review", response_model=DecisionHistoryDetailResponse)
+def save_decision_outcome_review(
+    decision_id: str,
+    body: DecisionOutcomeReviewRequest,
+    uid: int = Depends(user_id),
+    db: Session = Depends(get_db),
+) -> DecisionHistoryDetailResponse:
+    from choice_agent.decision.conversation import public_decision
+
+    repository = DecisionRepository(db)
+    row = db.get(DecisionRecord, decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Decision 不存在或无权访问")
+    decision = DecisionState.model_validate(row.state_json)
+    if not repository.visible_to_user(decision, uid):
+        raise HTTPException(status_code=404, detail="Decision 不存在或无权访问")
+    if decision.revision != body.revision:
+        raise HTTPException(status_code=409, detail="Decision 已被其他请求更新，请刷新后重试")
+    if decision.outcome is None:
+        raise HTTPException(status_code=400, detail="请先记录最终选择")
+    decision.outcome.review = DecisionOutcomeReview(
+        status=body.status,
+        satisfaction=body.satisfaction,
+        would_choose_again=body.would_choose_again,
+        note=body.note.strip() if body.note else None,
+        recorded_at=datetime.now(),
+    )
+    decision.revision += 1
+    try:
+        repository.save(decision)
+    except DecisionRevisionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    public = public_decision(decision)
+    return DecisionHistoryDetailResponse(
+        summary=decision_history_summary(row, public),
+        decision=public,
+    )
+
+
+@router.delete("/api/v1/decision-history/{decision_id}/outcome/review", response_model=DecisionHistoryDetailResponse)
+def clear_decision_outcome_review(
+    decision_id: str,
+    revision: int = Query(ge=0),
+    uid: int = Depends(user_id),
+    db: Session = Depends(get_db),
+) -> DecisionHistoryDetailResponse:
+    from choice_agent.decision.conversation import public_decision
+
+    repository = DecisionRepository(db)
+    row = db.get(DecisionRecord, decision_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Decision 不存在或无权访问")
+    decision = DecisionState.model_validate(row.state_json)
+    if not repository.visible_to_user(decision, uid):
+        raise HTTPException(status_code=404, detail="Decision 不存在或无权访问")
+    if decision.revision != revision:
+        raise HTTPException(status_code=409, detail="Decision 已被其他请求更新，请刷新后重试")
+    if decision.outcome is None:
+        raise HTTPException(status_code=400, detail="尚未记录最终选择")
+    decision.outcome.review = None
     decision.revision += 1
     try:
         repository.save(decision)

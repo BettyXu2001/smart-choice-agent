@@ -155,3 +155,129 @@ def test_history_api_functions_list_detail_and_update_outcome(database):
                 db=db,
             )
         assert error.value.status_code == 409
+
+
+def test_outcome_review_lifecycle_and_choice_change(database):
+    from fastapi import HTTPException
+    from choice_agent.api.routes import (
+        clear_decision_outcome_review,
+        save_decision_outcome,
+        save_decision_outcome_review,
+    )
+    from choice_agent.schemas import DecisionOutcomeRequest, DecisionOutcomeReviewRequest
+
+    with database.session_factory() as db:
+        DecisionRepository(db).save(DecisionState(
+            decision_id="review-decision",
+            session_id="review-session",
+            domain="career",
+            owner_user_id=7,
+            revision=1,
+            candidates=[
+                Candidate(candidate_id="a", name="A 公司"),
+                Candidate(candidate_id="b", name="B 公司"),
+            ],
+        ))
+        selected = save_decision_outcome(
+            "review-decision",
+            DecisionOutcomeRequest(candidate_id="a", label="A 公司", revision=1),
+            uid=7,
+            db=db,
+        )
+        reviewed = save_decision_outcome_review(
+            "review-decision",
+            DecisionOutcomeReviewRequest(
+                status="mixed",
+                satisfaction=3,
+                would_choose_again=False,
+                note="成长不错，但通勤太累",
+                revision=selected.decision.revision,
+            ),
+            uid=7,
+            db=db,
+        )
+
+        assert reviewed.summary.outcome_review_status == "reviewed"
+        assert reviewed.decision.outcome.review.satisfaction == 3
+
+        with pytest.raises(HTTPException) as owner_error:
+            save_decision_outcome_review(
+                "review-decision",
+                DecisionOutcomeReviewRequest(status="successful", revision=reviewed.decision.revision),
+                uid=8,
+                db=db,
+            )
+        assert owner_error.value.status_code == 404
+
+        with pytest.raises(HTTPException) as revision_error:
+            save_decision_outcome_review(
+                "review-decision",
+                DecisionOutcomeReviewRequest(status="successful", revision=reviewed.decision.revision - 1),
+                uid=7,
+                db=db,
+            )
+        assert revision_error.value.status_code == 409
+
+        cleared = clear_decision_outcome_review(
+            "review-decision",
+            revision=reviewed.decision.revision,
+            uid=7,
+            db=db,
+        )
+        assert cleared.decision.outcome.review is None
+        assert cleared.summary.outcome_review_status == "not_due"
+        db.expire_all()
+        assert DecisionRepository(db).get("review-decision").revision == cleared.decision.revision
+
+        reviewed_again = save_decision_outcome_review(
+            "review-decision",
+            DecisionOutcomeReviewRequest(status="mixed", revision=cleared.decision.revision),
+            uid=7,
+            db=db,
+        )
+
+        db.expire_all()
+
+        edited = save_decision_outcome(
+            "review-decision",
+            DecisionOutcomeRequest(
+                candidate_id="a",
+                label="A 公司",
+                reason="补充原因",
+                revision=reviewed_again.decision.revision,
+            ),
+            uid=7,
+            db=db,
+        )
+        assert edited.decision.outcome.review is not None
+        db.expire_all()
+
+        changed = save_decision_outcome(
+            "review-decision",
+            DecisionOutcomeRequest(
+                candidate_id="b",
+                label="B 公司",
+                revision=edited.decision.revision,
+            ),
+            uid=7,
+            db=db,
+        )
+        assert changed.decision.outcome.review is None
+        assert changed.summary.outcome_review_status == "not_due"
+
+
+def test_outcome_review_due_status_uses_seven_day_boundary():
+    from datetime import datetime, timedelta
+    from choice_agent.api.routes import outcome_review_status
+
+    now = datetime(2026, 9, 19, 12, 0, 0)
+    decision = DecisionState(
+        decision_id="due",
+        session_id="due-session",
+        outcome=DecisionOutcome(
+            label="A",
+            recorded_at=now - timedelta(days=7),
+        ),
+    )
+
+    assert outcome_review_status(decision, now) == "due"

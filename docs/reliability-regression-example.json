@@ -1,0 +1,125 @@
+{
+  "dataset": {
+    "name": "fault-injection-reliability",
+    "version": "v2",
+    "caseCount": 8
+  },
+  "evaluatorVersion": "evaluation-v1",
+  "runStatus": "completed",
+  "caseCounts": {
+    "total": 8,
+    "passed": 8,
+    "failed": 0,
+    "error": 0,
+    "notEvaluated": 0
+  },
+  "metrics": {
+    "llm_fallback_success": {
+      "value": 1.0,
+      "numerator": 14,
+      "denominator": 14,
+      "unit": "%",
+      "method": "assertion"
+    },
+    "search_fallback_success": {
+      "value": 1.0,
+      "numerator": 6,
+      "denominator": 6,
+      "unit": "%",
+      "method": "assertion"
+    },
+    "agent_execution_failure_rate": {
+      "value": 0.0235,
+      "numerator": 2.0,
+      "denominator": 85,
+      "unit": "%",
+      "method": "trace_observation"
+    },
+    "average_response_time_ms": {
+      "value": 176.38,
+      "numerator": 1411.0,
+      "denominator": 8,
+      "unit": "ms",
+      "method": "trace_observation"
+    }
+  },
+  "cases": [
+    {
+      "seedId": "fault-injection-v2.agent-execution-failure",
+      "evaluationStatus": "passed",
+      "executionStatus": "error",
+      "traceStatus": "FAILED",
+      "commitStatus": "rolled_back",
+      "fallbackRecorded": false,
+      "failedAgents": ["CandidateAgent"]
+    },
+    {
+      "seedId": "fault-injection-v2.model-false-quote",
+      "evaluationStatus": "passed",
+      "executionStatus": "success",
+      "traceStatus": "SUCCESS",
+      "commitStatus": "committed",
+      "fallbackRecorded": true,
+      "failedAgents": []
+    },
+    {
+      "seedId": "fault-injection-v2.model-invalid-json",
+      "evaluationStatus": "passed",
+      "executionStatus": "success",
+      "traceStatus": "SUCCESS",
+      "commitStatus": "committed",
+      "fallbackRecorded": true,
+      "failedAgents": []
+    },
+    {
+      "seedId": "fault-injection-v2.model-invented-number",
+      "evaluationStatus": "passed",
+      "executionStatus": "success",
+      "traceStatus": "SUCCESS",
+      "commitStatus": "committed",
+      "fallbackRecorded": true,
+      "failedAgents": []
+    },
+    {
+      "seedId": "fault-injection-v2.model-timeout",
+      "evaluationStatus": "passed",
+      "executionStatus": "success",
+      "traceStatus": "SUCCESS",
+      "commitStatus": "committed",
+      "fallbackRecorded": true,
+      "failedAgents": []
+    },
+    {
+      "seedId": "fault-injection-v2.model-unknown-candidate",
+      "evaluationStatus": "passed",
+      "executionStatus": "success",
+      "traceStatus": "SUCCESS",
+      "commitStatus": "committed",
+      "fallbackRecorded": true,
+      "failedAgents": []
+    },
+    {
+      "seedId": "fault-injection-v2.search-invalid-response",
+      "evaluationStatus": "passed",
+      "executionStatus": "error",
+      "traceStatus": "FAILED",
+      "commitStatus": "rolled_back",
+      "fallbackRecorded": false,
+      "failedAgents": ["CandidateAgent"]
+    },
+    {
+      "seedId": "fault-injection-v2.search-transport-error",
+      "evaluationStatus": "passed",
+      "executionStatus": "success",
+      "traceStatus": "SUCCESS",
+      "commitStatus": "committed",
+      "fallbackRecorded": true,
+      "failedAgents": []
+    }
+  ],
+  "notes": [
+    "Generated from EvaluationService -> EvaluationRunner -> real Orchestrator with controlled fault stubs.",
+    "No case uses fixtureActual; fixed stubs validate failure handling, not external provider SLA.",
+    "Latency is environment-specific and is included as an observed sample."
+  ]
+}

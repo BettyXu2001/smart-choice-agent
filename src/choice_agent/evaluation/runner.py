@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass, replace
 from typing import Any
 
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from choice_agent.config import Settings
@@ -14,11 +15,18 @@ from choice_agent.domains.generic import GenericProfile
 from choice_agent.domains.registry import DomainRegistry
 from choice_agent.domains.shopping import ShoppingProfile
 from choice_agent.domains.travel import TravelProfile
-from choice_agent.evaluation.metrics import METRIC_BY_ID, aggregate_metric
-from choice_agent.evaluation.schemas import EvaluationCaseData
+from choice_agent.db_models import TraceRecord
+from choice_agent.evaluation.metrics import METRIC_BY_ID, aggregate_metric, trace_observation_metrics
+from choice_agent.evaluation.schemas import (
+    CURRENT_PROMPT_VERSION,
+    CURRENT_RULE_VERSION,
+    EvaluationCaseData,
+    EvaluationRunConfiguration,
+)
 from choice_agent.orchestration.diet import DietOrchestrator
 from choice_agent.orchestration.generic import GenericDecisionOrchestrator
 from choice_agent.providers.model import DisabledProvider, ModelProvider
+from choice_agent.providers.search import SearchProviderError
 from choice_agent.repositories.diet_repository import DietRepository
 from choice_agent.schemas import ChatRequest, DecisionCommandRequest, GenericDecisionMessageRequest, GenericDecisionRequest, SourceMode
 
@@ -45,15 +53,24 @@ class EvaluationRunner:
         self.settings = settings or Settings()
         self.provider = provider or DisabledProvider()
 
-    def run_case(self, owner_id: int, case_snapshot: dict[str, Any]) -> EvaluationRunOutput:
+    def run_case(
+        self,
+        owner_id: int,
+        case_snapshot: dict[str, Any],
+        run_configuration: EvaluationRunConfiguration | None = None,
+    ) -> EvaluationRunOutput:
         case_data = EvaluationCaseData.model_validate(case_snapshot.get("caseData") or case_snapshot.get("case_data") or {})
+        configuration = run_configuration or self._default_run_configuration()
         try:
-            outputs, trace_snapshot = self._execute_case(owner_id, case_data, case_snapshot)
+            outputs, trace_snapshot = self._execute_case(owner_id, case_data, case_snapshot, configuration)
+            outputs.setdefault("execution", {"status": "success", "errorType": None, "errorMessage": None})
+            outputs["traceSnapshot"] = trace_snapshot
             assertions = [self._evaluate_assertion(assertion.model_dump(mode="json", by_alias=True), outputs) for assertion in case_data.assertions]
             metrics = {
                 metric_id: aggregate_metric(assertions, metric_id)
                 for metric_id in METRIC_BY_ID
             }
+            metrics.update(trace_observation_metrics(trace_snapshot))
             failed_required = [item for item in assertions if item.get("required", True) and item.get("passed") is False]
             status = "failed" if failed_required else "passed"
             if not assertions:
@@ -69,7 +86,13 @@ class EvaluationRunner:
                 error_message=str(error),
             )
 
-    def _execute_case(self, owner_id: int, case_data: EvaluationCaseData, case_snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    def _execute_case(
+        self,
+        owner_id: int,
+        case_data: EvaluationCaseData,
+        case_snapshot: dict[str, Any],
+        run_configuration: EvaluationRunConfiguration,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         if case_data.fixture_actual is not None:
             return {"mode": "fixture_actual", **case_data.fixture_actual}, {}
         messages = [message.strip() for message in case_data.messages if message.strip()]
@@ -78,34 +101,94 @@ class EvaluationRunner:
         messages = [message for message in messages if message]
         if not messages:
             raise ValueError("Case 缺少可执行用户问题")
+        self._validate_fault_setup(case_data)
+        execution_settings = replace(
+            self.settings,
+            main_model=run_configuration.model,
+            light_model=run_configuration.model,
+        )
+        execution_provider = self.provider if run_configuration.provider == "configured" else DisabledProvider()
         database = Database(Settings(database_url="sqlite:///:memory:"))
         database.create_all()
         with database.session_factory() as isolated_db:
             seed_legacy_data(isolated_db)
             isolated = EvaluationRunner(
                 isolated_db,
-                settings=self._settings_for(case_data),
-                provider=self._provider_for(case_data),
+                settings=self._settings_for(case_data, execution_settings),
+                provider=self._provider_for(case_data, execution_provider),
             )
-            outputs = isolated._run_diet(owner_id, messages) if case_data.domain == "diet" else isolated._run_generic(owner_id, case_data.domain, messages, case_data)
-            trace_snapshot = isolated._trace_snapshot(owner_id, outputs.get("traceId"))
-            return outputs, trace_snapshot
-    def _settings_for(self, case_data: EvaluationCaseData) -> Settings:
+            try:
+                outputs = isolated._run_diet(owner_id, messages) if case_data.domain == "diet" else isolated._run_generic(owner_id, case_data.domain, messages, case_data)
+                trace_snapshot = isolated._trace_snapshot(owner_id, isolated._trace_ids(outputs))
+                return outputs, trace_snapshot
+            except Exception as error:
+                trace_snapshot = isolated._latest_trace_snapshot(owner_id)
+                if self._expects_execution_error(case_data):
+                    return {
+                        "mode": "orchestrator",
+                        "execution": {
+                            "status": "error",
+                            "errorType": type(error).__name__,
+                            "errorMessage": f"{type(error).__name__}: {error}",
+                        },
+                    }, trace_snapshot
+                raise
+
+    @staticmethod
+    def _validate_fault_setup(case_data: EvaluationCaseData) -> None:
+        setup = case_data.setup or {}
+        mock_model = setup.get("mockModel")
+        if mock_model not in {None, "timeout", "invalid_json", "unknown_candidate", "false_quote", "invented_number"}:
+            raise ValueError(f"不支持的 mockModel：{mock_model}")
+        mock_search = setup.get("mockSearch")
+        if mock_search not in {None, "missing_key", "transport_error", "invalid_response"}:
+            raise ValueError(f"不支持的 mockSearch：{mock_search}")
+        mock_agent = setup.get("mockAgent")
+        if mock_agent not in {None, "CandidateAgent"}:
+            raise ValueError(f"不支持的 mockAgent：{mock_agent}")
+        expected = setup.get("expectedExecutionStatus")
+        if expected not in {None, "error"}:
+            raise ValueError(f"不支持的 expectedExecutionStatus：{expected}")
+        if expected == "error" and not (
+            mock_search == "invalid_response" or mock_agent == "CandidateAgent"
+        ):
+            raise ValueError("expectedExecutionStatus=error 仅允许受控失败注入")
+
+    @staticmethod
+    def _expects_execution_error(case_data: EvaluationCaseData) -> bool:
+        return (case_data.setup or {}).get("expectedExecutionStatus") == "error"
+
+    def _default_run_configuration(self) -> EvaluationRunConfiguration:
+        provider = "configured" if self.provider.enabled else "disabled"
+        return EvaluationRunConfiguration(
+            model=self.settings.main_model,
+            provider=provider,
+            prompt_version=CURRENT_PROMPT_VERSION,
+            rule_version=CURRENT_RULE_VERSION,
+            run_label="candidate",
+        )
+
+    def _settings_for(self, case_data: EvaluationCaseData, base_settings: Settings | None = None) -> Settings:
+        settings = base_settings or self.settings
         setup = case_data.setup or {}
         if setup.get("mockSearch") == "missing_key":
-            return replace(self.settings, search_api_key="", search_provider="fixture")
-        return self.settings
+            return replace(settings, search_api_key="", search_provider="fixture")
+        return settings
 
-    def _provider_for(self, case_data: EvaluationCaseData) -> ModelProvider:
+    def _provider_for(self, case_data: EvaluationCaseData, base_provider: ModelProvider | None = None) -> ModelProvider:
         mock = (case_data.setup or {}).get("mockModel")
         if mock:
             return FaultInjectionModel(str(mock))
-        return self.provider
+        return base_provider or self.provider
 
     def _registry_for(self, db: Session, case_data: EvaluationCaseData) -> DomainRegistry | None:
-        mock = (case_data.setup or {}).get("mockSearch")
+        setup = case_data.setup or {}
+        mock = setup.get("mockSearch")
+        if setup.get("mockAgent") == "CandidateAgent":
+            mock = "agent_failure"
         if mock not in {"transport_error", "invalid_response"}:
-            return None
+            if mock != "agent_failure":
+                return None
         search = FaultInjectionSearchProvider(str(mock))
         diet_repository = DietRepository(db, commit=False)
         return DomainRegistry([
@@ -143,7 +226,7 @@ class EvaluationRunner:
     def _run_generic(self, owner_id: int, domain: str, messages: list[str], case_data: EvaluationCaseData) -> dict[str, Any]:
         setup = case_data.setup or {}
         context = {"searchMode": "fixture", **dict(setup.get("context") or {})}
-        if setup.get("mockSearch"):
+        if (setup.get("mockSearch") or setup.get("mockAgent")) and "searchMode" not in dict(setup.get("context") or {}):
             context["searchMode"] = "web"
         orchestrator = GenericDecisionOrchestrator(
             self.db,
@@ -198,12 +281,36 @@ class EvaluationRunner:
             "decisionState": response.decision_state.model_dump(mode="json", by_alias=True) if response.decision_state else {},
         }
 
-    def _trace_snapshot(self, owner_id: int, trace_id: str | None) -> dict[str, Any]:
-        if not trace_id:
+    @staticmethod
+    def _trace_ids(outputs: dict[str, Any]) -> list[str]:
+        values = [turn.get("traceId") for turn in outputs.get("turns", []) if isinstance(turn, dict)]
+        values.append(outputs.get("traceId"))
+        return list(dict.fromkeys(str(value) for value in values if value))
+
+    def _trace_snapshot(self, owner_id: int, trace_ids: list[str]) -> dict[str, Any]:
+        if not trace_ids:
             return {}
-        row = DietRepository(self.db).trace(owner_id, trace_id)
-        if row is None:
+        repository = DietRepository(self.db)
+        rows = [row for trace_id in trace_ids if (row := repository.trace(owner_id, trace_id)) is not None]
+        if not rows:
             return {}
+        snapshots = [self._trace_row(row) for row in rows]
+        latest = dict(snapshots[-1])
+        latest["relatedTraces"] = snapshots
+        latest["observability"] = self._case_observability(rows)
+        return latest
+
+    def _latest_trace_snapshot(self, owner_id: int) -> dict[str, Any]:
+        row = self.db.scalar(
+            select(TraceRecord)
+            .where(TraceRecord.user_id == owner_id)
+            .order_by(desc(TraceRecord.id))
+            .limit(1)
+        )
+        return self._trace_snapshot(owner_id, [row.trace_id]) if row is not None else {}
+
+    @staticmethod
+    def _trace_row(row) -> dict[str, Any]:
         return {
             "traceId": row.trace_id,
             "sessionId": row.session_id,
@@ -212,6 +319,49 @@ class EvaluationRunner:
             "eventCount": row.event_count,
             "errorMessage": row.error_message,
             "traceJson": row.trace_json,
+        }
+
+    @staticmethod
+    def _case_observability(trace_rows) -> dict[str, Any]:
+        provider_nodes = []
+        for row in trace_rows:
+            if isinstance(row.trace_json, dict):
+                trace = row.trace_json
+            elif isinstance(row.trace_json, str):
+                try:
+                    trace = json.loads(row.trace_json)
+                except json.JSONDecodeError:
+                    trace = {}
+            else:
+                trace = {}
+            for node in trace.get("timeline", []):
+                output = node.get("output") if isinstance(node, dict) else None
+                if node.get("kind") in {"model", "search", "provider"} and isinstance(output, dict) and output.get("provider"):
+                    provider_nodes.append(output)
+        token_values = [
+            item["totalTokens"] for item in provider_nodes
+            if isinstance(item.get("totalTokens"), int) and not isinstance(item.get("totalTokens"), bool)
+        ]
+        costs = [
+            float(item["estimatedCost"]) for item in provider_nodes
+            if isinstance(item.get("estimatedCost"), (int, float)) and not isinstance(item.get("estimatedCost"), bool)
+        ]
+        unreported = sum(1 for item in provider_nodes if not isinstance(item.get("totalTokens"), int) or isinstance(item.get("totalTokens"), bool))
+        unknown_price = sum(
+            1 for item in provider_nodes
+            if isinstance(item.get("totalTokens"), int)
+            and not isinstance(item.get("totalTokens"), bool)
+            and not isinstance(item.get("estimatedCost"), (int, float))
+        )
+        return {
+            "latencyMs": sum(row.duration_ms or 0 for row in trace_rows),
+            "traceCount": len(trace_rows),
+            "providerCallCount": len(provider_nodes),
+            "totalTokens": sum(token_values) if token_values else None,
+            "estimatedCost": round(sum(costs), 12) if provider_nodes and not unreported and not unknown_price else None,
+            "knownEstimatedCost": round(sum(costs), 12) if costs else None,
+            "unreportedUsageCallCount": unreported,
+            "unknownPriceCallCount": unknown_price,
         }
 
     def _evaluate_assertion(self, assertion: dict[str, Any], outputs: dict[str, Any]) -> dict[str, Any]:
@@ -281,6 +431,8 @@ class FaultInjectionModel:
         }
         if self.failure == "timeout":
             raise TimeoutError("simulated")
+        if self.failure == "invalid_json":
+            raise json.JSONDecodeError("simulated invalid JSON", "{", 1)
         if self.failure == "unknown_candidate":
             value["primary_candidate_id"] = "not-a-candidate"
         elif self.failure == "false_quote":
@@ -299,8 +451,10 @@ class FaultInjectionSearchProvider:
 
     def search(self, context):
         if self.failure == "invalid_response":
-            raise ValueError("Web Search 未返回结构化候选")
-        raise RuntimeError("Web Search 传输失败：simulated")
+            raise SearchProviderError("Web Search 未返回结构化候选")
+        if self.failure == "agent_failure":
+            raise RuntimeError("CandidateAgent execution failed: simulated")
+        raise SearchProviderError("Web Search 传输失败：simulated")
 
 
 def _path_get(value: Any, path: str | None) -> Any:

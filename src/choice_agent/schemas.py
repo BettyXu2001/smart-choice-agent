@@ -250,11 +250,20 @@ class Recommendation(ApiModel):
     ranking_method: str = "weighted_sum"
 
 
+class DecisionOutcomeReview(ApiModel):
+    status: Literal["successful", "mixed", "unsuccessful", "changed"]
+    satisfaction: int | None = Field(default=None, ge=1, le=5)
+    would_choose_again: bool | None = None
+    note: str | None = Field(default=None, max_length=2000)
+    recorded_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class DecisionOutcome(ApiModel):
     candidate_id: str | None = None
     label: str
     reason: str | None = None
     recorded_at: datetime | None = None
+    review: DecisionOutcomeReview | None = None
 
 
 class DecisionMessage(ApiModel):
@@ -306,11 +315,47 @@ class CompositionResult(ApiModel):
 class AgentRun(ApiModel):
     agent_name: str
     model_name: str | None = None
+    provider: str | None = None
+    prompt_version: str | None = None
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    estimated_cost: float | None = Field(default=None, ge=0)
+    retry_count: int | None = Field(default=None, ge=0)
+    fallback_used: bool | None = None
+    fallback_reason: str | None = None
     status: str = "SUCCESS"
     latency_ms: int = 0
     input_payload: Any = None
     output_payload: Any = None
     error_message: str | None = None
+
+
+class SensitiveCriterion(ApiModel):
+    criterion_key: str
+    label: str
+    scenario: str
+    changed_to_candidate_id: str | None = None
+
+
+class DecisionQualityAssessment(ApiModel):
+    status: Literal["available", "insufficient_data"] = "insufficient_data"
+    data_completeness: float | None = Field(default=None, ge=0, le=1)
+    score_margin: float | None = Field(default=None, ge=0)
+    robustness: float | None = Field(default=None, ge=0, le=1)
+    robustness_level: Literal["high", "medium", "low", "unavailable"] = "unavailable"
+    sensitive_criteria: list[SensitiveCriterion] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    scenario_count: int = Field(default=0, ge=0)
+
+
+class DecisionQuestion(ApiModel):
+    key: str
+    question: str
+    reason: str
+    candidate_id: str | None = None
+    criterion_key: str | None = None
+    expected_impact: Literal["may_change_recommendation"] = "may_change_recommendation"
 
 
 class DecisionState(ApiModel):
@@ -328,6 +373,7 @@ class DecisionState(ApiModel):
     unanswered_questions: list[UnansweredQuestion] = Field(default_factory=list)
     assumptions: list[Assumption] = Field(default_factory=list)
     recommendation: Recommendation | None = None
+    quality_assessment: DecisionQualityAssessment | None = None
     outcome: DecisionOutcome | None = None
     next_action: DecisionNextAction = DecisionNextAction.WAIT_USER
     risk_flags: list[str] = Field(default_factory=list)
@@ -432,6 +478,7 @@ class DecisionHistorySummary(ApiModel):
     status: DecisionStatus
     current_recommendation: str | None = None
     final_choice: str | None = None
+    outcome_review_status: Literal["no_outcome", "not_due", "due", "reviewed"] = "no_outcome"
 
 
 class DecisionHistoryListResponse(ApiModel):
@@ -448,6 +495,14 @@ class DecisionOutcomeRequest(ApiModel):
     candidate_id: str | None = None
     label: str = Field(min_length=1, max_length=200)
     reason: str | None = Field(default=None, max_length=1000)
+    revision: int = Field(ge=0)
+
+
+class DecisionOutcomeReviewRequest(ApiModel):
+    status: Literal["successful", "mixed", "unsuccessful", "changed"]
+    satisfaction: int | None = Field(default=None, ge=1, le=5)
+    would_choose_again: bool | None = None
+    note: str | None = Field(default=None, max_length=2000)
     revision: int = Field(ge=0)
 
 

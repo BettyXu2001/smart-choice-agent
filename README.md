@@ -1,429 +1,232 @@
 # Smart Choice Agent
 
-**A Python multi-agent decision system for structured, explainable choices.**
-
-Smart Choice Agent turns vague user intent into ranked options, trade-off analysis,
-clarifying questions, evidence records, and auditable decision traces. The first
-complete domain is diet recommendation, but the core engine is designed as a
-general decision framework for future domains.
-
-[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+**A structured, explainable, and evaluable AI decision agent.**
+**一个结构化、可解释、可评估的 AI 多智能体决策助手。**
 
 English | [中文](#中文)
 
-## Why It Exists
+Smart Choice Agent helps users make complex choices when requirements are vague, constraints conflict, and multiple options need to be compared.
 
-Most recommendation apps jump straight to an answer. Smart Choice Agent makes the
-decision process visible:
+Instead of directly generating a recommendation, it turns decision-making into a structured process:
 
-- What did the user ask for?
-- What constraints are hard requirements?
-- Which candidates were considered?
-- Why did one option outrank another?
-- What evidence and agent runs produced the final answer?
-
-This makes it useful for building AI products where recommendations need to be
-debuggable, explainable, and stable.
+**Understand → Clarify → Compare → Filter → Rank → Explain → Evaluate**
 
 ## Highlights
 
-- **Multi-agent workflow**: intent, understanding, clarification, candidate generation, adjustment, planning, review, explanation, risk, and evaluation agents.
-- **Deterministic ranking engine**: hard-constraint filtering plus seven-dimension scoring for stable, testable recommendations.
-- **Candidate selection strategies**: diet chat can opt into ranked, random, weighted, or least-recent selection with session-level recent-item cooldown.
-- **Works without an API key**: local rule agents can run the full flow when LLM mode is disabled.
-- **Optional LLM integration**: supports OpenAI-compatible Chat Completions through environment configuration.
-- **Auditable traces**: sessions, messages, recommendations, feedback, `DecisionState`, `Evidence`, and agent runs are persisted.
-- **Evaluation dashboard**: tracks 17 product, reasoning, explanation, multi-turn, and reliability metrics with Bad Case and Regression Dataset workflows.
-- **Diet domain included**: single-meal recommendations, multi-turn clarification, refresh suggestions, three-meal planning, personal meals, and public meals.
-- **FastAPI + static web UI**: run locally and inspect the API at `/docs`.
+* **Structured Decision State** — models goals, hard/soft constraints, criteria, candidates, evidence, and recommendations.
+* **LLM + Deterministic Engine** — LLMs handle understanding and explanation; deterministic code controls filtering, scoring, ranking, and state transitions.
+* **Orchestrator + Specialized Agents** — separates intent, clarification, candidate preparation, review, explanation, and risk handling.
+* **Evaluation & Regression** — supports multi-dimensional metrics, Bad Case analysis, Regression Dataset, and version comparison.
+* **Trace & Fallback** — records Agent execution, state changes, latency, errors, and degraded execution paths.
 
 ## Architecture
 
 ```text
-FastAPI / Static Web
-  -> Diet / Generic API Facades
-    -> UnifiedDecisionOrchestrator + StageRunner (evolved from Diet)
-      -> DomainProfile: Diet / Travel / Shopping / Generic
-        -> Provider + EvidenceValidator + GenericRankingEngine
-          -> Optional Composition + Critic + Explanation + Safety
-            -> DecisionRepository / SQLAlchemy / SQLite
+User Request
+    ↓
+Orchestrator
+    ↓
+Intent / Understanding / Clarification
+    ↓
+Candidate Retrieval + Evidence
+    ↓
+Deterministic Filter & Ranking
+    ↓
+Critic + Explanation + Risk
+    ↓
+Recommendation
+    ↓
+Trace → Evaluation → Bad Case → Regression
 ```
 
-The agents handle language, clarification, planning, review, and explanation.
-The deterministic engine handles filtering, scoring, ranking, data isolation, and
-repeatable decision behavior.
+## Decision Domains
+
+**Diet**
+Demonstrates multi-turn clarification, domain rules, planning, and risk handling.
+
+**Travel**
+Demonstrates reusable decision modeling, candidate search, evidence, constraints, and multi-dimensional ranking.
+
+Other scenarios may remain as demos.
+
+## Evaluation
+
+Evaluation follows a **rule-first** principle.
+
+Whenever a metric can be verified from structured state or Trace, deterministic assertions are preferred over LLM-based judgment.
+
+The evaluation loop is:
+
+```text
+Regression Dataset
+      ↓
+Agent Run
+      ↓
+Metrics + Trace
+      ↓
+Bad Case
+      ↓
+Fix
+      ↓
+Regression Re-run
+```
+
+For a real Baseline/Candidate comparison, run the same Dataset twice with explicit run configuration, then compare the persisted Run IDs. `configured` uses the model API from the current environment; `disabled` keeps the deterministic offline path.
+
+```bash
+python -m choice_agent.evaluation.cli --dataset-id <dataset-id> --run-label baseline --model <baseline-model> --provider configured
+python -m choice_agent.evaluation.cli --dataset-id <dataset-id> --run-label candidate --model <candidate-model> --provider configured --compare-to-run-id <baseline-run-id>
+```
+
+The comparison API is `GET /api/v1/evaluations/comparisons?baselineRunId=...&candidateRunId=...`. It requires identical Dataset hashes and Case/revision/repetition sets, and returns both aggregate summaries plus per-Case `improved`, `regressed`, `unchanged`, `new_failure`, or `fixed` results.
+
+`fault-injection-reliability/v2` runs eight controlled failure cases through the real EvaluationRunner and Orchestrator, covering LLM timeout/invalid JSON, Web Search transport/invalid response, and Agent execution failure. It reports 18 metrics, including LLM/Search fallback success, Trace-derived Agent failure rate, and response latency. See `docs/reliability-regression-example.json` for an actual offline run.
+
+## Tech Stack
+
+Python · FastAPI · Pydantic · SQLAlchemy · SQLite · OpenAI-compatible APIs
 
 ## Quick Start
 
-Requirements:
-
-- Python 3.10+
-
-Install and run:
-
-```powershell
+```bash
 python -m pip install -e .
 python scripts/init_db.py
 python -m uvicorn choice_agent.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open:
-
-- App: http://127.0.0.1:8000/
-- API docs: http://127.0.0.1:8000/docs
-
-If the package is not installed, run with `PYTHONPATH`:
-
-```powershell
-$env:PYTHONPATH = "src"
-python scripts/init_db.py
-python -m uvicorn choice_agent.main:app --host 127.0.0.1 --port 8000
-```
-
-## Configuration
-
-By default, LLM mode is disabled and the system runs with deterministic rule
-agents.
-
-Set the environment variables listed in `.env.example` (`Settings` does not auto-load `.env`):
-
-```env
-CHOICE_AGENT_DATABASE_URL=sqlite:///./choice_agent.db
-CHOICE_AGENT_MODEL_API_KEY=
-CHOICE_AGENT_MODEL_BASE_URL=https://api.openai.com/v1
-CHOICE_AGENT_MAIN_MODEL=gpt-5
-CHOICE_AGENT_LIGHT_MODEL=gpt-5-mini
-CHOICE_AGENT_MODEL_TIMEOUT_SECONDS=30
-CHOICE_AGENT_ENABLE_LLM=false
-CHOICE_AGENT_DEBUG=true
-```
-
-When model calls fail, intent and explanation agents fall back to local rule
-behavior so the deterministic decision engine can continue to work.
-
-The web UI also has a Settings page at `#/settings` for browser-side model
-configuration. Values saved there are stored in the current browser's
-localStorage and sent to the local backend as request headers for diet chat and
-evaluation requests. Generic decisions now use the backend workbench even without
-an API key. Travel and Shopping default to explicitly labeled fixture data; unknown
-domains ask for manual candidates. Backend errors no longer silently create a demo.
-
-
-## Candidate Search
-
-Shopping and travel decisions can use the existing web search provider when the backend is configured. The public non-demo entry shows a `使用实时信息寻找候选` toggle; when enabled, the request sends `searchMode: "web"` and the page streams progress such as requirement understanding, candidate search, evidence validation, filtering, and comparison.
-
-The backend default remains `fixture` for deterministic local development and compatibility. Demo examples still send `searchMode: "fixture"` and are labeled as non-real-time data.
-
-To enable web search, configure:
-
-```env
-CHOICE_AGENT_SEARCH_PROVIDER=openai
-CHOICE_AGENT_SEARCH_API_KEY=sk-...
-CHOICE_AGENT_SEARCH_BASE_URL=https://api.openai.com/v1
-CHOICE_AGENT_SEARCH_MODEL=gpt-5-mini
-```
-
-The capability endpoint `GET /api/v1/search/capabilities` reports whether the service is locally configured to attempt web search. It does not expose secrets or provider internals.
-
-## Evaluation Dashboard
-
-Open `#/admin/evaluations` to use the Evaluation Dashboard. It keeps the old diet Trace report available, and adds the engineering loop for AI product quality: Bad Case capture, diagnosis, fix plan, immutable Regression Dataset versions, offline runs, version comparison, result Trace snapshots, and regression status.
-
-The dashboard exposes 17 metrics across intent and constraint understanding, decision quality, explanation grounding, multi-turn behavior, and reliability. Missing labels are shown as not evaluated instead of being scored as zero. The overall score uses only quality metrics with valid denominators; average latency remains visible as an operational metric.
-
-Backend endpoints live under `/api/v1/evaluations`. The local CLI can run the same regression path:
-
-```bash
-python -m choice_agent.evaluation.cli --version-label local-check --limit 20
-```
-
-## Demo Mode
-
-The web UI includes a generic demo workbench for travel, career offer, learning path,
-and shopping decisions. These demo decisions use local fixture data and are labeled as
-non-real-time examples so the general Choice Agent workflow can be shown without API
-keys, network access, or extra database setup. New demo decisions start with an editable
-candidate-preparation step, so users can add, remove, or confirm options before ranking
-and generating a recommendation.
-
-Diet requests still use the real local rule-agent flow and seeded meal data instead of
-the generic fixture workbench.
-
-## Data
-
-The default database is `choice_agent.db` in the project root. The first startup
-creates the tables and idempotently imports legacy diet slot options and meal data
-from `legacy_diet_db.sql`.
-
-The local database is ignored by Git and should not be committed.
-
-## Diet Selection Context
-
-Diet chat requests can pass optional selector controls in `context`:
-
-```json
-{
-  "context": {
-    "selectionStrategy": "weighted",
-    "avoidRecentCount": 3
-  }
-}
-```
-
-Supported strategies are `ranked`, `random`, `weighted`, and `least_recent`. The default is `ranked` to preserve stable existing behavior.
-
-## Testing
-
-```powershell
-python -m pytest
-python -m compileall -q src scripts
-```
-
-## Project Structure
+App:
 
 ```text
-src/choice_agent/
-  agents/              Agent protocol and specialized agents
-  api/                 FastAPI routes
-  decision/            Generic deterministic decision engine
-  domains/diet/        Diet-specific rules, seed data, and domain logic
-  orchestration/       Multi-agent state machine
-  providers/           Optional model provider integration
-  repositories/        Persistence access layer
-  services/            Trace and supporting services
-  static/              Local web interface
-tests/                 Engine, rules, orchestration, and API behavior tests
-docs/                  Migration and implementation notes
-adr/                   Research and planning records
+http://127.0.0.1:8000/
 ```
 
-## Roadmap
+API:
 
-- Add more decision domains beyond diet.
-- Improve evaluation datasets and regression scoring.
-- Add richer comparison views for candidate trade-offs.
-- Expand provider support for search, retrieval, and external evidence.
-- Package reusable decision-domain templates.
+```text
+http://127.0.0.1:8000/docs
+```
 
-## License
+The core deterministic workflow can run without an LLM API key.
 
-MIT
+## Documentation
+
+For detailed architecture and design decisions, see:
+
+* [`docs/PROJECT_OVERVIEW.md`](docs/PROJECT_OVERVIEW.md)
+* [`docs/EVALUATION.md`](docs/EVALUATION.md)
+* [`adr/`](adr/) — architecture and implementation decisions
 
 ---
 
 # 中文
 
-**一个用于结构化、可解释决策的 Python 多 Agent 系统。**
-
-Smart Choice Agent 可以把模糊需求转成候选项排序、约束分析、权衡解释、澄清问题、
-证据记录和可审计 Trace。当前第一个完整领域是饮食推荐，但核心引擎按通用决策框架
-设计，后续可以扩展到更多决策场景。
+**一个结构化、可解释、可评估的 AI 多智能体决策助手。**
 
 [English](#smart-choice-agent) | 中文
 
-## 为什么做它
+Smart Choice Agent 面向旅行、饮食等复杂选择场景，将用户的模糊需求转化为：
 
-很多推荐系统会直接给答案，但很难解释“为什么是这个结果”。Smart Choice Agent 关注
-完整决策过程：
-
-- 用户到底想要什么？
-- 哪些条件是必须满足的硬约束？
-- 系统考虑过哪些候选项？
-- 为什么一个选项排在另一个前面？
-- 最终答案来自哪些证据和 Agent 运行记录？
-
-这让它适合用于构建需要可调试、可解释、结果稳定的 AI 推荐和决策类产品。
+**理解需求 → 澄清信息 → 比较候选 → 约束过滤 → 多维排序 → 权衡解释 → 效果评估**
 
 ## 核心亮点
 
-- **多 Agent 流程**：意图、理解、澄清、候选、调整、计划、审查、解释、风险和评估 Agent。
-- **确定性排序引擎**：硬约束过滤 + 七维评分，推荐结果稳定、可测试、可复现。
-- **候选选择策略**：饮食聊天可通过上下文启用稳定排序、随机、匹配度加权或很久未推荐优先，并支持会话级近期冷却。
-- **无 API Key 也能运行**：默认关闭 LLM，使用本地规则 Agent 完成完整流程。
-- **可选 LLM 集成**：通过环境变量接入 OpenAI-compatible Chat Completions 接口。
-- **完整可审计 Trace**：持久化会话、消息、推荐历史、反馈、`DecisionState`、`Evidence` 和 Agent Run。
-- **Evaluation Dashboard**：用 17 项指标、Bad Case Center 和 Regression Dataset 展示从失败归因到回归监控的闭环。
-- **内置饮食领域**：支持单餐推荐、多轮澄清、换一批、三餐计划、个人餐食库和公共餐食库。
-- **FastAPI + 本地 Web UI**：本地即可启动，API 文档位于 `/docs`。
+* **结构化决策状态**：显式建模目标、硬/软约束、评价维度、候选项、Evidence 和推荐结果。
+* **LLM + 确定性引擎**：LLM 负责理解与解释，代码负责过滤、评分、排序和状态流转。
+* **Orchestrator + 专职 Agent**：拆分意图理解、澄清、候选准备、审查、解释和风险处理。
+* **评估与回归**：支持多维指标、Bad Case、Regression Dataset 和版本对比。
+* **Trace 与 Fallback**：记录 Agent 执行、状态变化、耗时、异常和降级路径。
 
-## 技术架构
+## 整体架构
 
 ```text
-FastAPI / Static Web
-  -> Diet / Generic API Facades
-    -> UnifiedDecisionOrchestrator + StageRunner (evolved from Diet)
-      -> DomainProfile: Diet / Travel / Shopping / Generic
-        -> Provider + EvidenceValidator + GenericRankingEngine
-          -> Optional Composition + Critic + Explanation + Safety
-            -> DecisionRepository / SQLAlchemy / SQLite
+用户请求
+   ↓
+Orchestrator
+   ↓
+Intent / Understanding / Clarification
+   ↓
+Candidate Retrieval + Evidence
+   ↓
+确定性过滤与排序
+   ↓
+Critic + Explanation + Risk
+   ↓
+Recommendation
+   ↓
+Trace → Evaluation → Bad Case → Regression
 ```
 
-Agent 负责自然语言理解、澄清、计划、审查和解释；确定性引擎负责过滤、评分、排序、
-数据隔离和可复现的决策行为。
+## 决策领域
 
-## 快速开始
+**Diet 饮食决策**
+用于验证多轮澄清、领域规则、规划与风险处理。
 
-环境要求：
+**Travel 旅行决策**
+用于验证通用决策建模、候选检索、Evidence、约束与多维排序。
 
-- Python 3.10+
+其他场景可作为 Demo 保留。
 
-安装并启动：
+## Evaluation
 
-```powershell
+评估采用 **规则优先** 原则。
+
+只要能够通过结构化状态或 Trace 稳定判断，就优先使用确定性规则，而不是交给另一个 LLM 打分。
+
+```text
+Regression Dataset
+      ↓
+Agent Run
+      ↓
+Metrics + Trace
+      ↓
+Bad Case
+      ↓
+Fix
+      ↓
+Regression Re-run
+```
+
+真实 Baseline/Candidate 对比需要对同一 Dataset 分别执行两次，并用已持久化的 Run ID 比较。`configured` 使用当前环境配置的模型 API，`disabled` 保持确定性的离线路径。
+
+```bash
+python -m choice_agent.evaluation.cli --dataset-id <dataset-id> --run-label baseline --model <baseline-model> --provider configured
+python -m choice_agent.evaluation.cli --dataset-id <dataset-id> --run-label candidate --model <candidate-model> --provider configured --compare-to-run-id <baseline-run-id>
+```
+
+比较接口为 `GET /api/v1/evaluations/comparisons?baselineRunId=...&candidateRunId=...`。它要求双方 Dataset hash 及 Case/revision/repetition 集合完全一致，并返回两个版本的完整聚合结果与逐 Case 的 `improved`、`regressed`、`unchanged`、`new_failure`、`fixed` 判定。
+
+`fault-injection-reliability/v2` 通过真实 EvaluationRunner 与 Orchestrator 运行 8 条受控故障 Case，覆盖 LLM timeout/invalid JSON、Web Search transport/invalid response 和 Agent execution failure。当前共 18 项指标，包括 LLM/Search fallback 成功率、Trace 派生的 Agent 失败率和响应延迟；实际离线运行示例见 `docs/reliability-regression-example.json`。
+
+## 技术栈
+
+Python · FastAPI · Pydantic · SQLAlchemy · SQLite · OpenAI-compatible APIs
+
+## 快速启动
+
+```bash
 python -m pip install -e .
 python scripts/init_db.py
 python -m uvicorn choice_agent.main:app --host 127.0.0.1 --port 8000
 ```
 
-打开：
-
-- 应用首页：http://127.0.0.1:8000/
-- API 文档：http://127.0.0.1:8000/docs
-
-如果尚未安装项目包，也可以直接指定源码路径：
-
-```powershell
-$env:PYTHONPATH = "src"
-python scripts/init_db.py
-python -m uvicorn choice_agent.main:app --host 127.0.0.1 --port 8000
-```
-
-## 配置
-
-默认 `CHOICE_AGENT_ENABLE_LLM=false`，系统使用确定性规则 Agent 运行。
-
-按 `.env.example` 设置进程环境变量（当前不会自动读取 `.env` 文件）：
-
-```env
-CHOICE_AGENT_DATABASE_URL=sqlite:///./choice_agent.db
-CHOICE_AGENT_MODEL_API_KEY=
-CHOICE_AGENT_MODEL_BASE_URL=https://api.openai.com/v1
-CHOICE_AGENT_MAIN_MODEL=gpt-5
-CHOICE_AGENT_LIGHT_MODEL=gpt-5-mini
-CHOICE_AGENT_MODEL_TIMEOUT_SECONDS=30
-CHOICE_AGENT_ENABLE_LLM=false
-CHOICE_AGENT_DEBUG=true
-```
-
-模型调用失败时，意图和解释 Agent 会回退到本地规则结果，不影响确定性决策引擎运行。
-Web UI 也提供 `#/settings` 设置页，可配置浏览器侧模型 API。该设置保存在当前浏览器的 `localStorage`，并随饮食聊天和评估请求通过请求头发送给本地后端。未配置浏览器 API Key 时，通用决策仍进入服务端工作台；旅行和购物使用明确标注的离线模拟数据，未知领域先澄清并收集手工候选。后端错误不再自动创建本地 demo。
-
-## 演示模式
-
-Web UI 内置通用演示工作台，覆盖旅行、职业 Offer、学习路径和购物决策。通用 demo 使用本地 fixture 数据，并在页面中标注“演示数据 / 非实时”，用于在没有 API Key、网络或额外数据库配置时展示 Choice Agent 的通用决策流程。新建演示会先进入可编辑的约束准备和候选项准备步骤，用户可以新增、删除或确认约束与候选项，再进入排序和结论生成。
-
-## Evaluation Dashboard
-
-打开 `#/admin/evaluations` 可以查看新的评估中心。页面保留旧版饮食 Trace 报告，同时新增整体得分、版本差异、17 项指标、Bad Case Center、Regression Dataset、回归运行结果和 Trace 快照。
-
-每个 Bad Case 可以记录原始问题、预期行为、实际行为、错误类型、问题归因、涉及模块、修改方案、修复版本和回归状态。Case 只有在加入数据集并由同版本回归运行通过后，才会自动进入 `verified`；手工填写修复版本不会直接视为已修复。
-
-后端接口位于 `/api/v1/evaluations`。本地也可以用 CLI 运行同一套离线回归：
-
-```bash
-python -m choice_agent.evaluation.cli --version-label local-check --limit 20
-```
-
-饮食类请求仍然使用真实的本地规则 Agent 链路和种子餐食数据，不会被通用 fixture 工作台替代。
-
-## 数据
-
-默认数据库是项目根目录下的 `choice_agent.db`。首次启动会创建全部表，并从
-`legacy_diet_db.sql` 幂等导入旧饮食项目的槽位选项和餐食数据。
-
-本地数据库已加入 `.gitignore`，不应提交到 GitHub。
-
-## 饮食选择上下文
-
-饮食聊天请求可以在 `context` 中传入可选选择器参数：
-
-```json
-{
-  "context": {
-    "selectionStrategy": "weighted",
-    "avoidRecentCount": 3
-  }
-}
-```
-
-支持的策略包括 `ranked`、`random`、`weighted` 和 `least_recent`。默认使用 `ranked`，保持现有稳定推荐行为。
-
-## 测试
-
-```powershell
-python -m pytest
-python -m compileall -q src scripts
-```
-
-## 项目结构
+应用：
 
 ```text
-src/choice_agent/
-  agents/              Agent 协议和专用 Agent
-  api/                 FastAPI 路由
-  decision/            通用确定性决策引擎
-  domains/diet/        饮食领域规则、种子数据和领域逻辑
-  orchestration/       多 Agent 状态机
-  providers/           可选模型服务集成
-  repositories/        持久化访问层
-  services/            Trace 和辅助服务
-  static/              本地 Web 界面
-tests/                 引擎、规则、编排和 API 行为测试
-docs/                  迁移和实现说明
-adr/                   Research 和 Plan 记录
+http://127.0.0.1:8000/
 ```
 
-## 路线图
+API：
 
-- 扩展饮食以外的更多决策领域。
-- 增强评估数据集和回归评分。
-- 增加更清晰的候选项权衡对比视图。
-- 扩展搜索、检索和外部证据的 provider 支持。
-- 沉淀可复用的决策领域模板。
-
-## 许可证
-
-MIT
-
-
-## Unified Decision Workbench / 统一决策工作台
-
-Diet is the source of the shared lifecycle, not a separate pipeline migrated into
-an unrelated generic engine. Both API facades call the same StageRunner.
-Diet keeps its domain rules, database provider, plan composition and safety policies;
-Travel, Shopping and Generic reuse the shared comparison implementation.
-
-- Create: `POST /api/v1/decisions`; continue: `/{id}/messages`; edit: `/{id}/commands`.
-- Commands require `commandId`, `type`, `expectedRevision`, and optional `payload` / `context`.
-- Weight edits and exclusions reuse the candidate pool. Refresh preserves manual
-  candidates. Constraint operators include `lte`, `gte`, `eq`, `contains_any`, and `not_contains`.
-- Generic manual comparisons use user-entered 0-100 fit, cost and risk scores.
-  They are subjective inputs, not externally verified facts.
-- Owners are checked on reads and mutations. Concurrent stale writes fail with 409.
-  This JSON ownership compatibility layer is not a production authentication system.
-- `#/demo` remains an explicit offline example, not an automatic error fallback.
-
-Search configuration (independent of the browser model settings):
-
-```env
-CHOICE_AGENT_SEARCH_PROVIDER=fixture
-CHOICE_AGENT_SEARCH_API_KEY=
-CHOICE_AGENT_SEARCH_BASE_URL=https://api.openai.com/v1
-CHOICE_AGENT_SEARCH_MODEL=gpt-5-mini
-CHOICE_AGENT_SEARCH_TIMEOUT_SECONDS=20
-CHOICE_AGENT_SEARCH_MAX_QUERIES=2
+```text
+http://127.0.0.1:8000/docs
 ```
 
-`context.searchMode` accepts `fixture`, `web`, or `auto`. Explicit `web` failure
-returns 502; only `auto` may fall back with a warning. Search has at most two
-transport attempts; the tool-call limit applies per attempt.
-Source URLs are accepted only if returned by the search tool. A verified URL
-does not establish that every claim is true. Live search has not yet been
-validated with production credentials.
+即使没有配置 LLM API Key，核心确定性链路也可以运行。
 
-当前已验证共享流程、Diet 回归、命令编辑及桌面/移动端基本交互。独立 Source/Evidence
-阶段 Trace、严格类型化 hook、完整证据冲突/时效/覆盖率策略和更多领域知识仍在 Plan
-的待办中，不应把当前实现视为全部计划已完成。
+## 详细文档
+
+完整架构与设计说明：
+
+* [`docs/PROJECT_OVERVIEW.md`](docs/PROJECT_OVERVIEW.md)
+* [`docs/EVALUATION.md`](docs/EVALUATION.md)
+* [`adr/`](adr/) — 架构与实现决策记录
