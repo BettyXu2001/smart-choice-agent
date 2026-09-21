@@ -19,6 +19,11 @@
         searchBaseUrl: "https://api.openai.com/v1",
         searchModel: "gpt-5-mini"
     };
+    const LEGACY_MODEL_DEFAULTS = {
+        baseUrl: "https://api.openai.com/v1",
+        mainModel: "gpt-5",
+        lightModel: "gpt-5-mini"
+    };
 
     function getUserId() {
         return localStorage.getItem(USER_ID_KEY) || "1";
@@ -45,13 +50,33 @@
         };
     }
 
+    function migrateLegacyModelDefaults(settings) {
+        const normalized = normalizeModelSettings(settings);
+        const untouchedLegacyDefaults = !normalized.enabled
+            && !normalized.apiKey
+            && normalized.baseUrl === LEGACY_MODEL_DEFAULTS.baseUrl
+            && normalized.mainModel === LEGACY_MODEL_DEFAULTS.mainModel
+            && normalized.lightModel === LEGACY_MODEL_DEFAULTS.lightModel;
+        if (!untouchedLegacyDefaults) {
+            return normalized;
+        }
+        return {
+            ...normalized,
+            baseUrl: DEFAULT_MODEL_SETTINGS.baseUrl,
+            mainModel: DEFAULT_MODEL_SETTINGS.mainModel,
+            lightModel: DEFAULT_MODEL_SETTINGS.lightModel
+        };
+    }
+
     function getModelSettings() {
         try {
             const raw = localStorage.getItem(MODEL_SETTINGS_KEY);
             if (!raw) {
                 return { ...DEFAULT_MODEL_SETTINGS };
             }
-            return normalizeModelSettings(JSON.parse(raw));
+            const settings = migrateLegacyModelDefaults(JSON.parse(raw));
+            localStorage.setItem(MODEL_SETTINGS_KEY, JSON.stringify(settings));
+            return settings;
         } catch (error) {
             return { ...DEFAULT_MODEL_SETTINGS };
         }
@@ -78,7 +103,6 @@
         return settings.searchEnabled && Boolean(settings.searchApiKey);
     }
 
-
     function attachModelHeaders(headers) {
         const settings = getModelSettings();
         if (!settings.enabled || !settings.apiKey) {
@@ -102,7 +126,6 @@
         headers.set("X-Choice-Agent-Search-Model", settings.searchModel);
     }
 
-
     async function request(baseUrl, path, options) {
         const config = options || {};
         const headers = new Headers(config.headers || {});
@@ -117,7 +140,7 @@
         const response = await fetch(`${baseUrl}${path}`, {
             ...config,
             headers,
-            body: config.body === undefined || config.body instanceof FormData
+            body: config.body === undefined || config.body instanceof FormData)
                 ? config.body
                 : JSON.stringify(config.body)
         });
@@ -165,6 +188,7 @@
     async function profileRequest(path, options) {
         return request(PROFILE_API_BASE, path, options);
     }
+
     function normalizeStreamError(event) {
         const detail = event?.error?.message || event?.message || "请求失败，请重试。";
         const error = new Error(detail);
