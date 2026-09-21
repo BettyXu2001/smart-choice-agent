@@ -11,9 +11,9 @@
     const DEFAULT_MODEL_SETTINGS = {
         enabled: false,
         apiKey: "",
-        baseUrl: "https://api.openai.com/v1",
-        mainModel: "gpt-5",
-        lightModel: "gpt-5-mini",
+        baseUrl: "https://api.deepseek.com",
+        mainModel: "deepseek-v4-pro",
+        lightModel: "deepseek-flash",
         searchEnabled: false,
         searchApiKey: "",
         searchBaseUrl: "https://api.openai.com/v1",
