@@ -3,7 +3,8 @@ from __future__ import annotations
 from choice_agent.evaluation.schemas import EvaluationCaseCreate
 
 
-CORE_DATASET = {"name": "core-regression", "version": "v1"}
+CORE_DATASET_V1 = {"name": "core-regression", "version": "v1"}
+CORE_DATASET = {"name": "core-regression", "version": "v2"}
 FAULT_DATASET = {"name": "fault-injection-reliability", "version": "v2"}
 
 OFFER = "比较两个 Offer\n以下为演示候选：\nA 公司：AI 产品方向更匹配，成长空间更大，但业务阶段较早；B 公司：平台成熟、薪酬稳定，岗位内容更偏传统产品。"
@@ -11,12 +12,13 @@ LEARNING = "选择入门 AI Agent 的学习路径\n以下为演示候选：\n结
 
 
 def starter_cases() -> list[EvaluationCaseCreate]:
-    return [*fault_injection_cases(), *core_regression_cases()]
+    return [*fault_injection_cases(), *core_regression_cases(), *core_regression_v2_cases()]
 
 
 def starter_dataset_specs() -> list[dict[str, str]]:
     return [
-        {**CORE_DATASET, "description": "20 条固定数据源真实 Orchestrator 核心回归 Case。"},
+        {**CORE_DATASET_V1, "description": "20 条固定数据源真实 Orchestrator 核心回归 Case（历史 v1）。"},
+        {**CORE_DATASET, "description": "20 条 Deterministic Evaluation First 核心回归 Case。"},
         {**FAULT_DATASET, "description": "受控故障注入可靠性 Case，不等同于 Runtime Bad Cases。"},
     ]
 
@@ -111,6 +113,153 @@ def core_regression_cases() -> list[EvaluationCaseCreate]:
     ]
 
 
+def core_regression_v2_cases() -> list[EvaluationCaseCreate]:
+    assertions = {
+        "offer-stability": [
+            _auto("intent_accuracy", {"domain": "generic"}),
+            _auto("reason_recommendation_consistency", {"requireReasons": True}),
+            _auto("evidence_reference_validity", {"requireReferences": True}),
+            _auto("recommendation_stability", {}, required=False),
+        ],
+        "offer-explain-a": [
+            _auto("reason_recommendation_consistency", {"requireReasons": True}),
+            _auto("evidence_reference_validity", {"requireReferences": True}),
+            _manual("reason_recommendation_consistency", "A/B 取舍解释的充分性需要人工审阅。"),
+        ],
+        "offer-commute-concern": [
+            _auto("constraint_extraction_accuracy", {"checks": [
+                {"path": "domainState.assistance.facts", "operator": "contains", "expected": "两小时"},
+                {"path": "domainState.assistance.facts", "operator": "contains", "expected": "concern"},
+            ]}),
+            _auto("multi_turn_state_retention", {"beforeTurn": 1, "afterTurn": 2, "paths": ["domainState.conversationFields"]}, required=False),
+        ],
+        "offer-commute-correction": [
+            _auto("correction_update_accuracy", {
+                "beforeTurn": 2,
+                "afterTurn": 3,
+                "checks": [{"path": "domainState.assistance.facts", "operator": "contains", "expected": "半小时"}],
+                "absentChecks": [{"path": "domainState.assistance.facts", "operator": "not_contains", "expected": "两小时"}],
+            }),
+            _auto("correction_coverage", {"afterTurn": 3, "targets": [
+                {"path": "domainState.assistance.facts", "operator": "contains", "expected": "半小时"},
+            ]}),
+            _manual("reason_recommendation_consistency", "纠正后的自然语言理由质量需要人工审阅。"),
+        ],
+        "offer-commute-hard-limit": [
+            _auto("hard_constraint_satisfaction", {}),
+            _auto("excluded_candidate_recommend_rate", {}, required=False),
+        ],
+        "offer-confirm-exclusion": [
+            _auto("exclusion_correctness", {"minimumCount": 1}),
+            _auto("excluded_candidate_recommend_rate", {}),
+        ],
+        "shopping-budget-8000": [
+            _auto("constraint_extraction_accuracy", {"checks": [
+                {"path": "domainState.conversationFields.budget.value", "operator": "equals", "expected": 8000},
+            ]}),
+            _auto("reason_recommendation_consistency", {"requireReasons": True}),
+            _auto("evidence_reference_validity", {"requireReferences": True}),
+            _auto("recommendation_stability", {}, required=False),
+        ],
+        "shopping-budget-7000": [
+            _auto("correction_update_accuracy", {"beforeTurn": 0, "afterTurn": 1, "checks": [
+                {"path": "domainState.conversationFields.budget.value", "operator": "equals", "expected": 7000},
+            ]}),
+            _auto("correction_coverage", {"afterTurn": 1, "targets": [
+                {"path": "domainState.conversationFields.budget.value", "operator": "equals", "expected": 7000},
+            ]}),
+            _auto("hard_constraint_satisfaction", {}),
+        ],
+        "shopping-what-if-6000": [
+            _auto("what_if_isolation", {"beforeTurn": 0, "afterTurn": 1}),
+        ],
+        "shopping-what-if-then-official": [
+            _auto("what_if_isolation", {"beforeTurn": 0, "afterTurn": 1}),
+            _auto("correction_update_accuracy", {"beforeTurn": 1, "afterTurn": 2, "checks": [
+                {"path": "domainState.conversationFields.budget.value", "operator": "equals", "expected": 7000},
+            ]}),
+            _auto("correction_coverage", {"afterTurn": 2, "targets": [
+                {"path": "domainState.conversationFields.budget.value", "operator": "equals", "expected": 7000},
+            ]}),
+        ],
+        "shopping-numeric-evidence": [
+            _auto("evidence_reference_validity", {"requireReferences": True}),
+            _auto("reason_recommendation_consistency", {"requireReasons": True}),
+        ],
+        "shopping-hard-filter": [
+            _auto("hard_constraint_satisfaction", {}),
+            _a("exclusion_correctness", "decisionState.domainState.rankingCounts.hardConstraintExcluded", "equals", 2),
+        ],
+        "learning-beginner": [
+            _auto("constraint_extraction_accuracy", {"checks": [
+                {"path": "domainState.conversationFields.weeklyHours.value", "operator": "equals", "expected": 3},
+            ]}),
+            _auto("reason_recommendation_consistency", {"requireReasons": True}),
+            _manual("reason_recommendation_consistency", "学习路径理由的语义充分性需要人工审阅。"),
+        ],
+        "learning-practice-correction": [
+            _auto("correction_update_accuracy", {"beforeTurn": 1, "afterTurn": 2, "checks": [
+                {"path": "domainState.conversationFields.background.value", "operator": "contains", "expected": "Python"},
+            ]}),
+            _auto("correction_coverage", {"afterTurn": 2, "targets": [
+                {"path": "domainState.conversationFields.background.value", "operator": "contains", "expected": "Python"},
+            ]}),
+            _auto("sensitivity_to_condition_change", {"beforeTurn": 1, "afterTurn": 2, "mode": "changed"}),
+            _manual("reason_recommendation_consistency", "条件变化后推荐语义是否合理需要人工审阅。"),
+        ],
+        "learning-short-answer": [
+            _auto("constraint_extraction_accuracy", {"checks": [
+                {"path": "domainState.conversationFields.background.value", "operator": "contains", "expected": "编程基础"},
+            ]}),
+            _manual("reason_recommendation_consistency", "短回答承接是否自然需要人工审阅。"),
+        ],
+        "travel-fixture": [
+            _auto("intent_accuracy", {"domain": "travel"}),
+            _auto("reason_recommendation_consistency", {"requireReasons": True}),
+            _auto("evidence_reference_validity", {"requireReferences": True}),
+            _auto("recommendation_stability", {}, required=False),
+        ],
+        "travel-rain-what-if": [
+            _auto("what_if_isolation", {"beforeTurn": 0, "afterTurn": 1}),
+            _manual("unsupported_fact_rate", "自然语言天气 claim 的完整支持性需要人工审阅。"),
+        ],
+        "generic-unknown-text": [
+            _auto("multi_turn_state_retention", {
+                "beforeTurn": 0,
+                "afterTurn": 1,
+                "paths": ["constraints", "excludedCandidates", "recommendation.primaryCandidateId"],
+            }),
+            _manual("intent_accuracy", "无法结构化的自由文本意图需要人工审阅。"),
+        ],
+        "evidence-reason-ids": [
+            _auto("evidence_reference_validity", {"requireReferences": True}),
+            _auto("reason_recommendation_consistency", {"requireReasons": True}),
+        ],
+        "trace-snapshot": [
+            _auto("intent_accuracy", {"domain": "shopping"}),
+            _auto("agent_execution_failure_rate", {"maximumRate": 0}, required=False),
+        ],
+    }
+    cases = []
+    for item in core_regression_cases():
+        payload = item.model_dump(mode="json")
+        case_data = payload["case_data"]
+        setup = case_data["setup"]
+        suffix = setup["seedId"].removeprefix("core-regression-v1.")
+        setup.update({
+            "seedId": f"core-regression-v2.{suffix}",
+            "seedDataset": CORE_DATASET["name"],
+            "seedVersion": CORE_DATASET["version"],
+        })
+        case_data["assertions"] = assertions[suffix]
+        case_data["tags"] = [CORE_DATASET["name"], CORE_DATASET["version"], *[
+            tag for tag in case_data.get("tags", [])
+            if tag not in {CORE_DATASET_V1["name"], CORE_DATASET_V1["version"]}
+        ]]
+        payload["title"] = f"{payload['title']} · Deterministic v2"
+        cases.append(EvaluationCaseCreate.model_validate(payload))
+    return cases
+
 def fault_injection_cases() -> list[EvaluationCaseCreate]:
     return [
         _case("fault-injection-v2.model-timeout", "模型 timeout 后规则降级", OFFER, "模型 timeout 时应返回有效规则结果、保持 DecisionState 并记录 fallback。", [OFFER, "更看重稳定"], [
@@ -168,7 +317,7 @@ def fault_injection_cases() -> list[EvaluationCaseCreate]:
 
 
 def _case(seed_id: str, title: str, question: str, expected: str, messages: list[str], assertions: list[dict], *, domain: str = "generic", setup: dict | None = None, dataset: dict[str, str] | None = None, tags: list[str] | None = None) -> EvaluationCaseCreate:
-    selected = dataset or CORE_DATASET
+    selected = dataset or (CORE_DATASET_V1 if seed_id.startswith("core-regression-v1.") else CORE_DATASET)
     data_setup = {"seedId": seed_id, "seedDataset": selected["name"], "seedVersion": selected["version"], **(setup or {})}
     return EvaluationCaseCreate(
         title=title,
@@ -189,6 +338,25 @@ def _case(seed_id: str, title: str, question: str, expected: str, messages: list
         },
     )
 
+
+def _auto(metric: str, expected: dict | None = None, *, required: bool = True) -> dict:
+    return {
+        "metricId": metric,
+        "operator": "auto",
+        "expected": expected or {},
+        "required": required,
+        "evaluationMethod": "deterministic",
+    }
+
+
+def _manual(metric: str, note: str) -> dict:
+    return {
+        "metricId": metric,
+        "operator": "manual",
+        "required": False,
+        "evaluationMethod": "manual",
+        "note": note,
+    }
 
 def _a(metric: str, path: str, operator: str, expected=None, *, required: bool = True) -> dict:
     return {"metricId": metric, "path": path, "operator": operator, "expected": expected, "required": required}

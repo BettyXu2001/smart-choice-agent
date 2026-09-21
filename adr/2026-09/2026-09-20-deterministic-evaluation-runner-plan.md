@@ -1,6 +1,6 @@
 # Deterministic Evaluation Runner Plan
 
-日期：2026-09-20。状态：原 Plan 已获批准；实施前发现重要重叠改动，已更新并等待重新批准。
+日期：2026-09-20。状态：已完成实施与验证。
 依据：同目录 `2026-09-20-deterministic-evaluation-runner-research.md`。
 
 ## 实施前冲突审计与 Plan 调整
@@ -179,11 +179,11 @@ Starter seed 继续按稳定 seedId 幂等补齐，不覆盖用户已存在的 C
 ## Todo
 
 - [x] 完成实施前冲突审计，确认 Baseline/Candidate、Fault v2 与 Trace observability 为必须保留的有效基线。
-- [ ] 增加 evaluationMethod/auto assertion 契约和兼容校验，完成三态与 required/manual 单元测试。
-- [ ] 实现纯确定性 evaluator 与规范化投影，覆盖 16 项指标的可靠规则边界。
-- [ ] 增强 Runner 的逐轮 Trace 捕获和 deterministic-only Gate，不加入 LLM Judge。
-- [ ] 增强 metrics summary 的 deterministic-only 分数、coverage、manual/not-evaluated 报告。
-- [ ] 在 Service 中实现跨 repetition stability，并证明 Human Review 不影响 Gate 与 Bad Case lifecycle。
-- [ ] 发布并幂等 seed `core-regression/v2`，保留 v1，不用弱文本代理冒充全面语义评分。
-- [ ] 最小更新 Evaluation Dashboard、README 和同日 CHANGELOG，展示评测方式与人工边界。
-- [ ] 运行专项与全量验证、重复运行一致性测试、compileall/node check/diff check，复核全部 Todo。
+- [x] 增加 evaluationMethod/auto assertion 契约和兼容校验，完成三态与 required/manual 单元测试。
+- [x] 实现纯确定性 evaluator 与规范化投影，覆盖 16 项指标的可靠规则边界。
+- [x] 增强 Runner 的逐轮 Trace 捕获和 deterministic-only Gate，不加入 LLM Judge。
+- [x] 增强 metrics summary 的 deterministic-only 分数、coverage、manual/not-evaluated 报告。
+- [x] 在 Service 中实现跨 repetition stability，并证明 Human Review 不影响 Gate 与 Bad Case lifecycle。
+- [x] 发布并幂等 seed `core-regression/v2`，保留 v1，不用弱文本代理冒充全面语义评分。
+- [x] 最小更新 Evaluation Dashboard、README 和同日 CHANGELOG，展示评测方式与人工边界。
+- [x] 运行专项与全量验证、重复运行一致性测试、compileall/node check/diff check，复核全部 Todo。

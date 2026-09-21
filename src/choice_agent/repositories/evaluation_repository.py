@@ -172,6 +172,20 @@ class EvaluationRepository:
     def get_result(self, result_id: str) -> EvaluationResultRecord | None:
         return self.db.get(EvaluationResultRecord, result_id)
 
+    def update_result_evaluation(
+        self,
+        row: EvaluationResultRecord,
+        *,
+        status: str,
+        assertions: list[dict[str, Any]],
+        metrics: dict[str, Any],
+    ) -> EvaluationResultRecord:
+        row.status = status
+        row.assertions_json = assertions
+        row.metrics_json = metrics
+        row.updated_at = datetime.now()
+        self.db.commit()
+        return row
     def update_result_reviews(self, row: EvaluationResultRecord, reviews: dict[str, Any]) -> EvaluationResultRecord:
         row.reviews_json = reviews
         row.updated_at = datetime.now()

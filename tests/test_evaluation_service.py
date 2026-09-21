@@ -9,6 +9,7 @@ from choice_agent.evaluation.schemas import (
     EvaluationDatasetCreate,
     EvaluationRunConfiguration,
     EvaluationRunCreate,
+    EvaluationReviewUpdate,
 )
 from choice_agent.evaluation.service import EvaluationConfigurationError, EvaluationService
 from choice_agent.providers.model import DisabledProvider
@@ -24,14 +25,18 @@ def test_evaluation_dashboard_seeds_versioned_regression_datasets_and_runs_core(
         evaluation = service(db)
         dashboard = evaluation.dashboard(1)
         assert len(dashboard["metricDefinitions"]) == 18
-        datasets = {item["name"]: item for item in dashboard["datasets"]}
-        assert datasets["core-regression"]["version"] == "v1"
-        assert datasets["core-regression"]["caseCount"] == 20
-        assert datasets["fault-injection-reliability"]["version"] == "v2"
-        assert datasets["fault-injection-reliability"]["caseCount"] == 8
+        datasets = {(item["name"], item["version"]): item for item in dashboard["datasets"]}
+        assert ("core-regression", "v1") in datasets
+        assert ("core-regression", "v2") in datasets
+        core = datasets[("core-regression", "v2")]
+        fault = datasets[("fault-injection-reliability", "v2")]
+        assert core["version"] == "v2"
+        assert core["caseCount"] == 20
+        assert fault["version"] == "v2"
+        assert fault["caseCount"] == 8
         assert all(
             case["caseData"].get("fixtureActual") is None
-            for case in datasets["core-regression"]["caseSnapshots"]
+            for case in core["caseSnapshots"]
         )
 
         run = evaluation.create_run(1, EvaluationRunCreate(version_label="test-v1"))
@@ -61,10 +66,10 @@ def test_starter_seed_is_idempotent_and_backfills_existing_database(database):
 
         assert any(case["id"] == manual["id"] for case in second["cases"])
         assert len(first["cases"]) == len(second["cases"])
-        datasets = {item["name"]: item for item in second["datasets"]}
-        assert datasets["core-regression"]["caseCount"] == 20
-        assert datasets["fault-injection-reliability"]["version"] == "v2"
-        assert datasets["fault-injection-reliability"]["caseCount"] == 8
+        datasets = {(item["name"], item["version"]): item for item in second["datasets"]}
+        assert datasets[("core-regression", "v1")]["caseCount"] == 20
+        assert datasets[("core-regression", "v2")]["caseCount"] == 20
+        assert datasets[("fault-injection-reliability", "v2")]["caseCount"] == 8
 
 
 def test_evaluation_dataset_is_versioned_snapshot(database):
@@ -257,3 +262,59 @@ def test_request_fingerprint_includes_effective_run_configuration(database):
                     limit=1,
                 ),
             )
+
+
+def test_human_review_is_supplemental_and_does_not_change_regression_gate(database):
+    with database.session_factory() as db:
+        evaluation = service(db)
+        run = evaluation.create_run(1, EvaluationRunCreate(limit=1, version_label="review-isolation"))
+        before_summary = run["summary"]
+        before_result = run["results"][0]
+
+        reviewed = evaluation.update_review(
+            1,
+            before_result["id"],
+            EvaluationReviewUpdate(reviews={"intent_accuracy": {"label": "incorrect"}}),
+        )
+        refreshed = next(item for item in evaluation.dashboard(1)["runs"] if item["id"] == run["id"])
+
+        assert reviewed["status"] == before_result["status"]
+        assert reviewed["assertions"] == before_result["assertions"]
+        assert reviewed["reviews"]["intent_accuracy"]["label"] == "incorrect"
+        assert reviewed["reviews"]["_evaluation"]["outputFingerprint"]
+        assert reviewed["reviewStale"] is False
+        assert refreshed["summary"] == before_summary
+
+
+def test_repeat_run_produces_identical_deterministic_evaluation_and_stability(database):
+    with database.session_factory() as db:
+        evaluation = service(db)
+        core = next(
+            item for item in evaluation.dashboard(1)["datasets"]
+            if item["name"] == "core-regression" and item["version"] == "v2"
+        )
+        case = next(
+            item for item in core["caseSnapshots"]
+            if item["caseData"]["setup"]["seedId"] == "core-regression-v2.offer-stability"
+        )
+        dataset = evaluation.create_dataset(
+            1,
+            EvaluationDatasetCreate(name="repeat-determinism", version="v1", case_ids=[case["id"]]),
+        )
+        run = evaluation.create_run(
+            1,
+            EvaluationRunCreate(dataset_id=dataset["id"], repeat=2, version_label="repeat-determinism"),
+        )
+
+        assert len(run["results"]) == 2
+        first, second = run["results"]
+        assert first["status"] == second["status"] == "passed"
+        normalize = lambda result: [
+            (item["metricId"], item["passed"], item["evaluationMethod"], item.get("missingReason"))
+            for item in result["assertions"]
+        ]
+        assert normalize(first) == normalize(second)
+        stability = [item for item in first["assertions"] if item["metricId"] == "recommendation_stability"]
+        assert stability == [next(item for item in second["assertions"] if item["metricId"] == "recommendation_stability")]
+        assert stability[0]["passed"] is True
+        assert stability[0]["evaluationMethod"] == "deterministic"

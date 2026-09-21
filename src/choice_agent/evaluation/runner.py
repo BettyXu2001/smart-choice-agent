@@ -16,6 +16,7 @@ from choice_agent.domains.registry import DomainRegistry
 from choice_agent.domains.shopping import ShoppingProfile
 from choice_agent.domains.travel import TravelProfile
 from choice_agent.db_models import TraceRecord
+from choice_agent.evaluation.deterministic import evaluate_auto_assertion
 from choice_agent.evaluation.metrics import METRIC_BY_ID, aggregate_metric, trace_observation_metrics
 from choice_agent.evaluation.schemas import (
     CURRENT_PROMPT_VERSION,
@@ -71,10 +72,8 @@ class EvaluationRunner:
                 for metric_id in METRIC_BY_ID
             }
             metrics.update(trace_observation_metrics(trace_snapshot))
-            failed_required = [item for item in assertions if item.get("required", True) and item.get("passed") is False]
-            status = "failed" if failed_required else "passed"
-            if not assertions:
-                status = "not_evaluated"
+            status = deterministic_gate_status(assertions)
+
             return EvaluationRunOutput(status=status, outputs=outputs, trace_snapshot=trace_snapshot, assertions=assertions, metrics=metrics)
         except Exception as error:
             return EvaluationRunOutput(
@@ -369,32 +368,61 @@ class EvaluationRunner:
         if metric_id not in METRIC_BY_ID:
             raise ValueError(f"未知指标：{metric_id}")
         operator = assertion.get("operator", "equals")
-        actual = _path_get(outputs, assertion.get("path") or assertion.get("actualPath") or assertion.get("actual_path"))
         expected = assertion.get("expected")
+        reason = None
         if operator == "manual":
+            actual = None
             passed = None
-        elif operator == "equals":
-            passed = actual == expected
-        elif operator == "not_equals":
-            passed = actual != expected
-        elif operator == "contains":
-            passed = _contains(actual, expected)
-        elif operator == "not_contains":
-            passed = not _contains(actual, expected)
-        elif operator == "includes_all":
-            passed = all(_contains(actual, item) for item in _as_list(expected))
-        elif operator == "excludes_all":
-            passed = all(not _contains(actual, item) for item in _as_list(expected))
-        elif operator == "non_empty":
-            passed = bool(actual)
-        elif operator == "empty":
-            passed = not bool(actual)
+            evaluation_method = "manual"
+        elif operator == "auto":
+            result = evaluate_auto_assertion(metric_id, expected, outputs)
+            actual = result.actual
+            passed = result.passed
+            reason = result.reason
+            evaluation_method = result.evaluation_method
         elif operator in {"changed", "unchanged"}:
-            before = _path_get(outputs, assertion.get("beforePath") or assertion.get("before_path"))
-            after = _path_get(outputs, assertion.get("actualPath") or assertion.get("actual_path") or assertion.get("path"))
-            passed = before != after if operator == "changed" else before == after
+            before_found, before = _path_lookup(outputs, assertion.get("beforePath") or assertion.get("before_path"))
+            after_found, after = _path_lookup(outputs, assertion.get("actualPath") or assertion.get("actual_path") or assertion.get("path"))
+            actual = {"before": before, "after": after}
+            if not before_found or not after_found:
+                passed = None
+                reason = "断言路径不存在"
+                evaluation_method = "not_evaluated"
+            else:
+                passed = before != after if operator == "changed" else before == after
+                evaluation_method = "deterministic"
         else:
-            raise ValueError(f"未知断言操作：{operator}")
+            found, actual = _path_lookup(outputs, assertion.get("path") or assertion.get("actualPath") or assertion.get("actual_path"))
+            if not found:
+                passed = None
+                reason = "断言路径不存在"
+                evaluation_method = "not_evaluated"
+            elif operator == "equals":
+                passed = actual == expected
+                evaluation_method = "deterministic"
+            elif operator == "not_equals":
+                passed = actual != expected
+                evaluation_method = "deterministic"
+            elif operator == "contains":
+                passed = _contains(actual, expected)
+                evaluation_method = "deterministic"
+            elif operator == "not_contains":
+                passed = not _contains(actual, expected)
+                evaluation_method = "deterministic"
+            elif operator == "includes_all":
+                passed = all(_contains(actual, item) for item in _as_list(expected))
+                evaluation_method = "deterministic"
+            elif operator == "excludes_all":
+                passed = all(not _contains(actual, item) for item in _as_list(expected))
+                evaluation_method = "deterministic"
+            elif operator == "non_empty":
+                passed = bool(actual)
+                evaluation_method = "deterministic"
+            elif operator == "empty":
+                passed = not bool(actual)
+                evaluation_method = "deterministic"
+            else:
+                raise ValueError(f"未知断言操作：{operator}")
         return {
             "metricId": metric_id,
             "path": assertion.get("path"),
@@ -402,10 +430,28 @@ class EvaluationRunner:
             "expected": expected,
             "actual": actual,
             "passed": passed,
-            "eligible": True,
+            "eligible": evaluation_method != "not_evaluated",
             "required": assertion.get("required", True),
             "note": assertion.get("note"),
+            "evaluationMethod": evaluation_method,
+            "missingReason": reason,
         }
+
+def deterministic_gate_status(assertions: list[dict[str, Any]]) -> str:
+    required = [item for item in assertions if item.get("required", True)]
+    if not required:
+        return "not_evaluated"
+    if any(
+        item.get("evaluationMethod") == "deterministic" and item.get("passed") is False
+        for item in required
+    ):
+        return "failed"
+    if any(
+        item.get("evaluationMethod") != "deterministic" or item.get("passed") is None
+        for item in required
+    ):
+        return "not_evaluated"
+    return "passed"
 
 
 class FaultInjectionModel:
@@ -457,19 +503,26 @@ class FaultInjectionSearchProvider:
         raise SearchProviderError("Web Search 传输失败：simulated")
 
 
-def _path_get(value: Any, path: str | None) -> Any:
+def _path_lookup(value: Any, path: str | None) -> tuple[bool, Any]:
     if not path:
-        return value
+        return True, value
     current = value
     for part in path.split("."):
-        if isinstance(current, dict):
-            current = current.get(part)
-        elif isinstance(current, list) and part.isdigit():
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        elif isinstance(current, list) and part.lstrip("-").isdigit():
             index = int(part)
-            current = current[index] if index < len(current) else None
+            if -len(current) <= index < len(current):
+                current = current[index]
+            else:
+                return False, None
         else:
-            return None
-    return current
+            return False, None
+    return True, current
+
+
+def _path_get(value: Any, path: str | None) -> Any:
+    return _path_lookup(value, path)[1]
 
 
 def _as_list(value: Any) -> list[Any]:

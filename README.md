@@ -55,6 +55,8 @@ Evaluation follows a **rule-first** principle.
 
 Whenever a metric can be verified from structured state or Trace, deterministic assertions are preferred over LLM-based judgment.
 
+Each metric reports `evaluationMethod` as `deterministic`, `manual`, or `not_evaluated`. Regression PASS/FAIL is based only on explicit required deterministic assertions; Human Review is stored as a supplemental label and never changes the deterministic gate. `core-regression/v2` provides structured assertions for the 16 target quality metrics. Semantic judgments without reliable gold data remain manual. No LLM Judge is used.
+
 The evaluation loop is:
 
 ```text
@@ -171,6 +173,8 @@ Trace → Evaluation → Bad Case → Regression
 评估采用 **规则优先** 原则。
 
 只要能够通过结构化状态或 Trace 稳定判断，就优先使用确定性规则，而不是交给另一个 LLM 打分。
+
+每个指标都返回 `evaluationMethod`：`deterministic`、`manual` 或 `not_evaluated`。Regression PASS/FAIL 只由明确标为 required 的 deterministic assertions 决定；Human Review 仅作为补充标签保存，不改变确定性 Gate。`core-regression/v2` 为 16 项目标质量指标提供结构化断言；缺少可靠金标签的语义判断继续保留人工审阅。本版本未实现 LLM Judge。
 
 ```text
 Regression Dataset

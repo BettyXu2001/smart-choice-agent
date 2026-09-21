@@ -27,6 +27,7 @@ ErrorType = Literal[
 
 CaseStatus = Literal["open", "diagnosed", "fix_pending", "awaiting_regression", "verified", "reopened"]
 RunStatus = Literal["running", "completed", "failed", "partial"]
+EvaluationMethod = Literal["deterministic", "manual", "not_evaluated"]
 
 
 class EvaluationAssertion(EvaluationModel):
@@ -43,6 +44,7 @@ class EvaluationAssertion(EvaluationModel):
         "empty",
         "changed",
         "unchanged",
+        "auto",
         "manual",
     ] = "equals"
     expected: Any = None
@@ -50,6 +52,21 @@ class EvaluationAssertion(EvaluationModel):
     actual_path: str | None = None
     note: str | None = None
     required: bool = True
+    evaluation_method: EvaluationMethod | None = None
+
+    @model_validator(mode="after")
+    def validate_evaluation_method(self) -> "EvaluationAssertion":
+        method = self.evaluation_method
+        if method == "not_evaluated":
+            raise ValueError("not_evaluated 只能由运行结果产生")
+        if self.operator == "manual":
+            if method == "deterministic":
+                raise ValueError("manual assertion 不能标记为 deterministic")
+            if self.required:
+                raise ValueError("manual assertion 不能作为 required Regression Gate")
+        elif method == "manual":
+            raise ValueError("manual evaluationMethod 必须使用 manual operator")
+        return self
 
 
 class EvaluationCaseData(EvaluationModel):

@@ -2,6 +2,7 @@
 
 ### 2026-09-20
 
+- Evaluation Runner 升级为 deterministic-first：16 项目标指标输出三态 evaluationMethod，Regression Gate 仅由 required deterministic assertions 决定，Human Review 与 Gate 隔离，并发布结构化 `core-regression/v2` 与重复运行一致性测试。
 - Reliability Regression Dataset 升级至 v2，新增 LLM invalid JSON、Search fallback/非法响应和 Agent execution failure 等真实 Orchestrator Case，并补齐 Search fallback、Agent 失败率与响应延迟指标。
 - 模型与 Search 调用 Trace 新增 Provider、Prompt 版本、真实 Token usage、可配置成本、重试和统一 Fallback 记录，Evaluation Run 可聚合延迟、P95、Token 与成本，并兼容旧 AgentRun 数据库。
 - Evaluation Run 新增 model、provider、promptVersion、ruleVersion 和 baseline/candidate 标签的独立配置，模型与 provider 配置会真实作用于隔离回归执行。

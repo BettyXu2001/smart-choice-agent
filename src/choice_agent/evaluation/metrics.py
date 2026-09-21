@@ -5,7 +5,7 @@ from math import ceil
 from typing import Any
 
 
-EVALUATOR_VERSION = "evaluation-v1"
+EVALUATOR_VERSION = "evaluation-v2"
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,24 @@ METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
 METRIC_BY_ID = {item.metric_id: item for item in METRIC_DEFINITIONS}
 QUALITY_METRIC_IDS = [item.metric_id for item in METRIC_DEFINITIONS if item.scored]
 TRACE_OBSERVATION_METRIC_IDS = {"agent_execution_failure_rate", "average_response_time_ms"}
+DETERMINISTIC_TARGET_METRIC_IDS = (
+    "intent_accuracy",
+    "constraint_extraction_accuracy",
+    "correction_update_accuracy",
+    "hard_constraint_satisfaction",
+    "exclusion_correctness",
+    "recommendation_stability",
+    "sensitivity_to_condition_change",
+    "reason_recommendation_consistency",
+    "evidence_reference_validity",
+    "unsupported_fact_rate",
+    "excluded_candidate_recommend_rate",
+    "multi_turn_state_retention",
+    "correction_coverage",
+    "what_if_isolation",
+    "llm_fallback_success",
+    "agent_execution_failure_rate",
+)
 
 
 def metric_definitions_json() -> list[dict[str, Any]]:
@@ -76,6 +94,7 @@ def empty_metric(metric_id: str, missing_reason: str = "not_evaluated") -> dict[
         "evaluatedCount": 0,
         "missingReason": missing_reason,
         "method": "assertion",
+        "evaluationMethod": "not_evaluated",
         "failures": [],
     }
 
@@ -83,16 +102,18 @@ def empty_metric(metric_id: str, missing_reason: str = "not_evaluated") -> dict[
 def aggregate_metric(assertions: list[dict[str, Any]], metric_id: str) -> dict[str, Any]:
     metric = empty_metric(metric_id)
     relevant = [item for item in assertions if item.get("metricId") == metric_id or item.get("metric_id") == metric_id]
-    eligible = [item for item in relevant if item.get("eligible", True)]
-    evaluated = [item for item in eligible if item.get("passed") is not None]
-    metric["eligibleCount"] = len(eligible)
+    deterministic = [item for item in relevant if _assertion_method(item) == "deterministic" and item.get("eligible", True)]
+    evaluated = [item for item in deterministic if item.get("passed") is not None]
+    manual = [item for item in relevant if _assertion_method(item) == "manual"]
+    metric["eligibleCount"] = len(deterministic)
     metric["evaluatedCount"] = len(evaluated)
     metric["denominator"] = len(evaluated)
-    if not eligible:
+    if not relevant:
         metric["missingReason"] = "not_applicable"
         return metric
     if not evaluated:
-        metric["missingReason"] = "not_evaluated"
+        metric["evaluationMethod"] = "manual" if manual else "not_evaluated"
+        metric["missingReason"] = "manual_review" if manual else "not_evaluated"
         return metric
     if METRIC_BY_ID[metric_id].direction == "lower_is_better":
         numerator = sum(1 for item in evaluated if item.get("passed") is False)
@@ -101,9 +122,16 @@ def aggregate_metric(assertions: list[dict[str, Any]], metric_id: str) -> dict[s
     metric["numerator"] = numerator
     metric["value"] = round(numerator / len(evaluated), 4)
     metric["missingReason"] = None
+    metric["evaluationMethod"] = "deterministic"
     metric["failures"] = [item for item in evaluated if item.get("passed") is False]
     return metric
 
+
+def _assertion_method(assertion: dict[str, Any]) -> str:
+    method = assertion.get("evaluationMethod") or assertion.get("evaluation_method")
+    if method in {"deterministic", "manual", "not_evaluated"}:
+        return method
+    return "manual" if assertion.get("operator") == "manual" else "deterministic"
 
 def trace_observation_metrics(trace_snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
     agent_metric = empty_metric("agent_execution_failure_rate", "not_applicable")
@@ -129,6 +157,7 @@ def trace_observation_metrics(trace_snapshot: dict[str, Any]) -> dict[str, dict[
             "evaluatedCount": len(agent_events),
             "missingReason": None,
             "method": "trace_observation",
+            "evaluationMethod": "deterministic",
             "failures": [
                 {
                     "agentName": event.get("agentName") or event.get("agent_name"),
@@ -149,6 +178,7 @@ def trace_observation_metrics(trace_snapshot: dict[str, Any]) -> dict[str, dict[
             "evaluatedCount": 1,
             "missingReason": None,
             "method": "trace_observation",
+            "evaluationMethod": "deterministic",
         })
     return {
         "agent_execution_failure_rate": agent_metric,
@@ -176,6 +206,7 @@ def aggregate_result_observation(results: list[dict[str, Any]], metric_id: str) 
         "evaluatedCount": sum(int(item.get("evaluatedCount") or 0) for item in observations),
         "missingReason": None,
         "method": "trace_observation",
+        "evaluationMethod": "deterministic",
         "failures": [failure for item in observations for failure in item.get("failures", [])],
     })
     return metric
@@ -211,6 +242,31 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     failed_cases = sum(1 for result in results if result.get("status") == "failed")
     error_cases = sum(1 for result in results if result.get("status") == "error")
     evaluated_quality = sum(1 for metric in metrics if metric["scored"] and metric["value"] is not None)
+    metric_by_id = {metric["id"]: metric for metric in metrics}
+    deterministic_target = [
+        metric_id for metric_id in DETERMINISTIC_TARGET_METRIC_IDS
+        if metric_by_id[metric_id]["evaluationMethod"] == "deterministic" and metric_by_id[metric_id]["value"] is not None
+    ]
+    deterministic_catalog = [
+        metric_id for metric_id in QUALITY_METRIC_IDS
+        if metric_by_id[metric_id]["evaluationMethod"] == "deterministic" and metric_by_id[metric_id]["value"] is not None
+    ]
+    all_assertions = [assertion for result in results for assertion in result.get("assertions", [])]
+    target_assertions = [
+        assertion for assertion in all_assertions
+        if (assertion.get("metricId") or assertion.get("metric_id")) in DETERMINISTIC_TARGET_METRIC_IDS
+    ]
+    deterministic_eligible = [assertion for assertion in target_assertions if _assertion_method(assertion) == "deterministic"]
+    deterministic_evaluated = [assertion for assertion in deterministic_eligible if assertion.get("passed") is not None]
+    manual_metric_ids = sorted({
+        assertion.get("metricId") or assertion.get("metric_id")
+        for assertion in target_assertions
+        if _assertion_method(assertion) == "manual"
+    })
+    not_evaluated_metric_ids = [
+        metric_id for metric_id in DETERMINISTIC_TARGET_METRIC_IDS
+        if metric_by_id[metric_id]["value"] is None and metric_id not in manual_metric_ids
+    ]
     return {
         "overallScore": overall,
         "categoryScores": category_scores,
@@ -219,6 +275,16 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
             "evaluatedQualityMetrics": evaluated_quality,
             "qualityMetricCount": len(QUALITY_METRIC_IDS),
             "status": "full" if evaluated_quality == len(QUALITY_METRIC_IDS) else "partial" if evaluated_quality else "empty",
+            "deterministicEvaluatedMetricCount": len(deterministic_target),
+            "deterministicMetricCount": len(DETERMINISTIC_TARGET_METRIC_IDS),
+            "deterministicMetricRate": round(len(deterministic_target) / len(DETERMINISTIC_TARGET_METRIC_IDS), 4),
+            "catalogDeterministicEvaluatedMetricCount": len(deterministic_catalog),
+            "catalogQualityMetricCount": len(QUALITY_METRIC_IDS),
+            "deterministicEvaluatedAssertionCount": len(deterministic_evaluated),
+            "deterministicEligibleAssertionCount": len(deterministic_eligible),
+            "deterministicAssertionRate": round(len(deterministic_evaluated) / len(deterministic_eligible), 4) if deterministic_eligible else 0.0,
+            "manualReviewMetricIds": manual_metric_ids,
+            "notEvaluatedMetricIds": not_evaluated_metric_ids,
         },
         "caseCounts": {
             "total": len(results),

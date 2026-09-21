@@ -125,3 +125,24 @@ def test_evaluation_summary_uses_trace_observations_for_agent_failure_rate_and_l
     assert metrics["agent_execution_failure_rate"]["failures"] == [{"agentName": "CandidateAgent"}]
     assert metrics["average_response_time_ms"]["value"] == 200
     assert metrics["average_response_time_ms"]["method"] == "trace_observation"
+
+
+def test_evaluation_summary_reports_method_and_deterministic_coverage():
+    summary = summarize_results([{
+        "status": "passed",
+        "assertions": [
+            {"metricId": "hard_constraint_satisfaction", "passed": True, "eligible": True, "evaluationMethod": "deterministic"},
+            {"metricId": "intent_accuracy", "passed": None, "eligible": False, "evaluationMethod": "manual"},
+        ],
+    }])
+
+    metrics = {item["id"]: item for item in summary["metrics"]}
+    assert metrics["hard_constraint_satisfaction"]["evaluationMethod"] == "deterministic"
+    assert metrics["intent_accuracy"]["evaluationMethod"] == "manual"
+    assert metrics["intent_accuracy"]["value"] is None
+    assert metrics["constraint_extraction_accuracy"]["evaluationMethod"] == "not_evaluated"
+    assert summary["coverage"]["deterministicEvaluatedMetricCount"] == 1
+    assert summary["coverage"]["deterministicMetricCount"] == 16
+    assert summary["coverage"]["deterministicMetricRate"] == 1 / 16
+    assert summary["coverage"]["manualReviewMetricIds"] == ["intent_accuracy"]
+    assert "constraint_extraction_accuracy" in summary["coverage"]["notEvaluatedMetricIds"]

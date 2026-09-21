@@ -61,7 +61,7 @@
             const comparison = dashboard.comparison;
             return `
                 <div class="grid four evaluation-overview">
-                    ${statCard("当前版本得分", summary.overallScore === null || summary.overallScore === undefined ? "未评测" : `${summary.overallScore}`, `覆盖 ${coverage.evaluatedQualityMetrics || 0}/${coverage.qualityMetricCount || 16}`)}
+                    ${statCard("当前版本得分", summary.overallScore === null || summary.overallScore === undefined ? "未评测" : `${summary.overallScore}`, `确定性覆盖 ${coverage.deterministicEvaluatedMetricCount || 0}/${coverage.deterministicMetricCount || 16}；人工 ${coverage.manualReviewMetricIds?.length || 0}`)}
                     ${statCard("与上一版本差异", comparison ? `${comparison.scoreDelta > 0 ? "+" : ""}${comparison.scoreDelta}` : "不可比", comparison ? `基线 ${comparison.baselineRunId.slice(0, 8)}` : "需相同数据集/评估器/模式")}
                     ${statCard("失败 Case", summary.caseCounts?.failed || 0, `错误 ${summary.caseCounts?.error || 0}，未评测 ${summary.caseCounts?.notEvaluated || 0}`)}
                     ${statCard("Regression Dataset", dashboard.datasets.length, `${dashboard.cases.filter(item => item.status === "verified").length} 个已验证 Case`)}
@@ -160,11 +160,17 @@
             const value = metric.value === null || metric.value === undefined
                 ? "未评测"
                 : metric.unit === "ms" ? `${Math.round(metric.value)}ms` : `${Math.round(metric.value * 100)}%`;
+            const evaluationMethod = metric.evaluationMethod || (metric.value === null || metric.value === undefined ? "not_evaluated" : "deterministic");
+            const methodLabel = {
+                deterministic: "deterministic",
+                manual: "manual review",
+                not_evaluated: "not evaluated",
+            }[evaluationMethod] || evaluationMethod;
             return `
                 <div class="metric-row">
                     <div>
                         <strong>${escapeHtml(metric.label)}</strong>
-                        <small>${escapeHtml(metric.description || metric.missingReason || "")}</small>
+                        <small>${escapeHtml(`${methodLabel} · ${metric.description || metric.missingReason || ""}`)}</small>
                     </div>
                     <span>${escapeHtml(value)}</span>
                 </div>

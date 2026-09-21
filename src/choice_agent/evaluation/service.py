@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session
 
 from choice_agent.config import Settings
 from choice_agent.evaluation.comparison import EvaluationComparisonError, compare_runs as build_run_comparison
+from choice_agent.evaluation.deterministic import evaluate_repetition_stability
 from choice_agent.evaluation.fixtures import CORE_DATASET, starter_cases, starter_dataset_specs
-from choice_agent.evaluation.metrics import EVALUATOR_VERSION, metric_definitions_json, summarize_results
-from choice_agent.evaluation.runner import EvaluationRunner
+from choice_agent.evaluation.metrics import EVALUATOR_VERSION, aggregate_metric, metric_definitions_json, summarize_results
+from choice_agent.evaluation.runner import EvaluationRunner, deterministic_gate_status
 from choice_agent.evaluation.schemas import (
     EvaluationCaseCreate,
     EvaluationCaseUpdate,
@@ -200,12 +201,12 @@ class EvaluationService:
                 "summary_json": {},
             },
         )
-        result_payloads = []
+        result_rows = []
         runner = EvaluationRunner(self.db, settings=self.settings, provider=self.provider)
         for snapshot in snapshots:
             for repetition in range(1, body.repeat + 1):
                 output = runner.run_case(owner_id, snapshot, run_configuration)
-                result = self.repository.add_result(
+                result_rows.append(self.repository.add_result(
                     {
                         "run_id": run.id,
                         "case_id": snapshot["id"],
@@ -219,8 +220,9 @@ class EvaluationService:
                         "metrics_json": output.metrics,
                         "error_message": output.error_message,
                     }
-                )
-                result_payloads.append(self.result_response(result))
+                ))
+        self._finalize_repetition_metrics(result_rows)
+        result_payloads = [self.result_response(result) for result in result_rows]
         summary = summarize_results(result_payloads)
         status = "completed" if not summary["caseCounts"]["error"] else "partial"
         run = self.repository.update_run(run, status=status, summary_json=summary, finished_at=datetime.now())
@@ -276,9 +278,12 @@ class EvaluationService:
         run = self.repository.get_run(owner_id, row.run_id)
         if run is None:
             raise KeyError("Result 不存在或无权限访问")
-        row = self.repository.update_result_reviews(row, body.reviews)
-        results = [self.result_response(item) for item in self.repository.list_results(run.id)]
-        self.repository.update_run(run, summary_json=summarize_results(results))
+        reviews = dict(body.reviews)
+        reviews["_evaluation"] = {
+            "outputFingerprint": _hash_json(row.outputs_json or {}),
+            "reviewedAt": datetime.now().isoformat(),
+        }
+        row = self.repository.update_result_reviews(row, reviews)
         return self.result_response(row)
 
     def case_response(self, row) -> dict[str, Any]:
@@ -347,6 +352,13 @@ class EvaluationService:
         return response
 
     def result_response(self, row) -> dict[str, Any]:
+        reviews = row.reviews_json or {}
+        metadata = reviews.get("_evaluation") if isinstance(reviews, dict) else None
+        review_stale = bool(
+            isinstance(metadata, dict)
+            and metadata.get("outputFingerprint")
+            and metadata.get("outputFingerprint") != _hash_json(row.outputs_json or {})
+        )
         return {
             "id": row.id,
             "runId": row.run_id,
@@ -357,13 +369,45 @@ class EvaluationService:
             "outputs": row.outputs_json or {},
             "traceSnapshot": row.trace_snapshot or {},
             "assertions": row.assertions_json or [],
-            "reviews": row.reviews_json or {},
+            "reviews": reviews,
+            "reviewStale": review_stale,
             "metrics": row.metrics_json or {},
             "errorMessage": row.error_message,
             "createdAt": row.created_at.isoformat(),
             "updatedAt": row.updated_at.isoformat(),
         }
 
+    def _finalize_repetition_metrics(self, rows: list[Any]) -> None:
+        groups: dict[tuple[str, int], list[Any]] = {}
+        for row in rows:
+            groups.setdefault((row.case_id, row.case_revision), []).append(row)
+        for peers in groups.values():
+            result = evaluate_repetition_stability([row.outputs_json or {} for row in peers])
+            for row in peers:
+                assertions = list(row.assertions_json or [])
+                changed = False
+                for assertion in assertions:
+                    metric_id = assertion.get("metricId") or assertion.get("metric_id")
+                    if metric_id != "recommendation_stability" or assertion.get("operator") != "auto":
+                        continue
+                    assertion.update({
+                        "actual": result.actual,
+                        "passed": result.passed,
+                        "eligible": result.passed is not None,
+                        "evaluationMethod": result.evaluation_method,
+                        "missingReason": result.reason,
+                    })
+                    changed = True
+                if not changed:
+                    continue
+                metrics = dict(row.metrics_json or {})
+                metrics["recommendation_stability"] = aggregate_metric(assertions, "recommendation_stability")
+                self.repository.update_result_evaluation(
+                    row,
+                    status=deterministic_gate_status(assertions),
+                    assertions=assertions,
+                    metrics=metrics,
+                )
     def _sync_case_regression_status(self, owner_id: int, run, results: list[dict[str, Any]]) -> None:
         for result in results:
             row = self.repository.get_case(owner_id, result["caseId"])

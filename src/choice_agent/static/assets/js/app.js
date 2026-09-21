@@ -350,14 +350,14 @@
         const realtimeChecked = searchConfigured && state.home.realtimeSearch !== false;
         const searchHint = searchCapabilities ? (searchConfigured ? "购物和旅行场景会使用实时搜索；其他场景继续使用已有候选。" : "当前服务端未配置实时搜索，仍可使用演示候选体验流程。") : "正在检查实时搜索配置。";
         const flagshipExample = {
-            text: "A 公司工作稳定、离家近，B 公司成长更快但每天通勤两小时，我应该怎么选？",
-            domain: "career"
+            text: "今晚不知道吃什么，想吃清淡一点，但又不想太寡淡，帮我推荐一下。",
+            domain: "diet"
         };
         const examples = [
             { label: "规划一次不累的周末旅行", text: "周末想出去走走，但不想太累，应该去哪里？", domain: "travel" },
             { label: "挑一台通勤电脑", text: "想换一台适合通勤的轻便电脑，预算有限，应该怎么选？", domain: "shopping" },
             { label: "选择 AI Agent 学习路径", text: "想系统学 AI Agent，但不知道先选哪条学习路径。", domain: "learning" },
-            { label: "决定今晚吃什么", text: "今晚不知道吃什么，想要清淡一点。", domain: "diet" }
+            { label: "帮我比较两个 Offer", text: "A 公司工作稳定、离家近，B 公司成长更快但每天通勤两小时，我应该怎么选？", domain: "career" }
         ];
         app.innerHTML = `
             <section class="hero general-home">
@@ -383,7 +383,7 @@
                     ${state.home.notice ? `<div class="mode-notice">${escapeHtml(state.home.notice)}</div>` : ""}
                     <button class="flagship-example" type="button" data-action="general-example" data-example="${escapeHtml(flagshipExample.text)}" data-demo-domain="${escapeHtml(flagshipExample.domain)}">
                         <span>推荐体验</span>
-                        <strong>帮我比较两个 Offer</strong>
+                        <strong>决定今晚吃什么</strong>
                         <small>${escapeHtml(flagshipExample.text)}</small>
                     </button>
                     <div class="example-grid" aria-label="决策示例">

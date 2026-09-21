@@ -1,6 +1,6 @@
 # Reliability Regression Cases Plan
 
-日期：2026-09-20。状态：待用户审查与明确实施批准。
+日期：2026-09-20。状态：已批准并实施完成。
 
 ## 目标与成功标准
 
@@ -171,13 +171,13 @@ fault-injection-reliability/v2
 
 ## Todo
 
-- [ ] 再次检查工作树和调用方，确认与用户未提交改动无冲突。
-- [ ] 发布 `fault-injection-reliability/v2`，补齐 5 类必需 Case并保留有价值的既有 Case。
-- [ ] 扩展 Runner 白名单注入、searchMode 与 execution/Trace 断言上下文。
-- [ ] 捕获预期失败 Trace，同时保持 execution/AgentRun/Trace 非 success。
-- [ ] 新增 `search_fallback_success`，实现 Agent failure rate 与 latency 观测聚合。
-- [ ] 更新 Service summary、历史兼容和 versioned seed 测试。
-- [ ] 补齐 Runner/指标/Trace/Search 自动化测试。
-- [ ] 实际运行 v2，生成并核对示例结果。
-- [ ] 更新 README 与 CHANGELOG。
-- [ ] 完成定向测试、全量测试、compileall、diff 和 Todo 对照。
+- [x] 再次检查工作树和调用方，确认与用户未提交改动无冲突。
+- [x] 发布 `fault-injection-reliability/v2`，补齐 5 类必需 Case并保留有价值的既有 Case。
+- [x] 扩展 Runner 白名单注入、searchMode 与 execution/Trace 断言上下文。
+- [x] 捕获预期失败 Trace，同时保持 execution/AgentRun/Trace 非 success。
+- [x] 新增 `search_fallback_success`，实现 Agent failure rate 与 latency 观测聚合。
+- [x] 更新 Service summary、历史兼容和 versioned seed 测试。
+- [x] 补齐 Runner/指标/Trace/Search 自动化测试。
+- [x] 实际运行 v2，生成并核对示例结果。
+- [x] 更新 README 与 CHANGELOG。
+- [x] 完成定向测试、全量测试、compileall、diff 和 Todo 对照。
