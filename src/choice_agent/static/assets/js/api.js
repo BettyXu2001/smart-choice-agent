@@ -140,7 +140,7 @@
         const response = await fetch(`${baseUrl}${path}`, {
             ...config,
             headers,
-            body: config.body === undefined || config.body instanceof FormData)
+            body: config.body === undefined || config.body instanceof FormData
                 ? config.body
                 : JSON.stringify(config.body)
         });
