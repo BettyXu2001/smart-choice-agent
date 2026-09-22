@@ -52,12 +52,10 @@
 
     function migrateLegacyModelDefaults(settings) {
         const normalized = normalizeModelSettings(settings);
-        const untouchedLegacyDefaults = !normalized.enabled
-            && !normalized.apiKey
-            && normalized.baseUrl === LEGACY_MODEL_DEFAULTS.baseUrl
+        const legacyDefaultModelConfig = normalized.baseUrl === LEGACY_MODEL_DEFAULTS.baseUrl
             && normalized.mainModel === LEGACY_MODEL_DEFAULTS.mainModel
             && normalized.lightModel === LEGACY_MODEL_DEFAULTS.lightModel;
-        if (!untouchedLegacyDefaults) {
+        if (!legacyDefaultModelConfig) {
             return normalized;
         }
         return {
