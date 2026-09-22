@@ -387,12 +387,28 @@ def slot_options(db: Session = Depends(get_db)) -> dict[str, list[str]]:
     return DietRepository(db).slot_options()
 
 
-@router.post("/api/v1/diet/feedback", status_code=204)
+@router.post("/api/v1/diet/feedback", response_model=ChatResponse)
 def feedback(
-    body: FeedbackRequest, uid: int = Depends(user_id), db: Session = Depends(get_db)
-) -> Response:
-    DietRepository(db).save_feedback(uid, body)
-    return Response(status_code=204)
+    body: FeedbackRequest,
+    uid: int = Depends(user_id),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    provider: ModelProvider = Depends(get_provider),
+    runtime_model: tuple[Settings, ModelProvider] | None = Depends(get_runtime_model),
+) -> ChatResponse:
+    active_settings, active_provider = (
+        runtime_model if isinstance(runtime_model, tuple) else (settings, provider)
+    )
+    try:
+        return DietOrchestrator(db, active_settings, active_provider).feedback(uid, body)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except DecisionRevisionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except SearchProviderError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.get("/api/v1/diet/debug/traces/{trace_id}")

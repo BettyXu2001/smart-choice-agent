@@ -132,6 +132,14 @@ window.createConversation = function(deps) {
             return `<div class="diet-field-row"><span>${escapeHtml(label)}</span><div><strong>${escapeHtml(current.join("、") || (meta[key]?.cleared ? "不限" : "尚未设置"))}</strong>${current.length ? `<small>${escapeHtml(fieldSourceLabel(meta[key]))}</small>` : ""}</div></div>`;
         }).join("");
         const blocks = d?.domainState?.displayBlocks || [];
+        const feedbackRound = d?.domainState?.feedbackRound || {};
+        const feedbackOptions = {
+            feedback: feedbackRound.status !== "adopted",
+            feedbackRound,
+            compact: true,
+            sessionId: d?.sessionId,
+            busy: state.chat.sending || Boolean(state.chat.retry)
+        };
         const valid = d && d.status !== "clarifying" && !(d.riskFlags || []).length;
         const composition = valid ? d.composition?.items : null;
         let results = '<p class="muted">聊聊这顿想吃什么，推荐会出现在这里。</p>';
@@ -139,9 +147,9 @@ window.createConversation = function(deps) {
         else if (d?.status === "clarifying") results = '<p class="muted">补充关键信息后，我会更新推荐。</p>';
         else if (composition) results = composition.map(item => {
             const meal = blocks.find(b => String(b.id) === item.candidateId);
-            return `<div class="diet-plan-slot"><h4>${escapeHtml(item.slot)}</h4>${meal ? renderMealCard(meal, {feedback: true, compact: true, sessionId: d.sessionId}) : `<p>${escapeHtml(item.label)}</p>`}</div>`;
+            return `<div class="diet-plan-slot"><h4>${escapeHtml(item.slot)}</h4>${meal ? renderMealCard(meal, feedbackOptions) : `<p>${escapeHtml(item.label)}</p>`}</div>`;
         }).join("");
-        else if (valid) results = blocks.length ? blocks.map((meal, i) => `<div><span class="diet-result-label">${i ? "也可以选" : "这次优先推荐"}</span>${renderMealCard(meal, {feedback: true, compact: true, sessionId: d.sessionId})}</div>`).join("") : '<p class="muted">暂无匹配餐食，可调整偏好或切换餐食库。不会自动放宽排除条件。</p>';
+        else if (valid) results = blocks.length ? blocks.map((meal, i) => `<div><span class="diet-result-label">${i ? "也可以选" : "这次优先推荐"}</span>${renderMealCard(meal, feedbackOptions)}</div>`).join("") : '<p class="muted">暂无匹配餐食，可调整偏好或切换餐食库。不会自动放宽排除条件。</p>';
         const dialog = state.chat.panelOpen && window.matchMedia("(max-width: 980px)").matches;
         return `<aside ${dialog ? 'role="dialog" aria-modal="true"' : ""} id="dietPanel" class="diet-panel ${state.chat.panelOpen ? "is-open" : ""}" aria-label="当前决策" tabindex="-1">
             <div class="card-title"><div><span class="eyebrow">一起把选择想清楚</span><h3>当前决策</h3></div><button class="btn ghost diet-panel-close" data-diet-action="close" aria-label="关闭当前决策">关闭</button></div>
@@ -217,7 +225,11 @@ window.createConversation = function(deps) {
                 ? operation.kind === "chat"
                     ? await DecisionApi.messageStream(state.chat.decision.decisionId, operation.body, {onEvent: event => recordProgress(event, generation)})
                     : await DecisionApi.commandStream(state.chat.decision.decisionId, operation.body, {onEvent: event => recordProgress(event, generation)})
-                : operation.kind === "chat" ? await DietApi.chat({...operation.body, sessionId: state.chat.sessionId}) : await DietApi.command(state.chat.sessionId, operation.body);
+                : operation.kind === "chat"
+                    ? await DietApi.chat({...operation.body, sessionId: state.chat.sessionId})
+                    : operation.kind === "command"
+                        ? await DietApi.command(state.chat.sessionId, operation.body)
+                        : await DietApi.saveFeedback(operation.body);
             if (generation !== state.chat.generation) return;
             // Read current state also on idempotent replay, which may return an older receipt.
             const loaded = await loadCurrent();
@@ -250,6 +262,22 @@ window.createConversation = function(deps) {
         if (!state.chat.decision || state.chat.sending || state.chat.retry) return;
         state.chat.error = "";
         return runDietOperation({kind: "command", body: {commandId: crypto.randomUUID(), expectedRevision: state.chat.decision.revision, type, payload}});
+    }
+    function sendFeedback(button) {
+        if (isGeneral() || !state.chat.decision || state.chat.sending || state.chat.retry) return Promise.resolve();
+        const action = button.dataset.actionValue;
+        return runDietOperation({
+            kind: "feedback",
+            body: {
+                sessionId: button.dataset.sessionId || state.chat.sessionId,
+                itemId: Number(button.dataset.itemId),
+                action,
+                rating: action === "DISLIKE" ? 2 : 5,
+                reason: "",
+                requestId: crypto.randomUUID(),
+                expectedRevision: state.chat.decision.revision
+            }
+        });
     }
     async function handleDietAction(target) {
         const action = target.dataset.dietAction;
@@ -503,5 +531,5 @@ window.createConversation = function(deps) {
         </aside>`;
     }
 
-    return {enter, renderChat, closeDietPanel, sendDietCommand, handleDietAction, submitChat, resetChat, prepareChatFromHome, startGeneral};
+    return {enter, renderChat, closeDietPanel, sendDietCommand, sendFeedback, handleDietAction, submitChat, resetChat, prepareChatFromHome, startGeneral};
 };

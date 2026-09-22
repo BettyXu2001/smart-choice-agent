@@ -1,5 +1,9 @@
 # Changelog
 
+### 2026-09-22
+
+- 饮食推荐“喜欢 / 采纳 / 不合适”形成反馈闭环：记录反馈并在对话中确认，采纳写入最终选择，不合适保留现有条件、排除当前候选并自动换推荐，三类反馈均进入 Trace。
+
 ### 2026-09-20
 
 - Evaluation Runner 升级为 deterministic-first：16 项目标指标输出三态 evaluationMethod，Regression Gate 仅由 required deterministic assertions 决定，Human Review 与 Gate 隔离，并发布结构化 `core-regression/v2` 与重复运行一致性测试。

@@ -582,9 +582,11 @@ class ChatResponse(ApiModel):
 class FeedbackRequest(ApiModel):
     session_id: str
     item_id: int | None = None
-    action: str
+    action: Literal["LIKE", "ADOPT", "DISLIKE"]
     rating: int | None = Field(default=None, ge=1, le=5)
     reason: str | None = None
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
+    expected_revision: int | None = Field(default=None, ge=0)
 
 
 class TraceLabelRequest(ApiModel):

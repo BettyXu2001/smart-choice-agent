@@ -26,6 +26,21 @@ def test_quick_followups_are_contextual_not_fixed_growth_prompt():
     assert "为什么不选 ${firstAlternative.name}？" in source
 
 
+def test_recommendation_feedback_is_wired_to_versioned_conversation_flow():
+    app = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    conversation = (STATIC_JS / "conversation.js").read_text(encoding="utf-8")
+
+    assert 'renderMealCard(meal, { compact: true, sessionId: message.sessionId })' in app
+    assert "conversation.sendFeedback(target)" in app
+    assert 'kind: "feedback"' in conversation
+    assert "requestId: crypto.randomUUID()" in conversation
+    assert "expectedRevision: state.chat.decision.revision" in conversation
+    assert "await DietApi.saveFeedback(operation.body)" in conversation
+    assert 'feedbackRound.status !== "adopted"' in conversation
+    assert "likedCandidateIds" in app
+    assert "已采纳，本轮推荐已结束" in app
+
+
 def test_revision_only_visible_in_developer_or_trace_views():
     app_source = (STATIC_JS / "app.js").read_text(encoding="utf-8")
     trace_source = (STATIC_JS / "trace.js").read_text(encoding="utf-8")

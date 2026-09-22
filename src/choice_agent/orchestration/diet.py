@@ -19,8 +19,9 @@ from choice_agent.providers.model import ModelProvider
 from choice_agent.repositories.decision_repository import DecisionRepository
 from choice_agent.repositories.diet_repository import DietRepository
 from choice_agent.schemas import (
-    ChatRequest, ChatResponse, DecisionMessage, DecisionState, DietPanelCommand,
-    EditEvent, Intent, MealResponse, SlotBundle, SourceMode, TraceReference,
+    ChatRequest, ChatResponse, DecisionMessage, DecisionOutcome, DecisionState,
+    DietPanelCommand, EditEvent, FeedbackRequest, Intent, MealResponse, SlotBundle,
+    SourceMode, TraceReference,
 )
 from choice_agent.services.trace import TraceScope
 
@@ -69,6 +70,7 @@ class DietOrchestrator:
             # Retry receipts are internal; do not send every old state to the browser.
             decision.domain_state.pop("dietReceipts", None)
             decision.domain_state.pop("conversationReceipts", None)
+            decision.domain_state.pop("feedbackReceipts", None)
         return {"sessionId": session.id, "sourceMode": session.source_mode,
                 "decisionState": decision.model_dump(mode="json", by_alias=True) if decision else None}
 
@@ -81,6 +83,208 @@ class DietOrchestrator:
 
     def command(self, user_id: int, session_id: str, request: DietPanelCommand) -> ChatResponse:
         return self._execute(user_id, session_id, request, command=True)
+
+    def feedback(self, user_id: int, request: FeedbackRequest) -> ChatResponse:
+        session = self._session(user_id, request.session_id)
+        decision = self._decision(session, user_id)
+        request_data = request.model_dump(mode="json", by_alias=True)
+        fingerprint = hashlib.sha256(
+            json.dumps({"feedback": request_data}, sort_keys=True, ensure_ascii=False).encode()
+        ).hexdigest()
+        identifier = request.request_id
+        receipt = (
+            decision.domain_state.get("feedbackReceipts", {}).get(identifier)
+            if identifier else None
+        )
+        if receipt:
+            if receipt["fingerprint"] != fingerprint:
+                raise ValueError("请求 ID 已用于不同操作")
+            return ChatResponse.model_validate(receipt["response"])
+        try:
+            assert_expected_revision(decision.revision, request.expected_revision)
+        except Exception:
+            self.db.rollback()
+            raise
+
+        blocks = decision.domain_state.get("displayBlocks", [])
+        item = next(
+            (block for block in blocks if str(block.get("id")) == str(request.item_id)),
+            None,
+        )
+        if request.item_id is None or item is None:
+            raise ValueError("只能反馈当前推荐候选")
+        current_round = decision.domain_state.get("feedbackRound", {})
+        if current_round.get("status") == "adopted":
+            raise ValueError("当前推荐轮次已结束")
+
+        trace_id = uuid4().hex
+        before_revision = decision.revision
+        action_labels = {"LIKE": "喜欢", "ADOPT": "采纳", "DISLIKE": "不合适"}
+        message = f"{action_labels[request.action]}：{item['name']}"
+        with TraceScope(self.db, trace_id, session.id, user_id) as trace:
+            try:
+                trace.begin_turn(decision, message, "feedback", request.expected_revision)
+                trace.metadata.update({
+                    "feedbackType": request.action,
+                    "feedbackCandidateId": str(request.item_id),
+                })
+                trace.turn_summary.update({
+                    "feedbackType": request.action,
+                    "feedbackCandidateId": str(request.item_id),
+                })
+                before_feedback = trace.snapshot(decision)
+                original_recommendation = (
+                    decision.recommendation.model_dump(mode="json", by_alias=True)
+                    if decision.recommendation else None
+                )
+                decision.agent_runs = []
+                decision.trace_refs.append(
+                    TraceReference(trace_id=trace_id, event_type="FEEDBACK")
+                )
+                trace.event(
+                    "FEEDBACK_RECEIVED",
+                    "HTTP",
+                    request,
+                    {"sessionId": session.id, "candidateName": item["name"]},
+                )
+                feedback_node = trace.start_node(
+                    "Feedback",
+                    "operation",
+                    f"处理{action_labels[request.action]}反馈",
+                    input_payload={
+                        "feedbackType": request.action,
+                        "candidateId": str(request.item_id),
+                        "candidateName": item["name"],
+                        "originalRecommendation": original_recommendation,
+                    },
+                )
+                self.repository.save_feedback(user_id, request)
+
+                context = self._context(decision, session, user_id, message, trace_id)
+                context.trace = trace
+                profile = DietProfile(self.repository, self.settings, self.provider)
+                context.data["display_blocks"] = [
+                    MealResponse.model_validate(block) for block in blocks
+                ]
+
+                if request.action == "LIKE":
+                    speech = f"收到，你喜欢「{item['name']}」，我已记录这条偏好。"
+                    liked = list(current_round.get("likedCandidateIds", []))
+                    liked = list(dict.fromkeys([*liked, str(request.item_id)]))
+                    round_status = "active"
+                elif request.action == "ADOPT":
+                    speech = f"好的，已采纳「{item['name']}」，本轮推荐已结束。"
+                    decision.outcome = DecisionOutcome(
+                        candidate_id=str(request.item_id),
+                        label=item["name"],
+                        reason="用户采纳推荐",
+                    )
+                    liked = list(current_round.get("likedCandidateIds", []))
+                    round_status = "adopted"
+                else:
+                    decision.excluded_candidates = list(dict.fromkeys([
+                        *decision.excluded_candidates,
+                        str(request.item_id),
+                    ]))
+                    context.data["exclude_ids"] = [request.item_id]
+                    self.unified.recompute(
+                        profile, context, trace, refresh_candidates=False
+                    )
+                    new_blocks = profile.display_blocks(context)
+                    context.data["display_blocks"] = [
+                        MealResponse.model_validate(block) for block in new_blocks
+                    ]
+                    if new_blocks:
+                        speech = (
+                            "这款不太合适，我帮你换一个。\n"
+                            + context.data.get("speech_text", "")
+                        )
+                    else:
+                        speech = (
+                            "已排除这款，但按你现有的条件暂时没有新的合适结果。"
+                            "你可以补充其他偏好，我不会自动放宽已有条件。"
+                        )
+                    liked = []
+                    round_status = "active"
+
+                context.data["speech_text"] = speech
+                decision.messages.append(DecisionMessage(role="assistant", content=speech))
+                self.repository.add_message(
+                    session.id,
+                    "assistant",
+                    speech,
+                    f"FEEDBACK_{request.action}",
+                    trace_id,
+                )
+                decision.revision = before_revision + 1
+                if request.action == "DISLIKE" and decision.recommendation:
+                    decision.recommendation.generated_from_revision = decision.revision
+                session.phase = "ADOPTED" if request.action == "ADOPT" else profile.phase(context)
+                session.current_intent = decision.intent.value if decision.intent else None
+                session.slots = context.data["slots"].model_dump(by_alias=True)
+                session.revision = decision.revision
+                response_blocks = profile.display_blocks(context)
+                decision.domain_state["displayBlocks"] = response_blocks
+                session.last_recommendations = list(dict.fromkeys([
+                    *(session.last_recommendations or []),
+                    *[block["id"] for block in response_blocks],
+                ]))
+                decision.domain_state["feedbackRound"] = {
+                    "status": round_status,
+                    "lastAction": request.action,
+                    "candidateId": str(request.item_id),
+                    "likedCandidateIds": liked,
+                    "traceId": trace_id,
+                    "revision": decision.revision,
+                }
+                decision.domain_state.setdefault("dietTurns", []).append({
+                    "requestId": identifier,
+                    "revision": decision.revision,
+                    "userText": message,
+                    "speechText": speech,
+                    "displayBlocks": response_blocks,
+                    "traceId": trace_id,
+                    "responseType": "FEEDBACK",
+                    "feedbackType": request.action,
+                    "feedbackCandidateId": str(request.item_id),
+                })
+                feedback_output = {
+                    "feedbackType": request.action,
+                    "candidateId": str(request.item_id),
+                    "candidateName": item["name"],
+                    "roundStatus": round_status,
+                    "originalRecommendation": original_recommendation,
+                    "newRecommendation": (
+                        decision.recommendation.model_dump(mode="json", by_alias=True)
+                        if decision.recommendation else None
+                    ),
+                }
+                trace.finish_node(
+                    feedback_node,
+                    "success",
+                    output_payload=feedback_output,
+                    changes=trace.diff(before_feedback, decision),
+                )
+                response = self.presenter.answer(context, trace_id)
+                public_state = decision.model_copy(deep=True)
+                public_state.domain_state.pop("dietReceipts", None)
+                public_state.domain_state.pop("conversationReceipts", None)
+                public_state.domain_state.pop("feedbackReceipts", None)
+                response.decision_state = public_state
+                if identifier:
+                    snapshot = response.model_dump(mode="json", by_alias=True)
+                    snapshot["decisionState"]["domainState"].pop("dietTurns", None)
+                    decision.domain_state.setdefault("feedbackReceipts", {})[identifier] = {
+                        "fingerprint": fingerprint,
+                        "response": snapshot,
+                    }
+                self.decisions.save(decision)
+                self.db.commit()
+                trace.mark_committed(decision)
+                return response
+            except Exception:
+                self.db.rollback()
+                raise
 
     def _context(self, decision, session, user_id, message, trace_id):
         return AgentContext(
@@ -233,6 +437,14 @@ class DietOrchestrator:
                 session.revision = decision.revision
                 blocks = profile.display_blocks(context)
                 decision.domain_state["displayBlocks"] = blocks
+                decision.domain_state["feedbackRound"] = {
+                    "status": "active" if blocks else "inactive",
+                    "lastAction": None,
+                    "candidateId": None,
+                    "likedCandidateIds": [],
+                    "traceId": trace_id,
+                    "revision": decision.revision,
+                }
                 session.last_recommendations = list(dict.fromkeys([*(session.last_recommendations or []), *[b["id"] for b in blocks]]))
                 decision.domain_state.setdefault("dietTurns", []).append({
                     "requestId": identifier, "revision": decision.revision, "userText": message,
@@ -244,6 +456,7 @@ class DietOrchestrator:
                 public_state = decision.model_copy(deep=True)
                 public_state.domain_state.pop("dietReceipts", None)
                 public_state.domain_state.pop("conversationReceipts", None)
+                public_state.domain_state.pop("feedbackReceipts", None)
                 response.decision_state = public_state
                 if identifier:
                     snapshot = response.model_dump(mode="json", by_alias=True)

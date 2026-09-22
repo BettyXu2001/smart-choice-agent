@@ -1690,7 +1690,7 @@
         renderDemoWorkbench(currentRoute());
     }
     function renderMessage(message) {
-        const mealCards = (message.meals || []).map((meal) => renderMealCard(meal, { feedback: true, sessionId: message.sessionId })).join("") + (message.choices || []).map(c => `<article class="general-choice"><strong>${escapeHtml(c.name)}</strong><p>${escapeHtml(c.summary || "")}</p></article>`).join("");
+        const mealCards = (message.meals || []).map((meal) => renderMealCard(meal, { compact: true, sessionId: message.sessionId })).join("") + (message.choices || []).map(c => `<article class="general-choice"><strong>${escapeHtml(c.name)}</strong><p>${escapeHtml(c.summary || "")}</p></article>`).join("");
         const historyReasons = message.analysis?.sources
             ? [...(message.analysis.keyReasons || message.analysis.reasons || []), ...(message.analysis.tradeoffs || [])].slice(0, 6)
             : [];
@@ -1800,6 +1800,11 @@
         const editable = options && options.editable;
         const feedback = options && options.feedback;
         const compact = options && options.compact;
+        const feedbackRound = options?.feedbackRound || {};
+        const liked = (feedbackRound.likedCandidateIds || []).map(String).includes(String(meal.id));
+        const adopted = feedbackRound.status === "adopted"
+            && String(feedbackRound.candidateId) === String(meal.id);
+        const feedbackBusy = options?.busy ? "disabled" : "";
         return `
             <article class="meal-card">
                 <header>
@@ -1820,11 +1825,11 @@
                 ` : ""}
                 ${feedback ? `
                     <div class="button-row">
-                        <button class="btn soft" data-action="feedback" data-action-value="LIKE" data-item-id="${escapeHtml(meal.id)}" data-session-id="${escapeHtml(options.sessionId || "")}">喜欢</button>
-                        <button class="btn ghost" data-action="feedback" data-action-value="ADOPT" data-item-id="${escapeHtml(meal.id)}" data-session-id="${escapeHtml(options.sessionId || "")}">采纳</button>
-                        <button class="btn ghost" data-action="feedback" data-action-value="DISLIKE" data-item-id="${escapeHtml(meal.id)}" data-session-id="${escapeHtml(options.sessionId || "")}">不合适</button>
+                        <button class="btn soft" data-action="feedback" data-action-value="LIKE" data-item-id="${escapeHtml(meal.id)}" data-session-id="${escapeHtml(options.sessionId || "")}" ${liked || feedbackBusy ? "disabled" : ""}>${liked ? "已喜欢" : "喜欢"}</button>
+                        <button class="btn ghost" data-action="feedback" data-action-value="ADOPT" data-item-id="${escapeHtml(meal.id)}" data-session-id="${escapeHtml(options.sessionId || "")}" ${feedbackBusy}>采纳</button>
+                        <button class="btn ghost" data-action="feedback" data-action-value="DISLIKE" data-item-id="${escapeHtml(meal.id)}" data-session-id="${escapeHtml(options.sessionId || "")}" ${feedbackBusy}>不合适</button>
                     </div>
-                ` : ""}
+                ` : adopted ? '<p class="muted" role="status">已采纳，本轮推荐已结束。</p>' : ""}
             </article>
         `;
     }
@@ -2311,17 +2316,6 @@
             showToast("真实 API 设置清除失败", "error");
         }
     }
-    async function saveFeedback(button) {
-        await guard(async () => {
-            await DietApi.saveFeedback({
-                sessionId: button.dataset.sessionId || state.chat.sessionId,
-                itemId: Number(button.dataset.itemId),
-                action: button.dataset.actionValue,
-                rating: button.dataset.actionValue === "DISLIKE" ? 2 : 5,
-                reason: ""
-            });
-        }, "反馈已记录");
-    }
     function handleClick(event) {
         if (evaluationDashboard?.handleClick(event)) {
             return;
@@ -2364,7 +2358,7 @@
                 input.focus();
             }
         } else if (action === "feedback") {
-            saveFeedback(target);
+            conversation.sendFeedback(target).catch(error => showToast(error.message, "error"));
         } else if (action === "new-meal") {
             state.editingMeal = emptyMeal();
             renderPersonalMeals();
