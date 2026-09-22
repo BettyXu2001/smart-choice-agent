@@ -13,7 +13,7 @@
         apiKey: "",
         baseUrl: "https://api.deepseek.com",
         mainModel: "deepseek-v4-pro",
-        lightModel: "deepseek-flash",
+        lightModel: "deepseek-v4-flash",
         searchEnabled: false,
         searchApiKey: "",
         searchBaseUrl: "https://api.openai.com/v1",
