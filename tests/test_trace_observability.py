@@ -131,6 +131,9 @@ def test_trace_records_search_retries_and_auto_fallback_on_same_agent_run(databa
         ))
         trace = _trace_json(db, result.trace_id)
 
+    source = result.decision_state.domain_state["source"]
+    assert source["mode"] == "fixture"
+    assert any("Web Search 失败" in warning and "回退 fixture" in warning for warning in source["warnings"])
     assert len(attempts) == 2
     failed_search = [
         node for node in trace["timeline"]

@@ -15,7 +15,8 @@ from choice_agent.domains.diet.profile import DietProfile
 from choice_agent.domains.diet.state import LABELS, apply_fields, metadata, values
 from choice_agent.orchestration.unified import UnifiedDecisionOrchestrator
 from choice_agent.presenters.diet import DietPresenter
-from choice_agent.providers.model import ModelProvider
+from choice_agent.providers.model import DisabledProvider, ModelProvider
+from choice_agent.providers.search import OpenAIWebSearchProvider
 from choice_agent.repositories.decision_repository import DecisionRepository
 from choice_agent.repositories.diet_repository import DietRepository
 from choice_agent.schemas import (
@@ -36,10 +37,18 @@ class DietOrchestrator:
 
     def __init__(self, db: Session, settings: Settings, provider: ModelProvider):
         self.db = db
-        self.settings = settings
+        self.settings = settings if isinstance(settings, Settings) else Settings()
         self.repository = DietRepository(db, commit=False)
         self.decisions = DecisionRepository(db, commit=False)
-        self.provider = provider
+        self.provider = provider if hasattr(provider, "enabled") else DisabledProvider()
+        self.web_provider = OpenAIWebSearchProvider(
+            api_key=self.settings.search_api_key,
+            base_url=self.settings.search_base_url,
+            model=self.settings.search_model,
+            timeout_seconds=self.settings.search_timeout_seconds,
+            max_queries=self.settings.search_max_queries,
+            pricing=self.settings.model_pricing,
+        )
         self.unified = UnifiedDecisionOrchestrator()
         self.presenter = DietPresenter()
 
@@ -121,16 +130,18 @@ class DietOrchestrator:
         before_revision = decision.revision
         action_labels = {"LIKE": "喜欢", "ADOPT": "采纳", "DISLIKE": "不合适"}
         message = f"{action_labels[request.action]}：{item['name']}"
+        display_map = decision.domain_state.get("displayCandidateMap", {})
+        selected_candidate_id = str(display_map.get(str(request.item_id), request.item_id))
         with TraceScope(self.db, trace_id, session.id, user_id) as trace:
             try:
                 trace.begin_turn(decision, message, "feedback", request.expected_revision)
                 trace.metadata.update({
                     "feedbackType": request.action,
-                    "feedbackCandidateId": str(request.item_id),
+                    "feedbackCandidateId": selected_candidate_id,
                 })
                 trace.turn_summary.update({
                     "feedbackType": request.action,
-                    "feedbackCandidateId": str(request.item_id),
+                    "feedbackCandidateId": selected_candidate_id,
                 })
                 before_feedback = trace.snapshot(decision)
                 original_recommendation = (
@@ -153,7 +164,7 @@ class DietOrchestrator:
                     f"处理{action_labels[request.action]}反馈",
                     input_payload={
                         "feedbackType": request.action,
-                        "candidateId": str(request.item_id),
+                        "candidateId": selected_candidate_id,
                         "candidateName": item["name"],
                         "originalRecommendation": original_recommendation,
                     },
@@ -162,7 +173,7 @@ class DietOrchestrator:
 
                 context = self._context(decision, session, user_id, message, trace_id)
                 context.trace = trace
-                profile = DietProfile(self.repository, self.settings, self.provider)
+                profile = DietProfile(self.repository, self.settings, self.provider, self.web_provider)
                 context.data["display_blocks"] = [
                     MealResponse.model_validate(block) for block in blocks
                 ]
@@ -170,12 +181,12 @@ class DietOrchestrator:
                 if request.action == "LIKE":
                     speech = f"收到，你喜欢「{item['name']}」，我已记录这条偏好。"
                     liked = list(current_round.get("likedCandidateIds", []))
-                    liked = list(dict.fromkeys([*liked, str(request.item_id)]))
+                    liked = list(dict.fromkeys([*liked, selected_candidate_id]))
                     round_status = "active"
                 elif request.action == "ADOPT":
                     speech = f"好的，已采纳「{item['name']}」，本轮推荐已结束。"
                     decision.outcome = DecisionOutcome(
-                        candidate_id=str(request.item_id),
+                        candidate_id=selected_candidate_id,
                         label=item["name"],
                         reason="用户采纳推荐",
                     )
@@ -184,9 +195,9 @@ class DietOrchestrator:
                 else:
                     decision.excluded_candidates = list(dict.fromkeys([
                         *decision.excluded_candidates,
-                        str(request.item_id),
+                        selected_candidate_id,
                     ]))
-                    context.data["exclude_ids"] = [request.item_id]
+                    context.data["exclude_ids"] = [selected_candidate_id]
                     self.unified.recompute(
                         profile, context, trace, refresh_candidates=False
                     )
@@ -225,14 +236,15 @@ class DietOrchestrator:
                 session.revision = decision.revision
                 response_blocks = profile.display_blocks(context)
                 decision.domain_state["displayBlocks"] = response_blocks
+                response_display_map = decision.domain_state.get("displayCandidateMap", {})
                 session.last_recommendations = list(dict.fromkeys([
                     *(session.last_recommendations or []),
-                    *[block["id"] for block in response_blocks],
+                    *[response_display_map.get(str(block["id"]), block["id"]) for block in response_blocks],
                 ]))
                 decision.domain_state["feedbackRound"] = {
                     "status": round_status,
                     "lastAction": request.action,
-                    "candidateId": str(request.item_id),
+                    "candidateId": selected_candidate_id,
                     "likedCandidateIds": liked,
                     "traceId": trace_id,
                     "revision": decision.revision,
@@ -246,11 +258,11 @@ class DietOrchestrator:
                     "traceId": trace_id,
                     "responseType": "FEEDBACK",
                     "feedbackType": request.action,
-                    "feedbackCandidateId": str(request.item_id),
+                    "feedbackCandidateId": selected_candidate_id,
                 })
                 feedback_output = {
                     "feedbackType": request.action,
-                    "candidateId": str(request.item_id),
+                    "candidateId": selected_candidate_id,
                     "candidateName": item["name"],
                     "roundStatus": round_status,
                     "originalRecommendation": original_recommendation,
@@ -390,7 +402,7 @@ class DietOrchestrator:
                     )
                 context = self._context(decision, session, user_id, message, trace_id)
                 context.trace = trace
-                profile = DietProfile(self.repository, self.settings, self.provider)
+                profile = DietProfile(self.repository, self.settings, self.provider, self.web_provider)
                 clarify = False
                 if command and request.type == "confirm_fields":
                     context.data["display_blocks"] = [MealResponse.model_validate(b) for b in decision.domain_state.get("displayBlocks", [])]
@@ -445,7 +457,11 @@ class DietOrchestrator:
                     "traceId": trace_id,
                     "revision": decision.revision,
                 }
-                session.last_recommendations = list(dict.fromkeys([*(session.last_recommendations or []), *[b["id"] for b in blocks]]))
+                block_display_map = decision.domain_state.get("displayCandidateMap", {})
+                session.last_recommendations = list(dict.fromkeys([
+                    *(session.last_recommendations or []),
+                    *[block_display_map.get(str(block["id"]), block["id"]) for block in blocks],
+                ]))
                 decision.domain_state.setdefault("dietTurns", []).append({
                     "requestId": identifier, "revision": decision.revision, "userText": message,
                     "speechText": speech, "displayBlocks": blocks, "traceId": trace_id,

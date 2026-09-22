@@ -42,7 +42,7 @@ def _stream_events(database, body, settings=None):
 def test_search_capabilities_hide_provider_details():
     payload = search_capabilities(Settings(search_api_key="secret")).model_dump(by_alias=True)
     assert payload == {
-        "supportedDomains": ["shopping", "travel"],
+        "supportedDomains": ["diet", "shopping", "travel"],
         "webSearchConfigured": True,
         "defaultSearchMode": "fixture",
     }
@@ -58,7 +58,7 @@ def test_search_capabilities_use_runtime_search_settings():
     ).model_dump(by_alias=True)
 
     assert payload == {
-        "supportedDomains": ["shopping", "travel"],
+        "supportedDomains": ["diet", "shopping", "travel"],
         "webSearchConfigured": True,
         "defaultSearchMode": "web",
     }

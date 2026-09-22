@@ -841,16 +841,16 @@
                         </label>
                         <label class="field full">
                             <span>模型 Base URL</span>
-                            <input type="url" name="baseUrl" value="${escapeHtml(settings.baseUrl)}" placeholder="https://api.openai.com/v1">
+                            <input type="url" name="baseUrl" value="${escapeHtml(settings.baseUrl)}" placeholder="https://api.deepseek.com">
                         </label>
                         <div class="form-grid two">
                             <label class="field">
                                 <span>主模型</span>
-                                <input type="text" name="mainModel" value="${escapeHtml(settings.mainModel)}" placeholder="gpt-5">
+                                <input type="text" name="mainModel" value="${escapeHtml(settings.mainModel)}" placeholder="deepseek-v4-pro">
                             </label>
                             <label class="field">
                                 <span>轻量模型</span>
-                                <input type="text" name="lightModel" value="${escapeHtml(settings.lightModel)}" placeholder="gpt-5-mini">
+                                <input type="text" name="lightModel" value="${escapeHtml(settings.lightModel)}" placeholder="deepseek-v4-flash">
                             </label>
                         </div>
                         <label class="toggle-row">
@@ -1951,134 +1951,138 @@
     function renderTraces() {
         const selected = state.traces.selected;
         app.innerHTML = `
-            <section class="split">
-                <div class="section">
-                    <div class="card-title">
+            <section class="trace-workbench">
+                <aside class="section trace-sidebar">
+                    <div class="card-title compact">
                         <div>
-                            <h2>决策过程</h2>
-                            <p>按时间轴查看用户输入、意图理解、状态变化、候选过滤、Agent 输出和推荐变化。</p>
+                            <h2>Trace 运行记录</h2>
+                            <p>按时间、状态、输入和意图快速定位一次请求。</p>
                         </div>
                     </div>
-                    <form id="traceFilterForm" class="form-grid">
-                        <div class="field">
-                            <label>开始时间</label>
+                    <form id="traceFilterForm" class="trace-filter-compact">
+                        <label class="field">
+                            <span>开始</span>
                             <input type="datetime-local" name="startAt" value="${escapeHtml(state.traces.filters.startAt)}" required>
-                        </div>
-                        <div class="field">
-                            <label>结束时间</label>
+                        </label>
+                        <label class="field">
+                            <span>结束</span>
                             <input type="datetime-local" name="endAt" value="${escapeHtml(state.traces.filters.endAt)}" required>
-                        </div>
-                        <div class="field">
-                            <label>会话 ID（可选）</label>
-                            <input name="sessionId" value="${escapeHtml(state.traces.filters.sessionId)}" placeholder="填写后按会话查询">
-                        </div>
-                        <div class="field">
-                            <label>数量上限</label>
+                        </label>
+                        <label class="field full">
+                            <span>Session ID</span>
+                            <input name="sessionId" value="${escapeHtml(state.traces.filters.sessionId)}" placeholder="可选，会话内 Trace">
+                        </label>
+                        <label class="field">
+                            <span>数量</span>
                             <input type="number" min="1" max="500" name="limit" value="${escapeHtml(state.traces.filters.limit)}">
-                        </div>
-                        <div class="field">
-                            <label>标注状态</label>
+                        </label>
+                        <label class="field">
+                            <span>标注</span>
                             <select name="onlyUnlabeled">
                                 <option value="false" ${!state.traces.filters.onlyUnlabeled ? "selected" : ""}>全部</option>
-                                <option value="true" ${state.traces.filters.onlyUnlabeled ? "selected" : ""}>仅未标注</option>
+                                <option value="true" ${state.traces.filters.onlyUnlabeled ? "selected" : ""}>未标注</option>
                             </select>
-                        </div>
-                        <div class="field">
-                            <span>&nbsp;</span>
-                            <button class="btn primary" type="submit">${state.traces.loading ? "查询中..." : "查询 Trace"}</button>
-                        </div>
+                        </label>
+                        <button class="btn primary full" type="submit">${state.traces.loading ? "查询中..." : "查询"}</button>
                     </form>
                     <div class="subtle-divider"></div>
-                    ${renderTraceTable()}
-                </div>
-                <aside class="section">
-                    ${selected ? renderTraceDetail(selected) : `<div class="empty">选择一条 Trace 查看决策过程和标注表单。</div>`}
+                    ${renderTraceList()}
                 </aside>
+                <main class="section trace-main">
+                    ${selected ? renderTraceDetail(selected) : `<div class="empty">选择一条 Trace 查看详情、时间轴、状态变化和导出操作。</div>`}
+                </main>
             </section>
         `;
     }
-    function renderTraceTable() {
+    function renderTraceList() {
         if (!state.traces.rows.length) {
-            return `<div class="empty">暂无 Trace 数据。可以先在聊天页发起几轮对话。</div>`;
+            return `<div class="empty compact-empty">暂无 Trace 数据。可以先在聊天页发起几轮对话。</div>`;
         }
         return `
-            <div class="table-wrap">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Trace ID</th>
-                            <th>会话</th>
-                            <th>状态</th>
-                            <th>事件</th>
-                            <th>耗时</th>
-                            <th>创建时间</th>
-                            <th>标注</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${state.traces.rows.map((row) => `
-                            <tr>
-                                <td>${escapeHtml(row.traceId)}</td>
-                                <td>${escapeHtml(row.sessionId)}</td>
-                                <td>${escapeHtml(row.status || "-")}</td>
-                                <td>${escapeHtml(row.eventCount ?? "-")}</td>
-                                <td>${row.durationMs ? `${escapeHtml(row.durationMs)} ms` : "-"}</td>
-                                <td>${escapeHtml(row.createdAt || "-")}</td>
-                                <td>${row.expectedIntent ? `<span class="badge">${escapeHtml(row.expectedIntent)}</span>` : "<span class=\"muted\">未标注</span>"}</td>
-                                <td><button class="btn soft" data-action="select-trace" data-trace-id="${escapeHtml(row.traceId)}">查看</button></td>
-                            </tr>
-                        `).join("")}
-                    </tbody>
-                </table>
+            <div class="trace-run-list" aria-label="Trace 运行记录">
+                ${state.traces.rows.map((row) => {
+                    const item = window.TraceTimeline ? window.TraceTimeline.traceListSummary(row) : {
+                        traceId: row.traceId,
+                        sessionId: row.sessionId,
+                        statusLabel: row.status || "UNKNOWN",
+                        createdLabel: row.createdAt || "-",
+                        userMessage: row.traceId,
+                        intent: "-",
+                        domain: "-",
+                        duration: row.durationMs ? `${row.durationMs} ms` : "-",
+                        labeled: Boolean(row.labeledAt)
+                    };
+                    const selected = state.traces.selected?.traceId === row.traceId;
+                    return `
+                        <button class="trace-run-item ${selected ? "active" : ""}" type="button" data-action="select-trace" data-trace-id="${escapeHtml(row.traceId)}">
+                            <span class="trace-run-top">
+                                <b>${escapeHtml(item.createdLabel)}</b>
+                                <span class="badge">${escapeHtml(item.statusLabel)}</span>
+                            </span>
+                            <strong>${escapeHtml(item.userMessage)}</strong>
+                            <span class="trace-run-meta">${escapeHtml(item.intent)} / ${escapeHtml(item.domain)} · ${escapeHtml(item.duration)}</span>
+                            <small>Trace ${escapeHtml(shortText(item.traceId, 18))} · Session ${escapeHtml(shortText(item.sessionId, 18))} · ${item.labeled ? "已标注" : "未标注"}</small>
+                        </button>
+                    `;
+                }).join("")}
             </div>
         `;
     }
     function renderTraceDetail(trace) {
         const timelineHtml = window.TraceTimeline ? window.TraceTimeline.render(trace) : `<details open><summary>Trace JSON</summary><pre class="json-box">${escapeHtml(safeJson(trace.traceJson))}</pre></details>`;
         return `
-            <div class="card-title">
-                <div>
-                    <h3>Trace 详情</h3>
-                    <p>${escapeHtml(trace.traceId)}</p>
-                </div>
-            </div>
-            <div class="grid">
-                <div>
-                    <span class="badge">${escapeHtml(trace.status || "UNKNOWN")}</span>
-                    <p class="muted">Session：${escapeHtml(trace.sessionId || "-")} · Events：${escapeHtml(trace.eventCount ?? "-")} · Duration：${escapeHtml(trace.durationMs ?? "-")} ms</p>
+            <div class="trace-detail-shell">
+                <div class="trace-detail-toolbar">
+                    <div>
+                        <h3>Trace 详情</h3>
+                        <p class="muted">完整数据来自 Trace ID / Session ID 的后端查询，非页面展开状态。</p>
+                    </div>
+                    <div class="trace-export-actions">
+                        <button class="btn soft" type="button" data-action="export-trace" data-format="json">导出当前 Trace JSON</button>
+                        <button class="btn soft" type="button" data-action="export-trace" data-format="markdown">导出当前 Trace Markdown</button>
+                        <button class="btn soft" type="button" data-action="export-session" data-format="json">导出整个 Session JSON</button>
+                        <button class="btn soft" type="button" data-action="export-session" data-format="markdown">导出整个 Session Markdown</button>
+                    </div>
                 </div>
                 ${timelineHtml}
-                <form id="traceLabelForm" class="form-grid">
-                    <input type="hidden" name="traceId" value="${escapeHtml(trace.traceId)}">
-                    <div class="field">
-                        <label>预期意图</label>
-                        <select name="expectedIntent">
-                            <option value="">不标注</option>
-                            ${INTENTS.map((intent) => `<option value="${intent}" ${trace.expectedIntent === intent ? "selected" : ""}>${intent}</option>`).join("")}
-                        </select>
-                    </div>
-                    <div class="field">
-                        <label>澄清动作</label>
-                        <select name="expectedClarifyAction">
-                            <option value="">不标注</option>
-                            <option value="ASK" ${trace.expectedClarifyAction === "ASK" ? "selected" : ""}>ASK</option>
-                            <option value="READY" ${trace.expectedClarifyAction === "READY" ? "selected" : ""}>READY</option>
-                        </select>
-                    </div>
-                    <div class="field full">
-                        <label>预期槽位 JSON</label>
-                        <textarea name="expectedSlots" placeholder='{"mealTime":["晚餐"],"taste":["清淡"]}'>${escapeHtml(safeJson(trace.expectedSlots))}</textarea>
-                    </div>
-                    <div class="field full">
-                        <label>备注</label>
-                        <textarea name="labelNote" placeholder="标注说明">${escapeHtml(trace.labelNote || "")}</textarea>
-                    </div>
-                    <div class="field full">
-                        <button class="btn primary" type="submit">保存标注</button>
-                    </div>
-                </form>
+                <details class="trace-label-panel">
+                    <summary>人工标注 ${trace.labeledAt || trace.expectedIntent ? "· 已标注" : "· 未标注"}</summary>
+                    ${renderTraceLabelForm(trace)}
+                </details>
             </div>
+        `;
+    }
+    function renderTraceLabelForm(trace) {
+        return `
+            <form id="traceLabelForm" class="form-grid">
+                <input type="hidden" name="traceId" value="${escapeHtml(trace.traceId)}">
+                <div class="field">
+                    <label>预期意图</label>
+                    <select name="expectedIntent">
+                        <option value="">不标注</option>
+                        ${INTENTS.map((intent) => `<option value="${intent}" ${trace.expectedIntent === intent ? "selected" : ""}>${window.TraceTimeline ? window.TraceTimeline.valueLabel(intent, "intent") : intent}</option>`).join("")}
+                    </select>
+                </div>
+                <div class="field">
+                    <label>澄清动作</label>
+                    <select name="expectedClarifyAction">
+                        <option value="">不标注</option>
+                        <option value="ASK" ${trace.expectedClarifyAction === "ASK" ? "selected" : ""}>继续提问</option>
+                        <option value="READY" ${trace.expectedClarifyAction === "READY" ? "selected" : ""}>信息足够</option>
+                    </select>
+                </div>
+                <div class="field full">
+                    <label>预期槽位 JSON</label>
+                    <textarea name="expectedSlots" placeholder='{"mealTime":["晚餐"],"taste":["清淡"]}'>${escapeHtml(safeJson(trace.expectedSlots))}</textarea>
+                </div>
+                <div class="field full">
+                    <label>备注</label>
+                    <textarea name="labelNote" placeholder="标注说明">${escapeHtml(trace.labelNote || "")}</textarea>
+                </div>
+                <div class="field full">
+                    <button class="btn primary" type="submit">保存标注</button>
+                </div>
+            </form>
         `;
     }
     async function searchTraces(form) {
@@ -2103,7 +2107,7 @@
                     limit: state.traces.filters.limit
                 });
             }
-            state.traces.selected = state.traces.rows[0] || null;
+            state.traces.selected = state.traces.rows[0] ? await DietApi.getTrace(state.traces.rows[0].traceId) : null;
         } catch (error) {
             showToast(error.message || "Trace 查询失败", "error");
         } finally {
@@ -2140,11 +2144,55 @@
             await DietApi.labelTrace(traceId, payload);
             state.traces.selected = await DietApi.getTrace(traceId);
             const index = state.traces.rows.findIndex((row) => row.traceId === traceId);
-            if (index >= 0) {
-                state.traces.rows[index] = state.traces.selected;
-            }
+            if (index >= 0) state.traces.rows[index] = state.traces.selected;
             renderTraces();
         }, "Trace 标注已保存");
+    }
+    function shortText(value, maxLength) {
+        const text = String(value || "-");
+        return text.length > maxLength ? `${text.slice(0, Math.max(4, maxLength - 7))}...${text.slice(-4)}` : text;
+    }
+    function safeFilePart(value) {
+        return String(value || "unknown").replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 80) || "unknown";
+    }
+    function exportDatePart() {
+        return new Date().toISOString().slice(0, 10);
+    }
+    function downloadTextFile(filename, content, mimeType) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    }
+    async function exportTraceDownload(format) {
+        const selected = state.traces.selected;
+        if (!selected?.traceId || !window.TraceTimeline) return;
+        await guard(async () => {
+            const trace = await DietApi.getTrace(selected.traceId);
+            const isJson = format === "json";
+            const content = isJson ? window.TraceTimeline.exportTraceJson(trace) : window.TraceTimeline.exportTraceMarkdown(trace);
+            const ext = isJson ? "json" : "md";
+            downloadTextFile(`trace-${safeFilePart(trace.traceId)}-${exportDatePart()}.${ext}`, content, isJson ? "application/json;charset=utf-8" : "text/markdown;charset=utf-8");
+        }, "Trace 导出已生成");
+    }
+    async function exportSessionDownload(format) {
+        const selected = state.traces.selected;
+        if (!selected?.sessionId || !window.TraceTimeline) return;
+        await guard(async () => {
+            const limit = 1000;
+            const traces = await DietApi.listSessionTraces(selected.sessionId, limit);
+            const isJson = format === "json";
+            const content = isJson
+                ? window.TraceTimeline.exportSessionJson(selected.sessionId, traces, limit)
+                : window.TraceTimeline.exportSessionMarkdown(selected.sessionId, traces, limit);
+            const ext = isJson ? "json" : "md";
+            downloadTextFile(`session-${safeFilePart(selected.sessionId)}-${exportDatePart()}.${ext}`, content, isJson ? "application/json;charset=utf-8" : "text/markdown;charset=utf-8");
+        }, "Session 导出已生成");
     }
     function renderEvaluations() {
         if (evaluationDashboard) {
@@ -2371,6 +2419,10 @@
             renderPersonalMeals();
         } else if (action === "select-trace") {
             selectTrace(target.dataset.traceId);
+        } else if (action === "export-trace") {
+            exportTraceDownload(target.dataset.format || "json");
+        } else if (action === "export-session") {
+            exportSessionDownload(target.dataset.format || "json");
         } else if (action === "open-trace") {
             state.traces.filters.sessionId = "";
             navigate("/admin/traces");
@@ -2427,11 +2479,12 @@
         }
         const input = form.querySelector("textarea[name=prompt]");
         const explicitDomain = input && input.dataset.demoPrompt === prompt ? input.dataset.demoDomain : "";
-        const realtime = formData.get("realTimeSearch") === "on" && Boolean(state.home.searchCapabilities?.webSearchConfigured);
+        const searchConfigured = Boolean(state.home.searchCapabilities?.webSearchConfigured);
+        const searchMode = searchConfigured ? "auto" : "fixture";
         const restore = setLoading(form.querySelector('button[type="submit"]'), "创建决策中...");
         state.home.progress = [];
         try {
-            await conversation.startGeneral(prompt, ["diet","travel","shopping","generic"].includes(explicitDomain) ? explicitDomain : null, {searchMode: realtime ? "web" : "fixture", onProgress: (event) => {
+            await conversation.startGeneral(prompt, ["diet","travel","shopping","generic"].includes(explicitDomain) ? explicitDomain : null, {searchMode, onProgress: (event) => {
                 state.home.progress = [...state.home.progress, event].slice(-6);
                 if (currentRoute() === "/") renderGeneralHome();
             }});

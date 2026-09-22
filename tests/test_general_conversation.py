@@ -124,6 +124,42 @@ def test_travel_missing_context_and_budget_units(database):
         assert not ambiguous.display_blocks
 
 
+
+def test_travel_short_answer_fills_clarified_fields(database):
+    with database.session_factory() as db:
+        service = GenericDecisionOrchestrator(db)
+        first = create(service, "周末想出去走走，但不想太累，应该去哪里？", "travel", "travel-short-start")
+        assert first.decision_state.status.value == "clarifying"
+        assert "从哪里出发" in first.speech_text
+        assert "几天" in first.speech_text
+        assert "预算" not in first.speech_text
+        assert "轻松" not in first.speech_text
+
+        ready = message(service, first, "苏州，2天，轻松", "travel-short-answer")
+        fields = ready.decision_state.domain_state["conversationFields"]
+        assert fields["departure"]["value"] == "苏州"
+        assert fields["days"]["value"] == 2
+        assert fields["priority"]["value"] == "轻松"
+        assert ready.decision_state.status.value == "decided"
+        assert not ready.decision_state.clarifying_questions
+
+
+def test_travel_clarification_only_asks_missing_required_fields(database):
+    with database.session_factory() as db:
+        service = GenericDecisionOrchestrator(db)
+        missing_departure = create(service, "周末旅行 2 天", "travel", "travel-missing-departure")
+        assert missing_departure.decision_state.status.value == "clarifying"
+        assert missing_departure.speech_text == "你从哪里出发？"
+
+        missing_days = create(service, "从上海出发周末旅行", "travel", "travel-missing-days")
+        assert missing_days.decision_state.status.value == "clarifying"
+        assert missing_days.speech_text == "计划玩几天？"
+
+        ready = create(service, "从上海出发 2 天轻松旅行", "travel", "travel-fields-ready")
+        assert ready.decision_state.status.value == "decided"
+        assert not ready.decision_state.clarifying_questions
+
+
 def test_model_suggestions_require_confirmation_and_cannot_restore_clear(database):
     class FakeModel:
         enabled=True

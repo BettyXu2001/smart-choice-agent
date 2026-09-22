@@ -57,10 +57,13 @@ class ComparisonProfile(DomainProfile):
             "criteria": [item.model_dump(by_alias=True) for item in decision.criteria],
         }
 
+    def clarification_prompt(self, context: AgentContext) -> str:
+        return self.clarification_question
+
     def clarify(self, context: AgentContext) -> dict[str, Any]:
         blocking_question = context.data.get("blocking_question")
         if blocking_question or self.needs_clarification(context):
-            question = blocking_question or self.clarification_question
+            question = blocking_question or self.clarification_prompt(context)
             context.decision.clarifying_questions = [question]
             context.decision.unanswered_questions = [
                 UnansweredQuestion(key=f"{self.key}_context", question=question, asked_by="ClarificationAgent")

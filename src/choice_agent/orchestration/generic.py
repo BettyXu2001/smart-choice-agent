@@ -76,7 +76,7 @@ class GenericDecisionOrchestrator:
             pricing=self.settings.model_pricing,
         )
         self.registry = registry or DomainRegistry([
-            DietProfile(self.diet_repository, self.settings, self.provider),
+            DietProfile(self.diet_repository, self.settings, self.provider, web_provider),
             TravelProfile(web_provider), ShoppingProfile(web_provider), GenericProfile(),
         ])
         self.unified = UnifiedDecisionOrchestrator()
@@ -360,7 +360,7 @@ class GenericDecisionOrchestrator:
                 session.source_mode = context.data["source_mode"]
                 session.current_intent = decision.intent.value if decision.intent else None
                 session.phase = "CLARIFY" if decision.status.value == "clarifying" else profile.phase(context)
-                ids = [int(item.candidate_id) for item in decision.candidates if item.candidate_id.isdigit()]
+                ids = [int(item.candidate_id) if item.candidate_id.isdigit() else item.candidate_id for item in decision.candidates]
                 session.last_recommendations = list(dict.fromkeys([*(session.last_recommendations or []), *ids]))
         blocks = profile.display_blocks(context)
         decision.domain_state["displayBlocks"] = blocks

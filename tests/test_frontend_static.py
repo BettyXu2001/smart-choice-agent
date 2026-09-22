@@ -127,3 +127,33 @@ def test_decision_quality_and_outcome_review_are_wired_to_user_ui():
     assert "待复盘实际结果" in app
     assert "saveOutcomeReview" in api
     assert "clearOutcomeReview" in api
+
+
+def test_trace_management_exports_full_trace_data_and_uses_readable_labels():
+    app = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    trace = (STATIC_JS / "trace.js").read_text(encoding="utf-8")
+
+    assert "trace-workbench" in app
+    assert "data-action=\"export-trace\"" in app
+    assert "data-action=\"export-session\"" in app
+    assert "await DietApi.getTrace(selected.traceId)" in app
+    assert "await DietApi.listSessionTraces(selected.sessionId, limit)" in app
+    assert "limit = 1000" in app
+    assert "downloadTextFile(`trace-${safeFilePart(trace.traceId)}-${exportDatePart()}.${ext}`" in app
+    assert "downloadTextFile(`session-${safeFilePart(selected.sessionId)}-${exportDatePart()}.${ext}`" in app
+
+    assert "MEAL_RECOMMENDATION: \"餐食推荐\"" in trace
+    assert "IntentAgent: \"意图识别\"" in trace
+    assert 'status === "failed" || status === "fallback"' in trace
+    assert "exportTraceJson" in trace
+    assert "exportSessionMarkdown" in trace
+    assert "sortTracesChronologically" in trace
+
+
+def test_formal_general_decision_uses_auto_search_when_configured():
+    source = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    submit = source[source.index("async function submitGeneralDecision") : source.index("function handleSubmit")]
+
+    assert 'const searchMode = searchConfigured ? "auto" : "fixture";' in submit
+    assert '{searchMode, onProgress:' in submit
+    assert 'searchMode: realtime ? "web" : "fixture"' not in submit

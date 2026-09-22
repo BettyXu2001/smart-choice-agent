@@ -129,7 +129,7 @@ def search_capabilities(
     if default_mode not in {"fixture", "web", "auto"}:
         default_mode = "fixture"
     return SearchCapabilitiesResponse(
-        supported_domains=["shopping", "travel"],
+        supported_domains=["diet", "shopping", "travel"],
         web_search_configured=bool(active_settings.search_api_key.strip()),
         default_search_mode=default_mode,
     )

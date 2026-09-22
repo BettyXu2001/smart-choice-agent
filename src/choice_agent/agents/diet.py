@@ -15,6 +15,7 @@ from choice_agent.domains.diet.rules import (
 from choice_agent.providers.model import ModelProvider
 from choice_agent.repositories.diet_repository import DietRepository
 from choice_agent.domains.diet.state import understand_fields
+from choice_agent.domains.diet.web import DietDisplayCandidate, meal_response_from_display
 from choice_agent.schemas import (
     ClarifyAction, DecisionNextAction, DecisionStatus,
     Intent, MealResponse, Recommendation, SlotBundle, SourceMode, UnansweredQuestion,
@@ -142,8 +143,22 @@ class CriticAgent(BaseAgent):
     name = "CriticAgent"
 
     def execute(self, context: AgentContext) -> dict[str, Any]:
-        ranked: list[RankedMeal] = context.data.get("ranked", [])
+        display: list[DietDisplayCandidate] = context.data.get("diet_display_candidates", [])
         issues: list[str] = []
+        if display:
+            ids = [item.candidate.candidate_id for item in display]
+            excluded = {str(item) for item in context.data.get("exclude_ids", [])}
+            excluded.update(str(item) for item in context.decision.excluded_candidates)
+            if len(ids) != len(set(ids)):
+                issues.append("候选项存在重复")
+            if any(item.score < 0 or item.score > 1 for item in display):
+                issues.append("候选评分超出范围")
+            if set(ids) & excluded:
+                issues.append("候选包含明确排除项")
+            context.data["critic_issues"] = issues
+            return {"passed": not issues, "issues": issues}
+
+        ranked: list[RankedMeal] = context.data.get("ranked", [])
         ids = [item.meal.id for item in ranked]
         if len(ids) != len(set(ids)):
             issues.append("候选项存在重复")
@@ -179,8 +194,89 @@ class ExplanationAgent(BaseAgent):
             return f"{item.meal.name}比较贴近你想要的{'、'.join(slots.taste)}口味。"
         return f"{item.meal.name}和你这轮表达的就餐偏好匹配度较高。"
 
+    def _display_reason(self, item: DietDisplayCandidate, slots: SlotBundle) -> str:
+        if slots.health_goal:
+            return f"{item.name}比较符合你提到的{'、'.join(slots.health_goal)}诉求。"
+        if slots.taste:
+            return f"{item.name}比较贴近你想要的{'、'.join(slots.taste)}口味。"
+        return f"{item.name}和你这轮表达的就餐偏好匹配度较高。"
+
+    def _execute_display(
+        self,
+        context: AgentContext,
+        slots: SlotBundle,
+        display: list[DietDisplayCandidate],
+    ) -> dict[str, Any]:
+        if not display:
+            speech = "暂时没有找到很匹配的餐食，你可以先补充对应特征的餐食。"
+            context.data["display_blocks"] = []
+            context.data["speech_text"] = speech
+            context.decision.recommendation = Recommendation(summary=speech)
+            transition_decision(context.decision, DecisionStatus.DECIDED, DecisionNextAction.WAIT_USER)
+            return {"speechText": speech, "recommendations": []}
+
+        selected = display[:3]
+        reasons = {item.candidate.candidate_id: self._display_reason(item, slots) for item in selected}
+        if self.provider.enabled:
+            try:
+                system_prompt = _prompt("recommend-response.txt")
+                user_prompt = json.dumps({
+                        "message": context.message,
+                        "slots": slots.model_dump(by_alias=True),
+                        "candidates": [
+                            {"id": item.candidate.candidate_id, "name": item.name, "score": item.score}
+                            for item in selected
+                        ],
+                    }, ensure_ascii=False)
+                parsed = (
+                    context.trace.model_call(
+                        "Explanation",
+                        self.model_name,
+                        system_prompt,
+                        user_prompt,
+                        lambda: self.provider.complete_json(system_prompt, user_prompt, self.model_name),
+                        provider=self.provider,
+                    )
+                    if context.trace
+                    else self.provider.complete_json(system_prompt, user_prompt, self.model_name)
+                )
+                for option in parsed.get("recommendations", []):
+                    raw_id = option.get("candidateId", option.get("mealId", option.get("itemId")))
+                    candidate_id = str(raw_id) if raw_id is not None else ""
+                    if candidate_id in reasons and str(option.get("reason", "")).strip():
+                        reasons[candidate_id] = str(option["reason"]).strip()
+            except (ValueError, RuntimeError, OSError, KeyError, TypeError) as error:
+                if context.trace:
+                    context.trace.fallback(
+                        stage="Fallback",
+                        reason=f"模型解释不可用，保留规则解释：{type(error).__name__}: {error}",
+                        from_path="model_explanation",
+                        to_path="rules_explanation",
+                        details={"agent": self.name, "candidateIds": [item.candidate.candidate_id for item in selected]},
+                    )
+                logger.warning("Invalid model explanation output; preserving available rule-based reasons")
+        blocks = [meal_response_from_display(item, reasons[item.candidate.candidate_id]) for item in selected]
+        lines = ["我优先给你推荐这几款："]
+        lines.extend(f"- {block.name}：{block.reason}" for block in blocks)
+        if any(value in {"减脂", "低糖", "控碳水", "养胃"} for value in slots.health_goal):
+            lines.append("这些建议只做日常饮食参考，如有明确疾病或特殊身体情况，请咨询医生或营养师。")
+        speech = "\n".join(lines)
+        context.data["display_blocks"] = blocks
+        context.data["speech_text"] = speech
+        context.decision.recommendation = Recommendation(
+            primary_candidate_id=selected[0].candidate.candidate_id,
+            alternative_candidate_ids=[item.candidate.candidate_id for item in selected[1:]],
+            summary=speech,
+            tradeoffs=[block.reason or "" for block in blocks],
+        )
+        transition_decision(context.decision, DecisionStatus.DECIDED, DecisionNextAction.WAIT_USER)
+        return {"speechText": speech, "recommendations": [block.model_dump(by_alias=True) for block in blocks]}
+
     def execute(self, context: AgentContext) -> dict[str, Any]:
         slots: SlotBundle = context.data["slots"]
+        display: list[DietDisplayCandidate] = context.data.get("diet_display_candidates", [])
+        if display:
+            return self._execute_display(context, slots, display)
         ranked: list[RankedMeal] = context.data.get("ranked", [])
         if not ranked:
             speech = "暂时没有找到很匹配的餐食，你可以先补充对应特征的餐食。"
@@ -257,7 +353,6 @@ class ExplanationAgent(BaseAgent):
             "speechText": speech,
             "recommendations": [block.model_dump(by_alias=True) for block in blocks],
         }
-
 
 class RiskAgent(BaseAgent):
     name = "RiskAgent"

@@ -36,7 +36,8 @@ class OpenAIWebSearchProvider:
     def __init__(self, api_key: str, base_url: str, model: str,
                  timeout_seconds: float = 20.0, max_queries: int = 2,
                  transport: Transport | None = None,
-                 pricing: dict[str, dict[str, float]] | None = None):
+                 pricing: dict[str, dict[str, float]] | None = None,
+                 instruction: str = SEARCH_INSTRUCTION):
         self.api_key = api_key.strip()
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -44,6 +45,7 @@ class OpenAIWebSearchProvider:
         self.max_queries = max(1, max_queries)
         self.transport = transport or self._send
         self.pricing = pricing or {}
+        self.instruction = instruction
 
     @property
     def enabled(self) -> bool:
@@ -59,7 +61,7 @@ class OpenAIWebSearchProvider:
             "tool_choice": "required",
             "max_tool_calls": self.max_queries,
             "input": (
-                SEARCH_INSTRUCTION + "\n"
+                self.instruction + "\n"
                 f"Domain: {context.decision.domain}\nGoal: {context.decision.user_goal}\n"
                 f"Confirmed/current fields (override original goal): {json.dumps(context.decision.domain_state.get('conversationFields', {}), ensure_ascii=False)}\n"
                 f"Current message: {context.message}\nCriteria: "
@@ -83,7 +85,7 @@ class OpenAIWebSearchProvider:
                         kind="search",
                         provider=self.name,
                         model=self.model,
-                        prompt_template=SEARCH_INSTRUCTION,
+                        prompt_template=self.instruction,
                         input_payload={"body": body, "attempt": attempt + 1},
                         call=execute,
                         retry_count=attempt,
@@ -107,7 +109,7 @@ class OpenAIWebSearchProvider:
             payload.get("usage"),
             provider=self.name,
             model=str(payload.get("model") or self.model),
-            prompt_version=prompt_fingerprint(SEARCH_INSTRUCTION),
+            prompt_version=prompt_fingerprint(self.instruction),
             pricing=self.pricing,
             retry_count=retry_count,
         )

@@ -81,6 +81,67 @@ def add_fact(decision, candidate_id, text, concern=False, source="conversation")
     info["changes"].append("补充候选信息："+text)
 
 
+_TRAVEL_PRIORITY_WORDS = [
+    "轻松", "放松", "不累", "不想太累", "人少", "安静", "自然", "风景", "省钱", "预算", "便宜", "交通近", "路程短",
+]
+
+
+def _travel_days(text):
+    match = re.search(r"(\d+(?:\.\d+)?|一|两|二|三|四|五|六|七|八|九|十)\s*(?:天|日)", text)
+    if not match:
+        return None
+    value = _number(match.group(1))
+    return int(value) if value == int(value) else None
+
+
+def _travel_priority(text):
+    found = [word for word in _TRAVEL_PRIORITY_WORDS if word in text]
+    if not found:
+        return None
+    if any(word in found for word in ["轻松", "放松", "不累", "不想太累"]):
+        return "轻松"
+    return "、".join(dict.fromkeys(found))
+
+
+def _travel_departure(text, previous_question, current):
+    explicit_patterns = [
+        r"从(?P<place>[\u4e00-\u9fa5A-Za-z]{2,12})出发",
+        r"出发地(?:是|在)?(?P<place>[\u4e00-\u9fa5A-Za-z]{2,12})",
+        r"(?P<place>[\u4e00-\u9fa5A-Za-z]{2,12})出发",
+    ]
+    for pattern in explicit_patterns:
+        explicit = re.search(pattern, text)
+        if explicit:
+            place = explicit.group("place").strip("，,。；;、 ")
+            if place:
+                return place
+    if current.get("departure", {}).get("value"):
+        return None
+    if not previous_question or not any(word in previous_question for word in ["出发", "哪里", "哪儿", "几天", "计划玩"]):
+        return None
+    for part in re.split(r"[\s,，、；;。]+", text):
+        part = part.strip()
+        if not re.fullmatch(r"[\u4e00-\u9fa5A-Za-z]{2,12}", part):
+            continue
+        if any(word in part for word in [*_TRAVEL_PRIORITY_WORDS, "天", "小时", "预算", "人均"]):
+            continue
+        return part
+    return None
+
+
+def _travel_patch(text, previous_question, current):
+    patch = {}
+    days = _travel_days(text)
+    if days is not None:
+        patch["days"] = days
+    priority = _travel_priority(text)
+    if priority:
+        patch["priority"] = priority
+    departure = _travel_departure(text, previous_question, current)
+    if departure:
+        patch["departure"] = departure
+    return patch
+
 def prepare_turn(context):
     d, text = context.decision, context.message.strip()
     info = state(d)
@@ -114,6 +175,8 @@ def prepare_turn(context):
         if hours:
             value=hours[1]
             patch["weeklyHours"] = float(value) if re.fullmatch(r"\d+(?:\.\d+)?",value) else {"一":1,"两":2,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10}[value]
+    if d.domain == "travel":
+        patch.update(_travel_patch(text, previous_question, fields(d)))
     if patch:
         patch_fields(d,patch,source="conversation")
         info["changes"].extend(f"{fields(d)[k]['label']}：{v}" for k,v in patch.items())

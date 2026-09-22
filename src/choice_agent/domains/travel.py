@@ -37,6 +37,18 @@ class TravelProfile(ComparisonProfile):
         fields = context.decision.domain_state.get("conversationFields", {})
         return not fields.get("departure", {}).get("value") or not fields.get("days", {}).get("value")
 
+    def clarification_prompt(self, context) -> str:
+        fields = context.decision.domain_state.get("conversationFields", {})
+        missing_departure = not fields.get("departure", {}).get("value")
+        missing_days = not fields.get("days", {}).get("value")
+        if missing_departure and missing_days:
+            return "你从哪里出发？计划玩几天？"
+        if missing_departure:
+            return "你从哪里出发？"
+        if missing_days:
+            return "计划玩几天？"
+        return self.clarification_question
+
     def matches(self, message: str) -> bool:
         return any(word in message.lower() for word in [
             "旅行", "旅游", "周末", "出发", "目的地", "两天一夜", "travel", "trip"
