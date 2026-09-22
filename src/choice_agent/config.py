@@ -45,7 +45,7 @@ class Settings:
     model_provider_name: str = "openai-compatible"
     model_pricing: dict[str, dict[str, float]] = field(default_factory=dict)
     main_model: str = "deepseek-v4-pro"
-    light_model: str = "deepseek-flash"
+    light_model: str = "deepseek-v4-flash"
     model_timeout_seconds: float = 30.0
     enable_llm: bool = False
     debug: bool = True
