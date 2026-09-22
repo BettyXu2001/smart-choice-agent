@@ -41,11 +41,11 @@ def _model_pricing(value: str | None) -> dict[str, dict[str, float]]:
 class Settings:
     database_url: str = "sqlite:///./choice_agent.db"
     model_api_key: str = ""
-    model_base_url: str = "https://api.openai.com/v1"
+    model_base_url: str = "https://api.deepseek.com"
     model_provider_name: str = "openai-compatible"
     model_pricing: dict[str, dict[str, float]] = field(default_factory=dict)
-    main_model: str = "gpt-5"
-    light_model: str = "gpt-5-mini"
+    main_model: str = "deepseek-v4-pro"
+    light_model: str = "deepseek-flash"
     model_timeout_seconds: float = 30.0
     enable_llm: bool = False
     debug: bool = True
