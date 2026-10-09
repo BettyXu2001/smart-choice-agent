@@ -102,13 +102,131 @@ window.createConversation = function(deps) {
 
     function buildQuickFollowupPrompts(decision, firstAlternative) {
         const prompts = [];
-        if (firstAlternative?.name) prompts.push(`为什么不选 ${firstAlternative.name}？`);
+        if (firstAlternative?.name) {
+            prompts.push({label: `为什么不选 ${firstAlternative.name}？`, prompt: `为什么不选 ${firstAlternative.name}？`, kind: "chat"});
+        }
         const weightedCriteria = (decision?.criteria || [])
             .map(item => ({ label: criterionFollowupLabel(item), weight: Number(item.weight || 0) }))
             .filter(item => item.label && item.weight > 0)
             .sort((left, right) => right.weight - left.weight);
-        if (weightedCriteria.length) prompts.push(`如果更看重${weightedCriteria[0].label}呢？`);
-        return [...new Set(prompts)].filter(Boolean);
+        weightedCriteria.slice(0, 3).forEach(item => prompts.push({label: `更看重${item.label}`, prompt: `更看重${item.label}`, kind: "chat"}));
+        const fields = decision?.domainState?.conversationFields || {};
+        const budget = Number(fields.budget?.value);
+        if (Number.isFinite(budget) && budget > 0) {
+            const relaxedBudget = Math.round(budget * 1.25);
+            prompts.push({
+                label: `预算提高到 ${relaxedBudget} 会怎样？`,
+                prompt: `假设我的预算提高到 ${relaxedBudget} 元`,
+                kind: "what_if",
+                scenarioId: "budget-relaxed"
+            });
+        }
+        return prompts.filter((item, index) => item?.label && prompts.findIndex(candidate => candidate.label === item.label) === index);
+    }
+
+    function sourceModeLabel(source) {
+        if (source?.mode === "web" || source?.realTime) return "实时搜索";
+        if (source?.mode === "manual") return "用户输入";
+        if (source?.mode === "database") return "数据库";
+        if (source?.mode === "fixture") return "演示数据";
+        return "当前数据";
+    }
+
+    function sourceBoundaryText(decision, source) {
+        if (decision?.context?.demoMode || source?.mode === "fixture") {
+            return "演示数据用于体验流程，未核验真实价格、路线、库存或开放状态。";
+        }
+        if (source?.mode === "web" || source?.realTime) {
+            return "实时搜索提供候选和依据，关键价格、库存、交通或开放信息仍建议最终核实。";
+        }
+        if (source?.mode === "manual") {
+            return "候选和事实主要来自你的输入，尚未经过外部来源核实。";
+        }
+        return "随着你补充信息，系统会更新候选、权重和结论。";
+    }
+
+    function executionModeView(decision) {
+        const assistance = decision?.domainState?.assistance || {};
+        const current = assistance.currentAnalysis || (assistance.analysis?.hypothetical ? null : assistance.analysis) || {};
+        const understandingMode = assistance.understandingMode || (decision?.domainState?.interpretationWarning ? "rules_fallback" : "rules");
+        const explanationMode = current.mode || "rules";
+        const label = mode => mode === "model" ? "模型" : mode === "rules_fallback" ? "规则降级" : "规则";
+        return {
+            understandingOwner: `${label(understandingMode)}理解`,
+            clarificationOwner: `${label(understandingMode)}追问`,
+            explanationOwner: `${label(explanationMode)}解释`,
+            summary: understandingMode === "rules_fallback" || explanationMode === "rules_fallback"
+                ? "模型调用不可用或输出未通过校验，本轮已使用规则继续。"
+                : understandingMode === "model" || explanationMode === "model"
+                    ? "模型参与理解或解释；过滤、排序和状态更新仍由确定性规则执行。"
+                    : "本轮由规则完成理解与解释；过滤、排序和状态更新同样由确定性规则执行。"
+        };
+    }
+
+    function sourceQualityView(source, decision) {
+        if (decision?.context?.demoMode || source?.mode === "fixture") return {reliability: "演示数据", freshness: "非实时"};
+        if (source?.mode === "web" || source?.realTime) return {reliability: "链接已校验", freshness: "实时检索"};
+        if (source?.mode === "manual") return {reliability: "用户提供", freshness: "未外部核验"};
+        if (source?.mode === "database") return {reliability: "本地数据库", freshness: "随数据库更新"};
+        return {reliability: "来源待确认", freshness: "更新时间未知"};
+    }
+
+    function decisionProgressView(decision) {
+        const assistance = decision?.domainState?.assistance || {};
+        const current = assistance.currentAnalysis || (assistance.analysis?.hypothetical ? null : assistance.analysis) || {};
+        const blockingQuestions = decision?.status === "clarifying"
+            ? (decision?.clarifyingQuestions || []).map(String).filter(Boolean)
+            : [];
+        const decisionQuestion = current?.decisionQuestion || assistance.decisionQuestion;
+        const advisoryQuestion = blockingQuestions.length
+            ? ""
+            : String(decisionQuestion?.question || current?.question || (current?.missingInfo || [])[0] || "").trim();
+        return {
+            blockingQuestions,
+            decisionQuestion,
+            advisoryQuestion,
+            missing: blockingQuestions.length ? blockingQuestions : advisoryQuestion ? [advisoryQuestion] : [],
+            hasCandidates: (decision?.candidates || []).length > 0 || (decision?.domainState?.displayBlocks || []).length > 0,
+            hasRecommendation: Boolean(decision?.recommendation?.primaryCandidateId || current?.primaryCandidateId)
+        };
+    }
+
+    function workflowStatus(decision, key, progress = decisionProgressView(decision)) {
+        if (key === "clarify") return progress.blockingQuestions.length ? "current" : "done";
+        if (key === "candidates") return progress.hasCandidates ? "done" : progress.blockingQuestions.length ? "todo" : "current";
+        if (key === "filter" || key === "rank") return progress.hasCandidates ? "done" : "todo";
+        if (key === "explain") return progress.hasRecommendation ? "done" : progress.hasCandidates ? "current" : "todo";
+        return "done";
+    }
+
+    function renderWorkflowSummary(decision) {
+        const mode = executionModeView(decision);
+        const progress = decisionProgressView(decision);
+        const steps = [
+            ["understand", "理解", mode.understandingOwner],
+            ["clarify", "澄清", mode.clarificationOwner],
+            ["candidates", "候选", "数据来源"],
+            ["filter", "过滤", "规则过滤"],
+            ["rank", "排序", "规则排序"],
+            ["explain", "解释", mode.explanationOwner]
+        ];
+        return `<section class="canvas-block workflow-summary"><div class="card-title"><h4>流程阶段</h4><button class="text-button" type="button" data-diet-action="open-details">查看完整流程</button></div><div class="workflow-steps">${steps.map(([key, label, owner]) => {
+            const status = workflowStatus(decision, key, progress);
+            return `<div class="workflow-step workflow-${status}"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(owner)}</span><small>${status === "done" ? "已完成" : status === "current" ? "当前" : "待补充"}</small></div>`;
+        }).join("")}</div></section>`;
+    }
+
+    function renderDecisionBoundary(decision, source) {
+        const mode = executionModeView(decision);
+        return `<section class="canvas-block decision-boundary"><h4>模型、规则和数据怎么分工</h4><div class="boundary-grid"><div><strong>本轮执行</strong><span>${escapeHtml(mode.summary)}</span></div><div><strong>确定性规则</strong><span>硬约束过滤、权重排序、状态更新</span></div><div><strong>${escapeHtml(sourceModeLabel(source))}</strong><span>${escapeHtml(sourceBoundaryText(decision, source))}</span></div></div></section>`;
+    }
+    function renderPreferenceFocus(decision, changeText) {
+        const criteria = [...(decision?.criteria || [])]
+            .filter(item => Number(item.weight || 0) > 0)
+            .sort((left, right) => Number(right.weight || 0) - Number(left.weight || 0))
+            .slice(0, 3);
+        if (!criteria.length) return "";
+        return `<section class="canvas-block preference-focus"><h4>当前偏好重点</h4><div class="preference-chips">${criteria.map(item => `<span><strong>${escapeHtml(item.label || item.key)}</strong>权重 ${Number(item.weight || 0).toFixed(1)}</span>`).join("")}</div><p class="muted">${escapeHtml(changeText === "本轮没有改变当前倾向" ? "当前排序主要受这些维度影响。" : `推荐变化：${changeText}`)}</p></section>`;
     }
 
     function renderDietPanel() {
@@ -287,6 +405,13 @@ window.createConversation = function(deps) {
         else if (action === "reload") { state.chat.error = ""; state.chat.initialized = false; renderChat(); }
         else if (action === "retry") await runDietOperation(state.chat.retry);
         else if (action === "general-pane") { state.chat.mobilePane = target.dataset.pane || "canvas"; state.chat.panelOpen = false; renderChat(); }
+        else if (action === "open-details") {
+            const details = document.getElementById("generalDetailsPanel");
+            if (details) {
+                details.open = true;
+                details.scrollIntoView({behavior: "smooth", block: "start"});
+            }
+        }
         else if (!state.chat.sending && !state.chat.retry) {
             if (action === "answer-decision-question") {
                 state.chat.mobilePane = "chat";
@@ -304,6 +429,20 @@ window.createConversation = function(deps) {
             }
             else if (action === "quick-followup") {
                 await sendChatMessage(target.dataset.message);
+            }
+            else if (action === "adopt-what-if") {
+                const whatIf = state.chat.decision?.domainState?.assistance?.whatIfAnalysis;
+                const fields = whatIf?.stale ? {} : {...(whatIf?.proposedFields || {})};
+                if (Object.keys(fields).length) await sendDietCommand("update_fields", {fields});
+            }
+            else if (action === "submit-clarification") {
+                const fields = {};
+                document.querySelectorAll("[data-clarification-field]").forEach(input => {
+                    const raw = String(input.value || "").trim();
+                    if (!raw) return;
+                    fields[input.dataset.clarificationField] = input.dataset.clarificationType === "number" ? Number(raw) : raw;
+                });
+                if (Object.keys(fields).length) await sendDietCommand("update_fields", {fields});
             }
             else if (action === "edit") { state.chat.editFields = structuredClone(dietFieldValues()); renderChat(); }
             else if (action === "cancel") { state.chat.editFields = null; renderChat(); }
@@ -448,6 +587,18 @@ window.createConversation = function(deps) {
             renderChat();
         } finally { state.home.creating = false; }
     }
+    function renderStructuredClarification(decision, busy) {
+        if (decision?.status !== "clarifying" || decision?.domain !== "travel") return "";
+        const all = decision?.domainState?.conversationFields || {};
+        const keys = ["departure", "days", "budget", "maxTransitHours", "priority"].filter(key => all[key]);
+        if (!keys.length) return "";
+        const question = (decision.clarifyingQuestions || []).join(" ");
+        return `<section class="canvas-block structured-clarification"><h4>快速补充条件</h4><p>${escapeHtml(question || "补充会影响候选范围的条件。")}</p><div class="clarification-grid">${keys.map(key => {
+            const field = all[key];
+            const type = field.type === "number" ? "number" : "text";
+            return `<label><span>${escapeHtml(field.label)}${field.unit ? `（${escapeHtml(field.unit)}）` : ""}</span><input type="${type}" ${type === "number" ? 'min="0.01" step="any"' : ""} value="${escapeHtml(field.value ?? "")}" data-clarification-field="${escapeHtml(key)}" data-clarification-type="${escapeHtml(field.type || "text")}" ${busy}></label>`;
+        }).join("")}</div><p class="muted">只会提交已填写的字段；也可以继续在左侧用自然语言回答。</p><button class="btn primary" type="button" data-diet-action="submit-clarification" ${busy}>按这些条件继续</button></section>`;
+    }
     function renderGeneralPanel() {
         const d = state.chat.decision;
         const busy = state.chat.sending || state.chat.retry ? "disabled" : "";
@@ -465,9 +616,11 @@ window.createConversation = function(deps) {
         const source = d?.domainState?.source;
         const assistance = d?.domainState?.assistance || {};
         const current = assistance.currentAnalysis || (assistance.analysis && !assistance.analysis.hypothetical ? assistance.analysis : null);
+        const progress = decisionProgressView(d);
+        const sourceQuality = sourceQualityView(source, d);
         const whatIf = assistance.whatIfAnalysis;
         const quality = d?.qualityAssessment;
-        const decisionQuestion = current?.decisionQuestion || assistance.decisionQuestion;
+        const decisionQuestion = progress.decisionQuestion;
         const scenarios = assistance.whatIfScenarios || [];
         const blocks = d?.status === "clarifying" ? [] : d?.domainState?.displayBlocks || [];
         const candidateName = id => (blocks.find(b => String(b.id) === String(id))?.name || (d?.candidates || []).find(c => String(c.candidateId) === String(id))?.name || (d?.domainState?.candidatePool || []).find(c => String(c.candidateId) === String(id))?.name || id);
@@ -488,7 +641,7 @@ window.createConversation = function(deps) {
         const quickPrompts = buildQuickFollowupPrompts(d, firstAlternative);
         const keyReasons = (current?.keyReasons || current?.reasons || d?.recommendation?.reasons || []).slice(0, 4);
         const tradeoffs = (current?.tradeoffs || d?.recommendation?.tradeoffs?.map(text => ({text})) || []).slice(0, 4);
-        const missing = (current?.missingInfo || (current?.question ? [current.question] : [])).slice(0, 3);
+        const missing = progress.missing.slice(0, 3);
         const change = assistance.lastOfficialChange || current?.lastChange;
         const changeFrom = change?.from?.label || candidateName(change?.from?.primaryCandidateId || change?.before?.primaryCandidateId);
         const changeTo = change?.to?.label || candidateName(change?.to?.primaryCandidateId || change?.after?.primaryCandidateId);
@@ -499,35 +652,44 @@ window.createConversation = function(deps) {
         const qualityBlock = quality ? `<section class="canvas-block decision-quality">
                 <h4>结论质量</h4>
                 <div class="quality-grid">
-                    <div><span>匹配分</span><strong>${matchScore == null ? "暂不可评估" : matchScore + "%"}</strong><small>按当前条件计算</small></div>
-                    <div><span>数据完整度</span><strong>${completeness == null ? "暂不可评估" : completeness + "%"}</strong><small>前两名关键维度</small></div>
+                    <div><span>当前排序分</span><strong>${matchScore == null ? "暂不可评估" : matchScore + "%"}</strong><small>仅用于当前候选排序</small></div>
+                    <div><span>评分字段覆盖</span><strong>${completeness == null ? "暂不可评估" : completeness + "%"}</strong><small>关键维度是否有值</small></div>
                     <div><span>结论稳健度</span><strong class="quality-${escapeHtml(quality.robustnessLevel || "unavailable")}">${escapeHtml(robustnessLabel)}</strong><small>${sensitiveLabels.length ? "敏感项：" + escapeHtml(sensitiveLabels.join("、")) : "当前有限扰动下"}</small></div>
+                    <div><span>来源可靠性</span><strong>${escapeHtml(sourceQuality.reliability)}</strong><small>不等于事实已完全核验</small></div>
+                    <div><span>数据时效</span><strong>${escapeHtml(sourceQuality.freshness)}</strong><small>价格、库存和开放状态需复核</small></div>
                 </div>
-                <p class="muted">稳健度表示当前有限条件变化下的排序稳定性，不是 AI 正确概率。</p>
+                <p class="muted">当前排序分不是成功率或模型置信度；稳健度只表示有限条件变化下的排序稳定性。</p>
                 ${qualityWarnings.map(item => `<p class="quality-warning">${escapeHtml(item)}</p>`).join("")}
             </section>` : "";
         const renderPoints = (items, empty, analysis = current) => items.length ? `<ul class="evidence-linked-list">${items.map(item => typeof item === "string" ? `<li>${escapeHtml(item)}</li>` : window.EvidenceView.point(item, analysis, d)).join("")}</ul>` : `<p class="muted">${escapeHtml(empty)}</p>`;
+        const gapTitle = progress.blockingQuestions.length ? "还需补充" : "可以进一步确认";
+        const secondaryBlock = `<details class="diet-panel-section canvas-secondary"><summary>条件、质量与候选详情</summary>
+            ${renderPreferenceFocus(d, changeText)}
+            ${qualityBlock}
+            <section class="canvas-block"><h4>当前结论为什么发生变化</h4><p><strong>${escapeHtml(changeText)}</strong></p><p>${escapeHtml(change?.reason || "本轮没有改变当前倾向。")}</p></section>
+            <section class="diet-panel-section"><div class="card-title"><h4>我理解的条件</h4>${!state.chat.editFields ? `<button class="btn soft" data-diet-action="edit" ${busy} ${!d ? "disabled" : ""}>编辑条件</button>` : ""}</div>${rows}
+            ${renderProfileSuggestions(d, busy)}${state.chat.editFields ? `<div class="button-row"><button class="btn primary" data-diet-action="save" ${busy}>保存并更新</button><button class="btn ghost" data-diet-action="cancel" ${busy}>取消</button></div>` : pending ? `<button class="btn soft" data-diet-action="confirm" ${busy}>确认这些条件</button>` : ""}</section>
+            <section class="diet-panel-section" aria-busy="${state.chat.sending}"><h4>当前比较 ${state.chat.sending ? "· 更新中…" : ""}</h4>${blocks.map(b => `<article class="general-choice"><strong>${escapeHtml(b.name)}</strong><p>${escapeHtml(b.summary || "")}</p>${(b.facts || []).map(f=>`<p class="muted">你补充：${escapeHtml(f.text)}</p>`).join("")}<details class="evidence-details"><summary>查看候选依据</summary>${window.EvidenceView.candidate(b.evidence || [])}</details></article>`).join("") || `<p class="muted">暂无候选。</p>`}</section>
+            <p class="muted">${escapeHtml(source?.label || "等待补充信息")}${sourceNote}</p>
+        </details>`;
         return `<aside id="dietPanel" class="diet-panel decision-canvas ${state.chat.panelOpen ? "is-open" : ""}" tabindex="-1" aria-label="当前选择">
             <div class="card-title"><div><span class="eyebrow">${labels[d?.domain] || "通用"}决策${d?.context?.demoMode ? " · 演示数据" : ""}</span><h3>当前选择</h3></div><button class="btn ghost diet-panel-close" data-diet-action="close">关闭</button></div>
             <p class="diet-goal">${escapeHtml(goal || "一起想清楚这次选择")}</p>
             ${d?.context?.demoMode ? '<p class="muted">正在体验演示数据，候选说明与属性不代表真实情况。<a href="#/demo">换个示例</a></p>' : ""}
             ${suggestion ? `<section class="diet-pending"><p>这次想切换到${labels[suggestion.domain] || "饮食"}场景吗？会新建会话，保留当前选择。</p><button class="btn soft" data-diet-action="switch" ${busy}>新建${labels[suggestion.domain] || "饮食"}决策</button></section>` : ""}
-            <section class="canvas-block canvas-advice"><span class="eyebrow">当前建议</span><h4>${escapeHtml(currentLabel)}</h4>${current?.summary ? `<p>${escapeHtml(current.summary)}</p>` : `<p class="muted">随着对话补充，我会更新这里的比较。</p>`}${quickPrompts.length ? `<div class="quick-followups">${quickPrompts.map(prompt => `<button class="chip" type="button" data-diet-action="quick-followup" data-message="${escapeHtml(prompt)}" ${busy}>${escapeHtml(prompt)}</button>`).join("")}</div>` : ""}</section>
-            ${qualityBlock}
+            <section class="canvas-block canvas-advice"><span class="eyebrow">当前建议</span><h4>${escapeHtml(currentLabel)}</h4>${current?.summary ? `<p>${escapeHtml(current.summary)}</p>` : `<p class="muted">随着对话补充，我会更新这里的比较。</p>`}${quickPrompts.length ? `<div class="quick-followups">${quickPrompts.map(item => `<button class="chip" type="button" data-diet-action="${item.kind === "what_if" ? "what-if" : "quick-followup"}" ${item.kind === "what_if" ? `data-prompt="${escapeHtml(item.prompt)}" data-scenario-id="${escapeHtml(item.scenarioId || "quick")}"` : `data-message="${escapeHtml(item.prompt)}"`} ${busy}>${escapeHtml(item.label)}</button>`).join("")}</div>` : ""}</section>
+            ${renderWorkflowSummary(d)}
+            ${renderDecisionBoundary(d, source)}
             <section class="canvas-block"><h4>为什么</h4>${renderPoints(keyReasons, "还没有足够依据提炼关键理由。")}</section>
             <section class="canvas-block"><h4>选择它的代价</h4>${renderPoints(tradeoffs, "当前还没有明确代价；继续补充候选差异后会更新。")}</section>
-            <section class="canvas-block"><h4>当前结论为什么发生变化</h4><p><strong>${escapeHtml(changeText)}</strong></p><p>${escapeHtml(change?.reason || "本轮没有改变当前倾向。")}</p></section>
-            <section class="canvas-block"><h4>还缺什么关键信息</h4>${renderPoints(missing, "暂时没有会改变结论的关键信息缺口。")}${decisionQuestion?.question ? `<button class="btn soft" type="button" data-diet-action="answer-decision-question" data-question="${escapeHtml(decisionQuestion.question)}" ${busy}>补充这个信息</button>` : ""}</section>
+            <section class="canvas-block"><h4>${escapeHtml(gapTitle)}</h4>${renderPoints(missing, progress.blockingQuestions.length ? "请先补充会影响候选范围的条件。" : "暂时没有会改变结论的关键信息缺口。")}${!progress.blockingQuestions.length && decisionQuestion?.question ? `<button class="btn soft" type="button" data-diet-action="answer-decision-question" data-question="${escapeHtml(decisionQuestion.question)}" ${busy}>补充这个信息</button>` : ""}</section>
+            ${renderStructuredClarification(d, busy)}
             <section class="canvas-block what-if-block"><div class="card-title"><h4>什么会改变我的决定？</h4></div>${scenarios.length ? `<div class="what-if-list">${scenarios.map(item => `<button class="what-if-option" type="button" data-diet-action="what-if" data-scenario-id="${escapeHtml(item.id)}" data-prompt="${escapeHtml(item.prompt)}"><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.impact || "假设比较")}</small></button>`).join("")}</div>` : `<p class="muted">还缺少可比较的数据，暂时无法生成可靠的决策边界。</p>`}<div class="what-if-custom"><input id="generalWhatIfInput" type="text" placeholder="例如：假设我可以接受两小时通勤" ${busy}><button class="btn soft" data-diet-action="what-if" ${busy}>分析假设</button></div></section>
-            ${whatIf ? `<section class="canvas-block what-if-result"><span class="eyebrow">假设结果${whatIf.stale ? " · 已过期" : ""}</span><h4>${escapeHtml(whatIf.summary || "已完成假设比较")}</h4><p class="muted">${escapeHtml(whatIf.notice || "这是一次假设比较，没有修改当前保存的正式条件。")}</p>${renderPoints((whatIf.keyReasons || whatIf.reasons || []).slice(0, 3), "这次假设没有足够依据改变判断。", whatIf)}</section>` : ""}
+            ${whatIf ? `<section class="canvas-block what-if-result"><span class="eyebrow">假设结果${whatIf.stale ? " · 已过期" : ""}</span><h4>${escapeHtml(whatIf.summary || "已完成假设比较")}</h4><p class="muted">${escapeHtml(whatIf.notice || "这是一次假设比较，没有修改当前保存的正式条件。")}</p>${renderPoints((whatIf.keyReasons || whatIf.reasons || []).slice(0, 3), "这次假设没有足够依据改变判断。", whatIf)}${!whatIf.stale && Object.keys(whatIf.proposedFields || {}).length ? `<button class="btn primary" type="button" data-diet-action="adopt-what-if" ${busy}>采用这个假设</button>` : ""}</section>` : ""}
             ${assistance.warning ? `<p class="diet-error">${escapeHtml(assistance.warning)}</p>` : ""}
-            <section class="diet-panel-section"><div class="card-title"><h4>我理解的条件</h4>${!state.chat.editFields ? `<button class="btn soft" data-diet-action="edit" ${busy} ${!d ? "disabled" : ""}>编辑条件</button>` : ""}</div>${rows}
-            ${renderProfileSuggestions(d, busy)}${state.chat.editFields ? `<div class="button-row"><button class="btn primary" data-diet-action="save" ${busy}>保存并更新</button><button class="btn ghost" data-diet-action="cancel" ${busy}>取消</button></div>` : pending ? `<button class="btn soft" data-diet-action="confirm" ${busy}>确认这些条件</button>` : ""}</section>
-            ${d?.status === "clarifying" ? `<section class="diet-panel-section"><h4>还需补充</h4><p>${escapeHtml((d.clarifyingQuestions || []).join(" "))}</p><button class="btn soft" data-diet-action="focus">补充一下</button></section>` : ""}
-            <section class="diet-panel-section" aria-busy="${state.chat.sending}"><h4>当前比较 ${state.chat.sending ? "· 更新中…" : ""}</h4>${blocks.map(b => `<article class="general-choice"><strong>${escapeHtml(b.name)}</strong><p>${escapeHtml(b.summary || "")}</p>${(b.facts || []).map(f=>`<p class="muted">你补充：${escapeHtml(f.text)}</p>`).join("")}<details class="evidence-details"><summary>查看候选依据</summary>${window.EvidenceView.candidate(b.evidence || [])}</details></article>`).join("") || `<p class="muted">暂无候选。</p>`}</section>
-            <p class="muted">${escapeHtml(source?.label || "等待补充信息")}${sourceNote}</p>
+            ${secondaryBlock}
             ${d?.domainState?.interpretationWarning ? `<p class="diet-error">${escapeHtml(d.domainState.interpretationWarning)}</p>` : ""}
-            <details class="diet-panel-section general-details"><summary>详细比较与候选编辑</summary><div id="generalDetails"></div></details>
+            <details id="generalDetailsPanel" class="diet-panel-section general-details"><summary>查看完整流程、候选漏斗和证据</summary><div id="generalDetails"></div></details>
         </aside>`;
     }
 

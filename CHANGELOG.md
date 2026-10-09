@@ -1,5 +1,16 @@
 # Changelog
 
+
+### 2026-10-09
+
+- 优化通用决策工作流体验：Decision Canvas 显示流程阶段、模型/规则/数据来源边界、当前偏好重点、候选排除原因和更清晰的 fixture demo 入口提示。
+- 修复旅行决策多轮偏好覆盖、假设问句误改正式状态和完整流程入口路由冲突；统一澄清状态与执行模式提示，补充结构化澄清、质量边界及 What-if 显式采纳。
+
+### 2026-10-05
+
+- Evaluation Baseline/Candidate 对比修正 `failed -> not_evaluated` 等状态转换语义，并在 Candidate deterministic coverage 下降时返回明确 warning。
+- 补齐 16 项 Deterministic Evaluation v2 目标指标的结构化 evaluator 测试覆盖，强化 `core-regression/v2` 默认发布与 v1 保留验证。
+
 ### 2026-09-22
 
 - Travel 多轮澄清支持结合上一轮问题解析短回答，并改为只询问缺失的必要字段；正式 Travel 在 Web Search 启用时默认使用 auto 联网，失败可回退 fixture 且 Trace 可见。

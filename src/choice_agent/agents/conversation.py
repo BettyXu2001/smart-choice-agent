@@ -46,7 +46,7 @@ def interpret(context, provider=None, model=None):
         patch["maxCommuteMinutes"] = commute_limit["minutes"]
         if "commuteBasis" in current:
             patch["commuteBasis"] = commute_limit["basis"]
-    budget = re.search(r"(?:总预算|预算|不超过|不超|最多|上限)[是为改到成不超过：:\s]*(\d+(?:\.\d+)?)\s*(万|千|k)?", text, re.I)
+    budget = re.search(r"(?:总预算|预算|不超过|不超|最多|上限)[是为改到成不超过提高增加放宽调整：:\s]*(\d+(?:\.\d+)?)\s*(万|千|k)?", text, re.I)
     if not budget and "budget" in current and current["budget"].get("value") is not None:
         budget = re.search(r"^(?:改到|改成|调整到)\s*(\d+(?:\.\d+)?)\s*(万|千|k)?(?:元)?[。！!\s]*$", text, re.I)
     if budget and "budget" in current and not ("小时" in text and "预算" not in text and "元" not in text):
@@ -64,11 +64,13 @@ def interpret(context, provider=None, model=None):
         if transit: patch["maxTransitHours"] = float(transit[1])
     usage = re.search(r"(?:用于|用来|用途是|主要用来)([^，。；]+)", text)
     if usage and "usage" in current: patch["usage"] = usage[1]
-    priority = re.search(r"(?:更看重|最看重|最在意|优先考虑|优先|更在意|更想)([^，。；]+)",text)
+    removing_priority = context.data.get("simulation") and re.search(r"(?:不再|不用|取消|不优先|不看重).{0,12}(?:优先|看重|轻松|放松|预算|交通|自然|人少)", text)
+    priority = None if removing_priority else re.search(r"(?:更看重|最看重|最在意|优先考虑|优先|更在意|更想)([^，。；]+)",text)
     if priority: patch["priority"] = priority[1]
     elif d.domain != "generic" and not current.get("priority", {}).get("cleared"):
         words = [w for values in PRIORITIES.values() for w in values if w in text and not any(n+w in text for n in ["不", "不要", "不看重"])]
-        if words and "priority" not in patch: patch["priority"] = "、".join(dict.fromkeys(words))
+        if words and "priority" not in patch and not (context.data.get("simulation") and budget and set(words) == {"预算"}):
+            patch["priority"] = "、".join(dict.fromkeys(words))
     if patch:
         patch_fields(d, patch, source="conversation")
         state(d)["changes"].extend(f"{current[k]['label']}：{v if v is not None else '已清空'}" for k,v in patch.items())

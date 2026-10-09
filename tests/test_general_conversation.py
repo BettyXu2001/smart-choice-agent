@@ -246,3 +246,27 @@ def test_legacy_diet_session_keeps_id_and_hides_receipts(database):
         next_turn=diet.chat(1,ChatRequest(session_id=legacy.decision_state.session_id,message="换一批",expected_revision=legacy.decision_state.revision,request_id="diet-turn"))
         assert next_turn.decision_state.decision_id==legacy.decision_state.decision_id
         assert "conversationReceipts" not in next_turn.decision_state.domain_state
+
+
+def test_travel_priority_is_merged_until_user_explicitly_replaces_or_removes_it(database):
+    with database.session_factory() as db:
+        service = GenericDecisionOrchestrator(db)
+        first = create(service, "周末想出去走走，但不想太累，应该去哪里？", "travel", "priority-start")
+        ready = message(
+            service,
+            first,
+            "从上海出发两天一夜，预算 2000 元以内，单程交通不超过 2 小时",
+            "priority-merge",
+        )
+        field = ready.decision_state.domain_state["conversationFields"]["priority"]
+        assert field["value"] == "轻松、预算、交通"
+        weights = {item.key: item.weight for item in ready.decision_state.criteria}
+        assert weights["relaxation"] > 1
+        assert weights["budget"] > 1
+        assert weights["travel_hours"] > 1
+
+        replaced = message(service, ready, "改成只看重预算", "priority-replace")
+        assert replaced.decision_state.domain_state["conversationFields"]["priority"]["value"] == "预算"
+
+        removed = message(service, replaced, "不再优先预算，更看重轻松", "priority-remove")
+        assert removed.decision_state.domain_state["conversationFields"]["priority"]["value"] == "轻松"

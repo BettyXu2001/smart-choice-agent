@@ -1,5 +1,5 @@
 from choice_agent.orchestration.generic import GenericDecisionOrchestrator
-from choice_agent.schemas import GenericDecisionMessageRequest, GenericDecisionRequest
+from choice_agent.schemas import DecisionCommandRequest, GenericDecisionMessageRequest, GenericDecisionRequest
 
 OFFER = "比较两个 Offer\n以下为演示候选：\nA 公司：AI 产品方向更匹配，成长空间更大，但业务阶段较早；B 公司：平台成熟、薪酬稳定，岗位内容更偏传统产品。"
 
@@ -60,3 +60,52 @@ def test_commute_limit_eliminates_known_over_limit_candidate(database):
         change = assistance(limited)["lastOfficialChange"]
         assert change["changed"] is True
         assert "通勤" in change["reason"]
+
+def test_question_worded_what_if_does_not_change_official_travel_state(database):
+    with database.session_factory() as db:
+        service = GenericDecisionOrchestrator(db)
+        initial = service.create(
+            1,
+            GenericDecisionRequest(
+                message="从上海出发两天一夜，预算 2000 元，想轻松一点",
+                domain="travel",
+                context={"demoMode": True, "searchMode": "fixture"},
+            ),
+        )
+        before_fields = initial.decision_state.domain_state["conversationFields"]
+        before_id = initial.decision_state.recommendation.primary_candidate_id
+        result = say(service, initial, "预算提高到 2500 会怎样？", "budget-question-what-if")
+        info = assistance(result)
+        assert info["whatIfAnalysis"]["hypothetical"] is True
+        assert result.decision_state.domain_state["conversationFields"] == before_fields
+        assert result.decision_state.recommendation.primary_candidate_id == before_id
+        assert info["whatIfAnalysis"]["proposedFields"] == {"budget": 2500.0}
+
+        adopted = service.command(
+            1,
+            result.decision_state.decision_id,
+            DecisionCommandRequest(
+                type="update_fields",
+                payload={"fields": info["whatIfAnalysis"]["proposedFields"]},
+                command_id="adopt-budget-what-if",
+                expectedRevision=result.decision_state.revision,
+            ),
+        )
+        assert adopted.decision_state.domain_state["conversationFields"]["budget"]["value"] == 2500.0
+        assert assistance(adopted)["whatIfAnalysis"]["stale"] is True
+
+def test_negative_priority_what_if_can_be_adopted_without_mutating_official_state(database):
+    with database.session_factory() as db:
+        service = GenericDecisionOrchestrator(db)
+        initial = service.create(
+            1,
+            GenericDecisionRequest(
+                message="从上海出发两天一夜，想轻松一点",
+                domain="travel",
+                context={"demoMode": True, "searchMode": "fixture"},
+            ),
+        )
+        result = say(service, initial, "假设我不再优先考虑轻松", "remove-priority-what-if")
+        info = assistance(result)
+        assert result.decision_state.domain_state["conversationFields"]["priority"]["value"] == "轻松"
+        assert info["whatIfAnalysis"]["proposedFields"] == {"priority": None}

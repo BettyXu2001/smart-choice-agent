@@ -14,6 +14,13 @@ _RESULT_KEY_FIELDS = ("caseId", "caseRevision", "repetition")
 _STATUS_SEVERITY = {"passed": 0, "not_evaluated": 1, "failed": 2, "error": 3}
 _STATUS_QUALITY = {"error": 0, "failed": 1, "not_evaluated": 2, "passed": 3}
 _FAILURE_STATUSES = {"failed", "error"}
+_COVERAGE_FIELDS = (
+    "deterministicEvaluatedMetricCount",
+    "deterministicMetricRate",
+    "catalogDeterministicEvaluatedMetricCount",
+    "deterministicEvaluatedAssertionCount",
+    "deterministicAssertionRate",
+)
 
 
 def compare_runs(
@@ -66,10 +73,13 @@ def compare_runs(
     diff_counts = {key: 0 for key in ("improved", "regressed", "unchanged", "new_failure", "fixed")}
     for item in case_diffs:
         diff_counts[item["classification"]] += 1
+    coverage_delta = _coverage_delta(baseline_summary, candidate_summary)
     return {
         "baselineRun": _run_view(baseline_run, baseline_summary),
         "candidateRun": _run_view(candidate_run, candidate_summary),
         "aggregateDelta": _aggregate_delta(baseline_summary, candidate_summary),
+        "coverageDelta": coverage_delta,
+        "coverageWarnings": _coverage_warnings(coverage_delta),
         "caseDiffCounts": diff_counts,
         "caseDiffs": case_diffs,
     }
@@ -82,6 +92,12 @@ def classify_case_diff(baseline: dict[str, Any], candidate: dict[str, Any]) -> s
         return "fixed"
     if baseline_status == "passed" and candidate_status in _FAILURE_STATUSES:
         return "new_failure"
+    if baseline_status in _FAILURE_STATUSES and candidate_status == "not_evaluated":
+        return "regressed"
+    if baseline_status == "passed" and candidate_status == "not_evaluated":
+        return "regressed"
+    if baseline_status == "not_evaluated" and candidate_status == "passed":
+        return "improved"
 
     baseline_score = baseline.get("score")
     candidate_score = candidate.get("score")
@@ -198,6 +214,28 @@ def _aggregate_delta(baseline: dict[str, Any], candidate: dict[str, Any]) -> dic
         },
         "metrics": metrics,
     }
+
+
+def _coverage_delta(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, float | int | None]:
+    baseline_coverage = baseline.get("coverage") or {}
+    candidate_coverage = candidate.get("coverage") or {}
+    return {
+        field: _delta(candidate_coverage.get(field), baseline_coverage.get(field), digits=4)
+        for field in _COVERAGE_FIELDS
+    }
+
+
+def _coverage_warnings(coverage_delta: dict[str, float | int | None]) -> list[dict[str, Any]]:
+    decreased = [field for field, value in coverage_delta.items() if isinstance(value, (int, float)) and value < 0]
+    if not decreased:
+        return []
+    return [
+        {
+            "code": "evaluation_coverage_decreased",
+            "message": "Candidate deterministic evaluation coverage decreased versus baseline.",
+            "fields": decreased,
+        }
+    ]
 
 
 def _delta(candidate: float | None, baseline: float | None, *, digits: int = 2) -> float | None:

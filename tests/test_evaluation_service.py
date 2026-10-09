@@ -28,8 +28,12 @@ def test_evaluation_dashboard_seeds_versioned_regression_datasets_and_runs_core(
         datasets = {(item["name"], item["version"]): item for item in dashboard["datasets"]}
         assert ("core-regression", "v1") in datasets
         assert ("core-regression", "v2") in datasets
+        legacy_core = datasets[("core-regression", "v1")]
         core = datasets[("core-regression", "v2")]
         fault = datasets[("fault-injection-reliability", "v2")]
+        assert legacy_core["version"] == "v1"
+        assert legacy_core["caseCount"] == 20
+        assert legacy_core["datasetHash"] != core["datasetHash"]
         assert core["version"] == "v2"
         assert core["caseCount"] == 20
         assert fault["version"] == "v2"
@@ -42,6 +46,8 @@ def test_evaluation_dashboard_seeds_versioned_regression_datasets_and_runs_core(
         run = evaluation.create_run(1, EvaluationRunCreate(version_label="test-v1"))
         assert run["status"] == "completed"
         assert run["datasetName"] == "core-regression"
+        assert run["datasetVersion"] == "v2"
+        assert run["datasetHash"] == core["datasetHash"]
         assert len(run["results"]) == 20
         assert run["summary"]["caseCounts"] == {"total": 20, "passed": 20, "failed": 0, "error": 0, "notEvaluated": 0}
         assert run["summary"]["coverage"]["evaluatedQualityMetrics"] > 0

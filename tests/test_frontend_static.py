@@ -119,9 +119,9 @@ def test_decision_quality_and_outcome_review_are_wired_to_user_ui():
     app = (STATIC_JS / "app.js").read_text(encoding="utf-8")
     api = (STATIC_JS / "api.js").read_text(encoding="utf-8")
 
-    assert "数据完整度" in conversation
+    assert "评分字段覆盖" in conversation
     assert "结论稳健度" in conversation
-    assert "不是 AI 正确概率" in conversation
+    assert "不是成功率或模型置信度" in conversation
     assert "补充这个信息" in conversation
     assert "decisionOutcomeReviewForm" in app
     assert "待复盘实际结果" in app
@@ -157,3 +157,55 @@ def test_formal_general_decision_uses_auto_search_when_configured():
     assert 'const searchMode = searchConfigured ? "auto" : "fixture";' in submit
     assert '{searchMode, onProgress:' in submit
     assert 'searchMode: realtime ? "web" : "fixture"' not in submit
+
+
+def test_workflow_canvas_explains_ai_rule_and_source_boundaries():
+    conversation = (STATIC_JS / "conversation.js").read_text(encoding="utf-8")
+    app = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+
+    assert "function renderWorkflowSummary" in conversation
+    assert "流程阶段" in conversation
+    assert "executionModeView" in conversation
+    assert "规则过滤" in conversation
+    assert "模型、规则和数据怎么分工" in conversation
+    assert "规则降级" in conversation
+    assert "确定性规则" in conversation
+    assert "演示数据用于体验流程" in conversation
+    assert "processBoundaryNotice" in app
+    assert "process-owner" in app
+
+
+def test_preference_focus_and_candidate_exclusion_reasons_are_visible():
+    app = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    conversation = (STATIC_JS / "conversation.js").read_text(encoding="utf-8")
+    candidate = app[app.index("function renderGenericCandidate") : app.index("function renderDemoWorkbench")]
+    funnel = app[app.index("function renderCandidateFunnel") : app.index("function renderGenericCandidate")]
+
+    assert "function renderPreferenceFocus" in app
+    assert "当前偏好重点" in app
+    assert "权重 ${Number(item.weight || 0).toFixed(1)}" in app
+    assert "function candidateStatusText" in app
+    assert "candidate.eliminationReasons" in app
+    assert "candidateState" in app
+    assert "excluded-summary" in funnel
+    assert "candidateStatusText(candidate, decision)" in candidate
+    assert "renderPreferenceFocus(d, changeText)" in conversation
+    assert "更看重${item.label}" in conversation
+    assert "预算提高到 ${relaxedBudget} 会怎样？" in conversation
+    assert 'kind: "what_if"' in conversation
+    assert 'data-diet-action="open-details"' in conversation
+    assert 'href="#generalDetailsPanel"' not in conversation
+    assert "renderStructuredClarification" in conversation
+    assert 'data-diet-action="adopt-what-if"' in conversation
+
+
+def test_demo_entry_describes_fixture_flow_and_service_requirement():
+    app = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    demo = app[app.index("function renderDemoWorkbench") : app.index("async function startDemoChat")]
+    start = app[app.index("async function startDemoChat") : app.index("function renderDemoConstraintInput")]
+
+    assert "后端 fixture · 无需 LLM Key" in demo
+    assert "用 fixture 跑真实流程" in demo
+    assert "需要本地服务运行" in demo
+    assert "未配置、不可用或校验失败时由规则降级" in demo
+    assert "请确认本地服务正在运行" in start

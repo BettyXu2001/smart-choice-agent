@@ -80,7 +80,7 @@ python -m choice_agent.evaluation.cli --dataset-id <dataset-id> --run-label base
 python -m choice_agent.evaluation.cli --dataset-id <dataset-id> --run-label candidate --model <candidate-model> --provider configured --compare-to-run-id <baseline-run-id>
 ```
 
-The comparison API is `GET /api/v1/evaluations/comparisons?baselineRunId=...&candidateRunId=...`. It requires identical Dataset hashes and Case/revision/repetition sets, and returns both aggregate summaries plus per-Case `improved`, `regressed`, `unchanged`, `new_failure`, or `fixed` results.
+The comparison API is `GET /api/v1/evaluations/comparisons?baselineRunId=...&candidateRunId=...`. It requires identical Dataset hashes and Case/revision/repetition sets, and returns both aggregate summaries plus per-Case `improved`, `regressed`, `unchanged`, `new_failure`, or `fixed` results. It also reports `coverageDelta` and `coverageWarnings` when Candidate deterministic evaluation coverage drops versus Baseline.
 
 `fault-injection-reliability/v2` runs eight controlled failure cases through the real EvaluationRunner and Orchestrator, covering LLM timeout/invalid JSON, Web Search transport/invalid response, and Agent execution failure. It reports 18 metrics, including LLM/Search fallback success, Trace-derived Agent failure rate, and response latency. See `docs/reliability-regression-example.json` for an actual offline run.
 
@@ -197,7 +197,7 @@ python -m choice_agent.evaluation.cli --dataset-id <dataset-id> --run-label base
 python -m choice_agent.evaluation.cli --dataset-id <dataset-id> --run-label candidate --model <candidate-model> --provider configured --compare-to-run-id <baseline-run-id>
 ```
 
-比较接口为 `GET /api/v1/evaluations/comparisons?baselineRunId=...&candidateRunId=...`。它要求双方 Dataset hash 及 Case/revision/repetition 集合完全一致，并返回两个版本的完整聚合结果与逐 Case 的 `improved`、`regressed`、`unchanged`、`new_failure`、`fixed` 判定。
+比较接口为 `GET /api/v1/evaluations/comparisons?baselineRunId=...&candidateRunId=...`。它要求双方 Dataset hash 及 Case/revision/repetition 集合完全一致，并返回两个版本的完整聚合结果与逐 Case 的 `improved`、`regressed`、`unchanged`、`new_failure`、`fixed` 判定。当 Candidate 的 deterministic evaluation coverage 低于 Baseline 时，接口会返回 `coverageDelta` 和 `coverageWarnings`。
 
 `fault-injection-reliability/v2` 通过真实 EvaluationRunner 与 Orchestrator 运行 8 条受控故障 Case，覆盖 LLM timeout/invalid JSON、Web Search transport/invalid response 和 Agent execution failure。当前共 18 项指标，包括 LLM/Search fallback 成功率、Trace 派生的 Agent 失败率和响应延迟；实际离线运行示例见 `docs/reliability-regression-example.json`。
 

@@ -38,8 +38,9 @@ def result(result_id, case_id, status, passed, *, repetition=1, metric_id="inten
             {
                 "metricId": metric_id,
                 "passed": passed,
-                "eligible": True,
+                "eligible": passed is not None,
                 "required": True,
+                "evaluationMethod": "not_evaluated" if passed is None else "deterministic",
             }
         ],
     }
@@ -49,9 +50,13 @@ def result(result_id, case_id, status, passed, *, repetition=1, metric_id="inten
     ("baseline", "candidate", "expected"),
     [
         ({"status": "failed", "score": 0}, {"status": "passed", "score": 100}, "fixed"),
+        ({"status": "error", "score": None}, {"status": "passed", "score": 100}, "fixed"),
+        ({"status": "passed", "score": 100}, {"status": "failed", "score": 0}, "new_failure"),
         ({"status": "passed", "score": 100}, {"status": "error", "score": None}, "new_failure"),
-        ({"status": "failed", "score": 25}, {"status": "failed", "score": 50}, "improved"),
+        ({"status": "not_evaluated", "score": None}, {"status": "passed", "score": 100}, "improved"),
         ({"status": "passed", "score": 100}, {"status": "not_evaluated", "score": None}, "regressed"),
+        ({"status": "failed", "score": None}, {"status": "not_evaluated", "score": None}, "regressed"),
+        ({"status": "failed", "score": 25}, {"status": "failed", "score": 50}, "improved"),
         ({"status": "passed", "score": 100}, {"status": "passed", "score": 100}, "unchanged"),
     ],
 )
@@ -89,6 +94,55 @@ def test_comparison_groups_repetitions_and_reports_directional_metric_delta():
     assert metric_delta["qualityDelta"] == 1
     assert comparison["baselineRun"]["summary"]["caseCounts"]["failed"] == 2
     assert comparison["candidateRun"]["summary"]["caseCounts"]["passed"] == 2
+
+
+def test_comparison_reports_evaluation_coverage_decrease():
+    comparison = compare_runs(
+        run("baseline", "baseline"),
+        run("candidate", "candidate"),
+        [
+            {
+                "id": "b1",
+                "caseId": "case-a",
+                "caseRevision": 1,
+                "repetition": 1,
+                "status": "passed",
+                "assertions": [
+                    {"metricId": "intent_accuracy", "passed": True, "eligible": True, "required": True, "evaluationMethod": "deterministic"},
+                    {"metricId": "hard_constraint_satisfaction", "passed": True, "eligible": True, "required": True, "evaluationMethod": "deterministic"},
+                ],
+            }
+        ],
+        [
+            {
+                "id": "c1",
+                "caseId": "case-a",
+                "caseRevision": 1,
+                "repetition": 1,
+                "status": "not_evaluated",
+                "assertions": [
+                    {"metricId": "intent_accuracy", "passed": True, "eligible": True, "required": True, "evaluationMethod": "deterministic"},
+                    {"metricId": "hard_constraint_satisfaction", "passed": None, "eligible": False, "required": True, "evaluationMethod": "not_evaluated"},
+                ],
+            }
+        ],
+    )
+
+    assert comparison["caseDiffCounts"]["regressed"] == 1
+    assert comparison["coverageDelta"]["deterministicEvaluatedMetricCount"] == -1
+    assert comparison["coverageDelta"]["deterministicEvaluatedAssertionCount"] == -1
+    assert comparison["coverageWarnings"] == [
+        {
+            "code": "evaluation_coverage_decreased",
+            "message": "Candidate deterministic evaluation coverage decreased versus baseline.",
+            "fields": [
+                "deterministicEvaluatedMetricCount",
+                "deterministicMetricRate",
+                "catalogDeterministicEvaluatedMetricCount",
+                "deterministicEvaluatedAssertionCount",
+            ],
+        }
+    ]
 
 
 def test_comparison_rejects_different_case_revision_or_repetition_set():

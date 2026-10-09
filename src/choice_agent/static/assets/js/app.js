@@ -1031,13 +1031,81 @@
             .slice(0, 4)
             .map((item) => `${item.label || item.key} · 权重 ${Number(item.weight || 0).toFixed(1)}`);
     }
+    function candidateKey(candidate) {
+        return String(candidate?.candidateId || candidate?.id || "");
+    }
+    function candidateStateEntry(candidate, decision) {
+        const states = decision.domainState?.candidateState || {};
+        return states[candidateKey(candidate)] || states[candidate?.candidateId] || states[candidate?.id] || null;
+    }
+    function candidateStatusText(candidate, decision) {
+        const reasons = toArray(candidate.eliminationReasons).map(displayText).filter(Boolean);
+        if (reasons.length) return reasons.join("；");
+        const stateEntry = candidateStateEntry(candidate, decision);
+        if (stateEntry?.reason) return displayText(stateEntry.reason);
+        if ((decision.excludedCandidates || []).map(String).includes(candidateKey(candidate))) return "你已从本轮比较中排除";
+        if (candidate.eliminated || stateEntry?.status === "eliminated") return "已从本轮比较中移除";
+        return "";
+    }
+    function isCandidateExcluded(candidate, decision) {
+        const stateEntry = candidateStateEntry(candidate, decision);
+        return (decision.excludedCandidates || []).map(String).includes(candidateKey(candidate)) || candidate.eliminated || stateEntry?.status === "eliminated";
+    }
+    function excludedCandidateSummaries(candidates, decision) {
+        return candidates
+            .filter(candidate => isCandidateExcluded(candidate, decision))
+            .map(candidate => ({ name: candidate.name || candidateKey(candidate), reason: candidateStatusText(candidate, decision) || "已从本轮比较中移除" }))
+            .slice(0, 3);
+    }
+    function processExecutionMode(decision) {
+        const assistance = decision.domainState?.assistance || {};
+        const analysis = assistance.currentAnalysis || (assistance.analysis?.hypothetical ? null : assistance.analysis) || {};
+        const understanding = assistance.understandingMode || (decision.domainState?.interpretationWarning ? "rules_fallback" : "rules");
+        const explanation = analysis.mode || "rules";
+        const label = mode => mode === "model" ? "模型" : mode === "rules_fallback" ? "规则降级" : "规则";
+        return {
+            understanding: label(understanding) + "理解",
+            clarification: label(understanding) + "追问",
+            explanation: label(explanation) + "解释",
+            summary: understanding === "rules_fallback" || explanation === "rules_fallback"
+                ? "模型不可用或输出未通过校验，本轮使用规则继续。"
+                : understanding === "model" || explanation === "model"
+                    ? "模型参与理解或解释；过滤、排序和状态更新由规则执行。"
+                    : "本轮理解与解释均由规则执行。"
+        };
+    }
+    function processBoundaryNotice(decision, source) {
+        const sourceLabel = sourceModeText(source);
+        const mode = processExecutionMode(decision);
+        const sourceNote = decision.context?.demoMode || source?.mode === "fixture"
+            ? "演示数据，未核验真实价格、路线或库存。"
+            : source?.mode === "web" || source?.realTime
+            ? "实时来源参与候选召回，关键事实仍建议最终核实。"
+            : source?.mode === "manual"
+            ? "候选主要来自用户输入，尚未外部核实。"
+            : "随补充信息继续更新。";
+        return `<div class="decision-boundary-inline"><span><strong>本轮执行</strong>${escapeHtml(mode.summary)}</span><span><strong>确定性规则</strong>过滤、排序、状态更新</span><span><strong>${escapeHtml(sourceLabel)}</strong>${escapeHtml(sourceNote)}</span></div>`;
+    }    function renderPreferenceFocus(decision) {
+        const criteria = [...(decision.criteria || [])]
+            .filter(item => Number(item.weight || 0) > 0)
+            .sort((left, right) => Number(right.weight || 0) - Number(left.weight || 0))
+            .slice(0, 3);
+        if (!criteria.length) return "";
+        return `<section class="preference-focus-detail"><h4>当前偏好重点</h4><div class="preference-chips">${criteria.map(item => `<span><strong>${escapeHtml(item.label || item.key)}</strong>权重 ${Number(item.weight || 0).toFixed(1)}</span>`).join("")}</div><p class="muted">排序会优先响应这些维度的变化。</p></section>`;
+    }
     function buildDecisionProcess(decision, activeCandidates, candidates, source) {
         const assistance = decision.domainState?.assistance || {};
         const analysis = assistance.currentAnalysis || assistance.analysis || {};
-        const questions = toArray(decision.clarifyingQuestions)
-            .concat(toArray(assistance.missingInfo), toArray(analysis.missingInfo))
-            .map(displayText)
-            .filter(Boolean);
+        const blockingQuestions = decision.status === "clarifying"
+            ? toArray(decision.clarifyingQuestions).map(displayText).filter(Boolean)
+            : [];
+        const advisoryQuestions = blockingQuestions.length
+            ? []
+            : toArray(analysis.decisionQuestion?.question || assistance.decisionQuestion?.question || analysis.question || analysis.missingInfo)
+                .map(displayText)
+                .filter(Boolean);
+        const questions = blockingQuestions.length ? blockingQuestions : advisoryQuestions;
+        const mode = processExecutionMode(decision);
         const constraints = (decision.constraints || []).map((item) => {
             const value = item.value != null ? `${item.operator || ""} ${item.value}` : toArray(item.values).join("、");
             return `${item.label || item.key}${value ? `：${value}` : ""}`;
@@ -1050,12 +1118,12 @@
         const totalEvidence = evidenceCount(decision, candidates);
         const tradeoffs = toArray(decision.recommendation?.tradeoffs || analysis.tradeoffs).map(displayText).filter(Boolean);
         return [
-            { key: "understanding", title: "需求理解", status: decision.userGoal ? "active" : "muted", summary: decision.userGoal || "等待你描述正在纠结的选择。", meta: [decision.intentKey || decision.status || "意图待确认", decision.domain || "generic"] },
-            { key: "gaps", title: "信息分层", status: questions.length ? "active" : "done", summary: questions.length ? "先补会影响方向的问题。" : "已有信息足够推进首版判断。", groups: [["需要你确认", questions.slice(0, 3), "暂时没有必须追问的问题。"], ["我先做的假设", assumptions.slice(0, 3), "本轮没有记录可展示假设。"], ["已知硬约束", constraints.slice(0, 3), "暂无明确硬约束。"]] },
-            { key: "retrieval", title: "候选召回", status: candidates.length ? "done" : "muted", summary: `找到 ${Math.max(poolCount, candidates.length)} 个候选，${entered} 个进入比较。`, meta: [sourceModeText(source), totalEvidence ? `${totalEvidence} 条 Evidence` : "暂无证据记录"] },
-            { key: "filtering", title: "过滤与比较", status: candidates.length ? "done" : "muted", summary: "按硬约束、用户排除和缺失数据整理候选池。", meta: [`硬约束排除 ${countValue(rankingCounts.hardConstraintExcluded)} 个`, `用户排除 ${countValue(rankingCounts.userExcluded)} 个`, `缺少数据排除 ${countValue(rankingCounts.missingDataExcluded)} 个`] },
-            { key: "ranking", title: "冲突取舍", status: tradeoffs.length || topCriteria(decision).length ? "done" : "muted", summary: tradeoffs[0] || "等待更多候选或评分标准后展示取舍。", meta: topCriteria(decision) },
-            { key: "recommendation", title: "最终建议", status: decision.recommendation?.primaryCandidateId ? "active" : "muted", summary: decision.recommendation?.summary || "推荐结论还在整理中。", meta: decision.recommendation?.primaryCandidateId ? [candidateDisplayName(decision, decision.recommendation.primaryCandidateId)] : [] }
+            { key: "understanding", title: "需求理解", owner: mode.understanding, status: decision.userGoal ? "active" : "muted", summary: decision.userGoal || "等待你描述正在纠结的选择。", meta: [decision.intentKey || decision.status || "意图待确认", decision.domain || "generic"] },
+            { key: "gaps", title: "信息分层", owner: mode.clarification, status: questions.length ? "active" : "done", summary: questions.length ? "先补会影响方向的问题。" : "已有信息足够推进首版判断。", groups: [["需要你确认", questions.slice(0, 3), "暂时没有必须追问的问题。"], ["我先做的假设", assumptions.slice(0, 3), "本轮没有记录可展示假设。"], ["已知硬约束", constraints.slice(0, 3), "暂无明确硬约束。"]] },
+            { key: "retrieval", title: "候选召回", owner: "数据来源", status: candidates.length ? "done" : "muted", summary: `找到 ${Math.max(poolCount, candidates.length)} 个候选，${entered} 个进入比较。`, meta: [sourceModeText(source), totalEvidence ? `${totalEvidence} 条 Evidence` : "暂无证据记录"] },
+            { key: "filtering", title: "过滤与比较", owner: "规则过滤", status: candidates.length ? "done" : "muted", summary: "按硬约束、用户排除和缺失数据整理候选池。", meta: [`硬约束排除 ${countValue(rankingCounts.hardConstraintExcluded)} 个`, `用户排除 ${countValue(rankingCounts.userExcluded)} 个`, `缺少数据排除 ${countValue(rankingCounts.missingDataExcluded)} 个`] },
+            { key: "ranking", title: "冲突取舍", owner: "规则排序", status: tradeoffs.length || topCriteria(decision).length ? "done" : "muted", summary: tradeoffs[0] || "等待更多候选或评分标准后展示取舍。", meta: topCriteria(decision) },
+            { key: "recommendation", title: "最终建议", owner: mode.explanation, status: decision.recommendation?.primaryCandidateId ? "active" : "muted", summary: decision.recommendation?.summary || "推荐结论还在整理中。", meta: decision.recommendation?.primaryCandidateId ? [candidateDisplayName(decision, decision.recommendation.primaryCandidateId)] : [] }
         ];
     }
     function renderDecisionProcess(decision, activeCandidates, candidates, source) {
@@ -1063,12 +1131,14 @@
         return `
             <section class="decision-process" aria-label="决策流程">
                 <div class="card-title"><div><span class="eyebrow">Process</span><h3>这次决策是怎么走到结论的</h3></div></div>
+                ${processBoundaryNotice(decision, source)}
                 <div class="process-rail">
                     ${steps.map((step, index) => `
                         <article class="process-step process-step-${escapeHtml(step.status)}">
                             <span class="process-index">${index + 1}</span>
                             <div>
                                 <h4>${escapeHtml(step.title)}</h4>
+                                ${step.owner ? `<span class="process-owner">${escapeHtml(step.owner)}</span>` : ""}
                                 <p>${escapeHtml(step.summary)}</p>
                                 ${step.groups ? `<div class="process-signal-grid">${step.groups.map(([label, items, empty]) => `<section><strong>${escapeHtml(label)}</strong>${renderSignalList(items, empty)}</section>`).join("")}</div>` : ""}
                                 ${step.meta?.length ? `<div class="process-meta">${step.meta.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>` : ""}
@@ -1085,7 +1155,10 @@
         const analysis = assistance.currentAnalysis || assistance.analysis || {};
         const reasons = toArray(recommendation.reasons || analysis.keyReasons || analysis.reasons).map(displayText).filter(Boolean);
         const tradeoffs = toArray(recommendation.tradeoffs || analysis.tradeoffs).map(displayText).filter(Boolean);
-        const missing = toArray(assistance.missingInfo || analysis.missingInfo || decision.clarifyingQuestions).map(displayText).filter(Boolean);
+        const missing = (decision.status === "clarifying"
+            ? toArray(decision.clarifyingQuestions)
+            : toArray(analysis.decisionQuestion?.question || assistance.decisionQuestion?.question || analysis.question || analysis.missingInfo)
+        ).map(displayText).filter(Boolean);
         const changeHints = toArray(assistance.whatIfScenarios || analysis.whatIfScenarios || analysis.changeBoundaries).map(displayText).filter(Boolean);
         return `
             <section class="decision-result-card">
@@ -1110,7 +1183,7 @@
         const activeCandidates = decision.candidates || [];
         const excludedIds = new Set(decision.excludedCandidates || []);
         const pool = decision.domainState?.candidatePool || [];
-        const excludedCandidates = pool.filter((item) => excludedIds.has(item.candidateId) && !activeCandidates.some((active) => active.candidateId === item.candidateId));
+        const excludedCandidates = pool.filter((item) => (excludedIds.has(item.candidateId) || decision.domainState?.candidateState?.[item.candidateId]?.status === "eliminated" || item.eliminated) && !activeCandidates.some((active) => active.candidateId === item.candidateId));
         const candidates = [...activeCandidates, ...excludedCandidates];
         const recommendation = decision.recommendation || {};
         const source = decision.domainState?.source || {};
@@ -1240,6 +1313,7 @@
             }
         }
         const realtime = source?.realTime || source?.mode === "web";
+        const excludedSummaries = excludedCandidateSummaries(candidates, decision);
         return `<div class="candidate-funnel">
             <span>找到 ${escapeHtml(foundCount)} 个候选</span>
             <span>硬约束排除 ${escapeHtml(hardConstraintExcluded)} 个</span>
@@ -1247,11 +1321,12 @@
             <span>缺少数据排除 ${escapeHtml(missingDataExcluded)} 个</span>
             <span>${escapeHtml(remaining)} 个进入比较</span>
             ${realtime ? `<span class="funnel-live">实时搜索</span><span>${escapeHtml(evidenceIds.size)} 条 Evidence</span>` : ""}
+            ${excludedSummaries.length ? `<div class="excluded-summary">${excludedSummaries.map(item => `<span><strong>${escapeHtml(item.name)}</strong>${escapeHtml(item.reason)}</span>`).join("")}</div>` : ""}
         </div>`;
     }
     function renderGenericCandidate(candidate, decision) {
         const attrs = Object.entries(candidate.attributes || {});
-        const excluded = (decision.excludedCandidates || []).includes(candidate.candidateId);
+        const excluded = isCandidateExcluded(candidate, decision);
         const breakdown = candidate.scoreBreakdown || [];
         const evidence = candidate.evidence || [];
         const scoreLabel = decision.domainState?.qualitative || !breakdown.some(p => p.rawValue != null) ? "待比较" : Math.round(Number(candidate.score || 0) * 100) + "%";
@@ -1261,7 +1336,7 @@
                     <div><h3>${escapeHtml(candidate.name)}</h3><p>${escapeHtml(candidate.summary || "")}</p></div>
                     <div class="score-block"><span class="score">${escapeHtml(scoreLabel)}</span><button class="btn ghost" type="button" data-candidate-action="${excluded ? "restore_candidate" : "exclude_candidate"}" data-candidate-id="${escapeHtml(candidate.candidateId)}">${excluded ? "恢复" : "排除"}</button></div>
                 </div>
-                ${excluded ? `<p class="candidate-status">已从本轮比较中移除。</p>` : ""}
+                ${excluded ? `<p class="candidate-status">${escapeHtml(candidateStatusText(candidate, decision) || "已从本轮比较中移除")}</p>` : ""}
                 <div class="attribute-grid">${attrs.slice(0, 4).map(([key, value]) => {
                     const criterion = (decision.criteria || []).find((item) => item.key === key);
                     const unit = value != null && value !== "" ? criterion?.unit || "" : "";
@@ -1269,7 +1344,7 @@
                 }).join("") || `<span><strong>可比信息</strong>暂缺关键属性</span>`}</div>
                 ${breakdown.length ? `<div class="score-breakdown">${breakdown.slice(0, 4).map((item) => {
                     const criterion = (decision.criteria || []).find((criterion) => criterion.key === item.criterionKey);
-                    return `<div><span>${escapeHtml(criterion?.label || item.criterionKey)}</span><meter min="0" max="100" value="${Math.round(Number(item.normalizedScore || 0))}"></meter><strong>${Math.round(Number(item.normalizedScore || 0))}</strong></div>`;
+                    return `<div><span>${escapeHtml(criterion?.label || item.criterionKey)}</span><meter min="0" max="100" value="${Math.round(Number(item.normalizedScore || 0))}"></meter><strong>${Math.round(Number(item.normalizedScore || 0))}</strong><small>权重 ${Number(item.weight || 0).toFixed(1)}</small></div>`;
                 }).join("")}</div>` : `<p class="muted">缺少可比数据，暂不展示评分拆解。</p>`}
                 ${candidate.origin === "manual" ? `<form class="candidate-edit inline-form" data-candidate-id="${escapeHtml(candidate.candidateId)}"><label>候选说明<input name="summary" value="${escapeHtml(candidate.summary || "")}" placeholder="优点与顾虑"></label><button class="btn ghost">保存说明</button></form>` : ""}
                 <details class="evidence-details"><summary>查看候选依据</summary>${window.EvidenceView.candidate(evidence)}</details>
@@ -1282,10 +1357,10 @@
         const examples = legacy ? [legacy] : ChoiceAgentDemo.examples();
         state.demo.examples = examples;
         app.innerHTML = `<section class="section">
-            <div class="card-title"><div><span class="eyebrow">演示数据 · 非实时</span><h2>用一个示例，体验对话式决策</h2></div><a class="btn ghost" href="#/">返回首页</a></div>
-            <p>直接聊天，右侧同步整理条件和比较结果；看到不对的地方，随时修改。</p>
-            ${id ? `<p class="muted">${legacy ? "旧记录保留在本地。将使用原目标和候选说明开启新版对话，旧评分与约束不会自动迁移。" : "未找到这条本地旧记录，你可以选择下面的示例。"}</p>` : ""}
-            <div class="example-grid">${examples.map((item,index) => `<article class="section"><h3>${escapeHtml(ChoiceAgentDemo.domainLabels[item.domain] || "通用选择")}</h3><p>${escapeHtml(item.goal)}</p><button type="button" class="btn primary" data-action="start-demo-chat" data-index="${index}">${legacy ? "用此记录开启新版对话" : "开始对话体验"}</button></article>`).join("")}</div>
+            <div class="card-title"><div><span class="eyebrow">后端 fixture · 无需 LLM Key</span><h2>用一个示例，体验真实决策流程</h2></div><a class="btn ghost" href="#/">返回首页</a></div>
+            <p>这些示例会调用本地服务的 fixture 流程：模型可参与理解和解释；未配置、不可用或校验失败时由规则降级，过滤、排序和状态更新始终由确定性规则执行。数据非实时，不代表真实建议。</p>
+            <p class="mode-notice">需要本地服务运行；如果后端不可用，示例不会写入真实历史。</p>${id ? `<p class="muted">${legacy ? "旧记录保留在本地。将使用原目标和候选说明开启新版对话，旧评分与约束不会自动迁移。" : "未找到这条本地旧记录，你可以选择下面的示例。"}</p>` : ""}
+            <div class="example-grid">${examples.map((item,index) => `<article class="section"><h3>${escapeHtml(ChoiceAgentDemo.domainLabels[item.domain] || "通用选择")}</h3><p>${escapeHtml(item.goal)}</p><button type="button" class="btn primary" data-action="start-demo-chat" data-index="${index}">${legacy ? "用此记录开启新版对话" : "用 fixture 跑真实流程"}</button></article>`).join("")}</div>
             <p id="demoError" class="diet-error" role="alert" hidden></p>
         </section>`;
     }
@@ -1305,7 +1380,7 @@
             }
             await conversation.startGeneral(message, domain, {context:{searchMode:"fixture",demoMode:true}});
         } catch (error) {
-            errorBox.textContent = error.message || "示例加载失败，请重试。";
+            errorBox.textContent = (error.message || "示例加载失败，请重试。") + " 请确认本地服务正在运行，或返回首页使用自由输入。";
             errorBox.hidden = false;
         } finally { restore(); }
     }

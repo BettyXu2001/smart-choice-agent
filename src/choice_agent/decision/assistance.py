@@ -18,7 +18,7 @@ def state(decision):
 
 
 def hypothetical(text):
-    return bool(re.search(r"如果|假如|假设|要是", text))
+    return bool(re.search(r"如果|假如|假设|要是|会怎样|会有什么变化|会不会改变", text))
 
 
 _NUMBERS = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
@@ -94,13 +94,49 @@ def _travel_days(text):
     return int(value) if value == int(value) else None
 
 
-def _travel_priority(text):
-    found = [word for word in _TRAVEL_PRIORITY_WORDS if word in text]
-    if not found:
-        return None
-    if any(word in found for word in ["轻松", "放松", "不累", "不想太累"]):
-        return "轻松"
-    return "、".join(dict.fromkeys(found))
+_TRAVEL_PRIORITY_GROUPS = [
+    ("轻松", ["轻松", "放松", "不累", "不想太累"]),
+    ("人少", ["人少", "安静"]),
+    ("自然", ["自然", "风景"]),
+    ("预算", ["省钱", "预算", "便宜"]),
+    ("交通", ["交通近", "路程短", "交通", "路程"]),
+]
+
+
+def _priority_tokens(value):
+    tokens = []
+    for part in re.split(r"[、,，/；;\s]+", str(value or "")):
+        part = part.strip()
+        if part and part not in tokens:
+            tokens.append(part)
+    return tokens
+
+
+def _travel_priority_update(text, current_value):
+    discovered = [
+        canonical
+        for canonical, words in _TRAVEL_PRIORITY_GROUPS
+        if any(word in text for word in words)
+    ]
+    removed = []
+    for canonical, words in _TRAVEL_PRIORITY_GROUPS:
+        if any(
+            re.search(
+                rf"(?:不再|不用|取消|不优先|不看重).{{0,8}}{re.escape(word)}|{re.escape(word)}.{{0,8}}(?:不重要|不用优先)",
+                text,
+            )
+            for word in words
+        ):
+            removed.append(canonical)
+    if not discovered and not removed:
+        return False, None
+    replace = bool(re.search(r"只看重|只优先|改成|改为|以.{1,12}为主|其他.{0,8}不重要", text))
+    tokens = [] if replace else _priority_tokens(current_value)
+    for token in discovered:
+        if token not in tokens:
+            tokens.append(token)
+    tokens = [token for token in tokens if token not in removed]
+    return True, "、".join(tokens) or None
 
 
 def _travel_departure(text, previous_question, current):
@@ -134,8 +170,10 @@ def _travel_patch(text, previous_question, current):
     days = _travel_days(text)
     if days is not None:
         patch["days"] = days
-    priority = _travel_priority(text)
-    if priority:
+    priority_changed, priority = _travel_priority_update(
+        text, current.get("priority", {}).get("value")
+    )
+    if priority_changed:
         patch["priority"] = priority
     departure = _travel_departure(text, previous_question, current)
     if departure:
@@ -146,6 +184,7 @@ def prepare_turn(context):
     d, text = context.decision, context.message.strip()
     info = state(d)
     info["changes"] = []
+    info["understandingMode"] = "rules"
     info.pop("unhandled", None)
     info.pop("warning", None)
     context.data["is_hypothetical"] = hypothetical(text)
@@ -176,7 +215,10 @@ def prepare_turn(context):
             value=hours[1]
             patch["weeklyHours"] = float(value) if re.fullmatch(r"\d+(?:\.\d+)?",value) else {"一":1,"两":2,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10}[value]
     if d.domain == "travel":
-        patch.update(_travel_patch(text, previous_question, fields(d)))
+        travel_patch = _travel_patch(text, previous_question, fields(d))
+        if context.data.get("simulation") and "priority" in travel_patch and not re.search(r"更看重|最看重|优先|更在意|省钱|便宜", text):
+            travel_patch.pop("priority")
+        patch.update(travel_patch)
     if patch:
         patch_fields(d,patch,source="conversation")
         info["changes"].extend(f"{fields(d)[k]['label']}：{v}" for k,v in patch.items())
@@ -278,10 +320,12 @@ def model_understand(context):
                 add_fact(d,update.candidate_id,update.text,update.concern,source="conversation")
         if parsed.question: context.data["fact_question"]=parsed.question
         context.data["model_understood"]=True
+        state(d)["understandingMode"]="model"
     except (ValueError, RuntimeError, OSError, KeyError, TypeError) as error:
         warning=f"模型理解不可用，保留已确认条件：{type(error).__name__}"
         d.domain_state["interpretationWarning"]=warning
         state(d)["warning"]=warning
+        state(d)["understandingMode"]="rules_fallback"
         if context.trace:
             context.trace.fallback(
                 stage="Fallback",
@@ -532,7 +576,9 @@ def explain(context, profile):
         target=d.model_copy(deep=True)
         from choice_agent.agents.base import AgentContext
         from choice_agent.agents.conversation import interpret
-        simulated=AgentContext(session_id=context.session_id,trace_id=context.trace_id,user_id=context.user_id,message=re.sub(r"如果|假如|假设|要是","",context.message),decision=target,data={"simulation":True})
+        simulated_message = re.sub(r"如果|假如|假设|要是", "", context.message)
+        simulated_message = re.sub(r"(?:会怎样|会有什么变化|会不会改变)[？?]?$", "", simulated_message).strip()
+        simulated=AgentContext(session_id=context.session_id,trace_id=context.trace_id,user_id=context.user_id,message=simulated_message,decision=target,data={"simulation":True})
         interpret(simulated)
         target.criteria=profile._merge_criteria(target.criteria)
         from choice_agent.decision.conversation import sync_dependencies
@@ -608,6 +654,14 @@ def explain(context, profile):
         analysis["summary"]+="依据用户输入，尚未经外部核实。"
     elif analysis["mode"]=="model" and (d.context.get("demoMode") or any(c.origin=="fixture" for c in target.candidates)):
         analysis["summary"]+="以上依据演示数据，不代表真实情况。"
+    if analysis["hypothetical"]:
+        saved_fields = fields(d)
+        simulated_fields = fields(target)
+        analysis["proposedFields"] = {
+            key: item.get("value")
+            for key, item in simulated_fields.items()
+            if key in saved_fields and item.get("value") != saved_fields[key].get("value")
+        }
     analysis["sources"]=sources
     analysis["keyReasons"] = analysis.get("reasons", [])[:4]
     from choice_agent.decision.what_if import missing_info, official_change, scenarios
