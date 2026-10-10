@@ -333,6 +333,24 @@ def test_inferred_fields_confirmation_and_clear_protection(database):
         assert continued.decision_state.domain_state["slots"]["taste"] == []
 
 
+def test_balanced_light_taste_is_persisted_as_confirmed_conversation_input(database):
+    with database.session_factory() as db:
+        service = DietOrchestrator(db, Settings(), DisabledProvider())
+        response = service.chat(
+            1,
+            ChatRequest(message="今晚不知道吃什么，想吃清淡一点，但又不想太寡淡"),
+        )
+
+        slots = response.decision_state.domain_state["slots"]
+        fields = response.decision_state.domain_state["dietFieldState"]
+        assert slots["healthGoal"] == ["清淡"]
+        assert slots["taste"] == ["咸鲜"]
+        assert fields["healthGoal"]["source"] == "conversation"
+        assert fields["taste"]["source"] == "conversation"
+        assert fields["healthGoal"]["confirmed"]
+        assert fields["taste"]["confirmed"]
+
+
 def test_source_change_and_invalid_field_value(database):
     with database.session_factory() as db:
         service, first = setup_chat(db)
@@ -340,6 +358,10 @@ def test_source_change_and_invalid_field_value(database):
             type="set_source", payload={"sourceMode": "PERSONAL"}))
         assert changed.decision_state.context["sourceMode"] == "PERSONAL"
         assert service.state(1, first.session_id)["sourceMode"] == "PERSONAL"
+        assert changed.decision_state.messages[-2].role == "user"
+        assert changed.decision_state.messages[-2].content == "切换到个人餐食库"
+        assert changed.decision_state.messages[-1].role == "assistant"
+        assert changed.speech_text.count("已切换为个人餐食库。") == 1
         with pytest.raises(ValueError, match="不支持"):
             command(service, changed, {"exclusions": ["不存在的食材"]})
 

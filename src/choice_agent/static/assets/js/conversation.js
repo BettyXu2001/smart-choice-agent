@@ -497,7 +497,7 @@ window.createConversation = function(deps) {
         state.chat.mode = "diet";
         state.chat.routeId = null;
         resetChat();
-        state.chat.sourceMode = "PERSONAL";
+        state.chat.sourceMode = "PUBLIC";
         state.chat.pendingPrompt = prompt;
         if (!state.slotOptions) ensureSlotOptions().then(() => renderChat()).catch(error => {
             state.chat.error = error.message; renderChat();

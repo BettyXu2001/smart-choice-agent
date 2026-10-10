@@ -8,17 +8,21 @@ class DietCriterionEvaluator:
         requested = getattr(slots, criterion.key, [])
         if not requested:
             score = 0.0
+            weight = 0.0
+            explanation = f"{criterion.label}未在本轮表达，不参与匹配分"
         else:
             available = set(candidate.attributes.get(criterion.key, []))
             hits = [value for value in requested if value in available]
             score = len(hits) / len(requested) * 100
+            weight = criterion.weight
+            explanation = f"{criterion.label}匹配 {score:.1f}"
         return ScoreContribution(
             criterion_key=criterion.key,
             raw_value=candidate.attributes.get(criterion.key, []),
             normalized_score=round(score, 4),
-            weight=criterion.weight,
-            weighted_score=round(score * criterion.weight, 4),
-            explanation=f"{criterion.label}匹配 {score:.1f}",
+            weight=weight,
+            weighted_score=round(score * weight, 4),
+            explanation=explanation,
             evidence_ids=[
                 item.evidence_id for item in candidate.evidence
                 if item.evidence_id

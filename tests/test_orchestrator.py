@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import json
 
 import pytest
 
@@ -34,6 +35,76 @@ def test_recommendation_persists_decision_agents_and_trace(database):
         trace = DietRepository(db).trace(1, response.trace_id)
         assert trace is not None
         assert trace.event_count >= 8
+
+
+def test_recommendation_reason_does_not_claim_unmatched_health_goal(database):
+    with database.session_factory() as db:
+        response = orchestrator(db).chat(
+            1,
+            ChatRequest(message="晚餐想吃清淡一点", source_mode=SourceMode.PERSONAL),
+        )
+        potato = next(item for item in response.display_blocks if item.name == "土豆炖牛肉")
+        assert "符合清淡" not in potato.reason
+        assert "未匹配你想要的健康目标“清淡”" in potato.reason
+
+
+class InconsistentExplanationProvider:
+    enabled = True
+
+    def complete_json(self, system, prompt, model):
+        if "推荐理由" in system:
+            payload = json.loads(prompt)
+            return {
+                "recommendations": [
+                    {"mealId": item["id"], "reason": f"{item['name']}符合清淡诉求。"}
+                    for item in payload["candidates"]
+                ]
+            }
+        return {
+            "intent": "MEAL_RECOMMENDATION",
+            "confidence": 0.9,
+            "slots": {"mealTime": ["晚餐"], "healthGoal": ["清淡"]},
+        }
+
+
+def test_model_explanation_with_absent_tag_falls_back_to_rule_reason(database):
+    with database.session_factory() as db:
+        service = DietOrchestrator(db, Settings(), InconsistentExplanationProvider())
+        response = service.chat(
+            1,
+            ChatRequest(message="晚餐想吃清淡一点", source_mode=SourceMode.PERSONAL),
+        )
+        potato = next(item for item in response.display_blocks if item.name == "土豆炖牛肉")
+        assert "符合清淡" not in potato.reason
+        assert "未匹配你想要的健康目标“清淡”" in potato.reason
+
+
+def test_public_candidates_have_distinct_truthful_reasons(database):
+    with database.session_factory() as db:
+        response = orchestrator(db).chat(
+            1,
+            ChatRequest(
+                message="晚餐想吃清淡但不寡淡",
+                source_mode=SourceMode.PUBLIC,
+            ),
+        )
+        reasons = [item.reason for item in response.display_blocks]
+        assert len(reasons) >= 2
+        assert len(set(reasons)) == len(reasons)
+        options = DietRepository(db).slot_options()
+        known_tags = {value for values in options.values() for value in values}
+        for item in response.display_blocks:
+            item_tags = {
+                value
+                for field in (
+                    item.meal_time, item.mood, item.scene, item.health_goal,
+                    item.cuisine, item.taste, item.convenience,
+                )
+                for value in field
+            }
+            for tag in known_tags:
+                if tag in item.reason and tag not in item_tags:
+                    assert "未匹配" in item.reason
 
 
 def test_clarification_and_follow_up_reuse_slots(database):

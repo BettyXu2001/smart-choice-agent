@@ -1,6 +1,7 @@
 from choice_agent.domains.diet.rules import (
     clarify,
     classify_intent,
+    extract_slots,
     hard_exclusions,
     risk_reasons,
 )
@@ -31,3 +32,13 @@ def test_hard_exclusions_and_risk_rules():
     assert hard_exclusions("我不能吃麻辣", options) == ["麻辣"]
     assert risk_reasons("我想绝食减肥")
 
+
+def test_balanced_light_taste_preserves_health_and_flavor_intent():
+    options = {
+        "healthGoal": ["清淡", "养胃"],
+        "taste": ["清淡", "咸鲜", "麻辣"],
+    }
+    slots = extract_slots("想吃清淡一点，但又不想太寡淡", options)
+
+    assert slots.health_goal == ["清淡"]
+    assert slots.taste == ["咸鲜"]

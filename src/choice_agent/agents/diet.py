@@ -180,6 +180,93 @@ def _meal_response(item: RankedMeal, reason: str) -> MealResponse:
     )
 
 
+_REASON_FIELD_ORDER = (
+    "meal_time", "health_goal", "taste", "scene", "convenience", "cuisine", "mood",
+)
+
+
+def _candidate_match_summary(attributes: dict[str, list[str]], slots: SlotBundle) -> dict[str, Any]:
+    matched: dict[str, list[str]] = {}
+    missing: dict[str, list[str]] = {}
+    for field in _REASON_FIELD_ORDER:
+        requested = list(getattr(slots, field) or [])
+        if not requested:
+            continue
+        available = set(attributes.get(field, []))
+        hits = [value for value in requested if value in available]
+        misses = [value for value in requested if value not in available]
+        if hits:
+            matched[field] = hits
+        if misses:
+            missing[field] = misses
+    return {"matched": matched, "missing": missing}
+
+
+def _rule_reason(name: str, attributes: dict[str, list[str]], slots: SlotBundle) -> str:
+    summary = _candidate_match_summary(attributes, slots)
+    matched = summary["matched"]
+    phrases: list[str] = []
+    templates = {
+        "meal_time": "适合{}",
+        "health_goal": "符合{}诉求",
+        "taste": "口味偏{}",
+        "scene": "适合{}场景",
+        "convenience": "具备{}特点",
+        "cuisine": "属于{}风味",
+        "mood": "贴合{}状态",
+    }
+    for field in _REASON_FIELD_ORDER:
+        values = matched.get(field)
+        if values:
+            phrases.append(templates[field].format("、".join(values)))
+
+    if not phrases:
+        phrases.append("当前标签未直接命中本轮条件")
+
+    matched_values = {value for values in matched.values() for value in values}
+    extra_labels = {
+        "taste": "口味标签",
+        "convenience": "便利标签",
+        "cuisine": "菜系标签",
+        "health_goal": "健康标签",
+    }
+    for field in ("taste", "convenience", "cuisine", "health_goal"):
+        extra = next((value for value in attributes.get(field, []) if value not in matched_values), None)
+        if extra:
+            phrases.append(f"{extra_labels[field]}还包括{extra}")
+            break
+
+    missing = summary["missing"]
+    missed = next(
+        ((field, values[0]) for field in _REASON_FIELD_ORDER if (values := missing.get(field))),
+        None,
+    )
+    missing_labels = {
+        "meal_time": "餐次",
+        "health_goal": "健康目标",
+        "taste": "口味",
+        "scene": "场景",
+        "convenience": "便利偏好",
+        "cuisine": "菜系",
+        "mood": "心情偏好",
+    }
+    reason = f"{name}{'，'.join(phrases[:3])}"
+    if missed:
+        field, value = missed
+        reason += f"；但未匹配你想要的{missing_labels[field]}“{value}”"
+    return reason + "。"
+
+
+def _reason_is_consistent(
+    reason: str,
+    attributes: dict[str, list[str]],
+    options: dict[str, list[str]],
+) -> bool:
+    candidate_values = {value for values in attributes.values() for value in values}
+    known_values = {str(value) for values in options.values() for value in values}
+    return not any(value in reason and value not in candidate_values for value in known_values)
+
+
 class ExplanationAgent(BaseAgent):
     name = "ExplanationAgent"
 
@@ -188,18 +275,13 @@ class ExplanationAgent(BaseAgent):
         self.model_name = model_name
 
     def _reason(self, item: RankedMeal, slots: SlotBundle) -> str:
-        if slots.health_goal:
-            return f"{item.meal.name}比较符合你提到的{'、'.join(slots.health_goal)}诉求。"
-        if slots.taste:
-            return f"{item.meal.name}比较贴近你想要的{'、'.join(slots.taste)}口味。"
-        return f"{item.meal.name}和你这轮表达的就餐偏好匹配度较高。"
+        attributes = {
+            field: list(getattr(item.meal, field) or []) for field in _REASON_FIELD_ORDER
+        }
+        return _rule_reason(item.meal.name, attributes, slots)
 
     def _display_reason(self, item: DietDisplayCandidate, slots: SlotBundle) -> str:
-        if slots.health_goal:
-            return f"{item.name}比较符合你提到的{'、'.join(slots.health_goal)}诉求。"
-        if slots.taste:
-            return f"{item.name}比较贴近你想要的{'、'.join(slots.taste)}口味。"
-        return f"{item.name}和你这轮表达的就餐偏好匹配度较高。"
+        return _rule_reason(item.name, item.attributes, slots)
 
     def _execute_display(
         self,
@@ -224,7 +306,17 @@ class ExplanationAgent(BaseAgent):
                         "message": context.message,
                         "slots": slots.model_dump(by_alias=True),
                         "candidates": [
-                            {"id": item.candidate.candidate_id, "name": item.name, "score": item.score}
+                            {
+                                "id": item.candidate.candidate_id,
+                                "name": item.name,
+                                "score": item.score,
+                                "attributes": item.attributes,
+                                "scoreBreakdown": [
+                                    part.model_dump(mode="json", by_alias=True)
+                                    for part in item.candidate.score_breakdown
+                                ],
+                                "matchSummary": _candidate_match_summary(item.attributes, slots),
+                            }
                             for item in selected
                         ],
                     }, ensure_ascii=False)
@@ -243,8 +335,19 @@ class ExplanationAgent(BaseAgent):
                 for option in parsed.get("recommendations", []):
                     raw_id = option.get("candidateId", option.get("mealId", option.get("itemId")))
                     candidate_id = str(raw_id) if raw_id is not None else ""
-                    if candidate_id in reasons and str(option.get("reason", "")).strip():
-                        reasons[candidate_id] = str(option["reason"]).strip()
+                    candidate = next(
+                        (item for item in selected if item.candidate.candidate_id == candidate_id),
+                        None,
+                    )
+                    model_reason = str(option.get("reason", "")).strip()
+                    if (
+                        candidate
+                        and model_reason
+                        and _reason_is_consistent(
+                            model_reason, candidate.attributes, context.data["slot_options"]
+                        )
+                    ):
+                        reasons[candidate_id] = model_reason
             except (ValueError, RuntimeError, OSError, KeyError, TypeError) as error:
                 if context.trace:
                     context.trace.fallback(
@@ -297,7 +400,22 @@ class ExplanationAgent(BaseAgent):
                         "message": context.message,
                         "slots": slots.model_dump(by_alias=True),
                         "candidates": [
-                            {"id": item.meal.id, "name": item.meal.name, "score": item.score}
+                            {
+                                "id": item.meal.id,
+                                "name": item.meal.name,
+                                "score": item.score,
+                                "attributes": {
+                                    field: list(getattr(item.meal, field) or [])
+                                    for field in _REASON_FIELD_ORDER
+                                },
+                                "matchSummary": _candidate_match_summary(
+                                    {
+                                        field: list(getattr(item.meal, field) or [])
+                                        for field in _REASON_FIELD_ORDER
+                                    },
+                                    slots,
+                                ),
+                            }
                             for item in selected
                         ],
                     }, ensure_ascii=False)
@@ -315,8 +433,20 @@ class ExplanationAgent(BaseAgent):
                 )
                 for option in parsed.get("recommendations", []):
                     meal_id = int(option.get("mealId", option.get("itemId", 0)))
-                    if meal_id in reasons and str(option.get("reason", "")).strip():
-                        reasons[meal_id] = str(option["reason"]).strip()
+                    candidate = next((item for item in selected if item.meal.id == meal_id), None)
+                    model_reason = str(option.get("reason", "")).strip()
+                    attributes = {
+                        field: list(getattr(candidate.meal, field) or [])
+                        for field in _REASON_FIELD_ORDER
+                    } if candidate else {}
+                    if (
+                        candidate
+                        and model_reason
+                        and _reason_is_consistent(
+                            model_reason, attributes, context.data["slot_options"]
+                        )
+                    ):
+                        reasons[meal_id] = model_reason
             except (ValueError, RuntimeError, OSError, KeyError, TypeError) as error:
                 if context.trace:
                     context.trace.fallback(

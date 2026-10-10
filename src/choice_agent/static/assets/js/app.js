@@ -41,7 +41,7 @@
             domain: "DIET",
             mode: "diet",
             routeId: null,
-            sourceMode: "PERSONAL",
+            sourceMode: "PUBLIC",
             sessionId: null,
             sending: false,
             pendingPrompt: "",
@@ -1887,7 +1887,7 @@
                         <h3>${escapeHtml(meal.name)}</h3>
                         <p class="muted">${escapeHtml(compact ? (meal.sourceType === "PERSONAL" ? "你的餐食库" : "公共餐食库") : (meal.sourceType || ""))}</p>
                     </div>
-                    ${meal.matchScore ? `<span class="score">匹配 ${Math.round(meal.matchScore * 100)}%</span>` : ""}
+                    ${meal.matchScore != null ? `<span class="score" title="仅计算本轮已表达条件">条件匹配 ${Math.round(meal.matchScore * 100)}%</span>` : ""}
                 </header>
                 ${compact ? `<p class="diet-meal-reason">${escapeHtml(meal.reason || "根据当前条件筛选")}</p><details><summary>查看餐食标签</summary>` : ""}
                 <div class="chips">${mealTags(meal).map((tag) => `<span class="chip selected">${escapeHtml(tag)}</span>`).join("")}</div>
@@ -2478,7 +2478,7 @@
             if (input) {
                 input.value = target.dataset.message;
                 state.chat.draft = input.value;
-                input.focus();
+                conversation.submitChat(input.form).catch(error => showToast(error.message, "error"));
             }
         } else if (action === "feedback") {
             conversation.sendFeedback(target).catch(error => showToast(error.message, "error"));

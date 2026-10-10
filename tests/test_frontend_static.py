@@ -209,3 +209,39 @@ def test_demo_entry_describes_fixture_flow_and_service_requirement():
     assert "需要本地服务运行" in demo
     assert "未配置、不可用或校验失败时由规则降级" in demo
     assert "请确认本地服务正在运行" in start
+
+
+def test_new_diet_conversation_defaults_to_public_source():
+    app = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    conversation = (STATIC_JS / "conversation.js").read_text(encoding="utf-8")
+
+    assert 'sourceMode: "PUBLIC"' in app
+    prepare = conversation[
+        conversation.index("function prepareChatFromHome"):
+        conversation.index("function triggerPendingPrompt")
+    ]
+    assert 'state.chat.sourceMode = "PUBLIC"' in prepare
+    assert 'state.chat.sourceMode = "PERSONAL"' not in prepare
+
+
+def test_diet_card_labels_expressed_condition_score_and_keeps_zero_visible():
+    source = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    card = source[source.index("function renderMealCard") : source.index("async function ensurePersonalMeals")]
+
+    assert "条件匹配" in card
+    assert "仅计算本轮已表达条件" in card
+    assert "meal.matchScore != null" in card
+    assert "meal.matchScore ?" not in card
+
+
+def test_diet_quick_message_reuses_single_submit_path():
+    source = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    handler = source[
+        source.index('} else if (action === "quick-message")'):
+        source.index('} else if (action === "feedback")')
+    ]
+
+    assert "state.chat.draft = input.value" in handler
+    assert "conversation.submitChat(input.form)" in handler
+    assert handler.count("conversation.submitChat") == 1
+    assert "DietApi" not in handler

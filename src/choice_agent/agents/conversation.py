@@ -65,9 +65,9 @@ def interpret(context, provider=None, model=None):
     usage = re.search(r"(?:用于|用来|用途是|主要用来)([^，。；]+)", text)
     if usage and "usage" in current: patch["usage"] = usage[1]
     removing_priority = context.data.get("simulation") and re.search(r"(?:不再|不用|取消|不优先|不看重).{0,12}(?:优先|看重|轻松|放松|预算|交通|自然|人少)", text)
-    priority = None if removing_priority else re.search(r"(?:更看重|最看重|最在意|优先考虑|优先|更在意|更想)([^，。；]+)",text)
+    priority = None if d.domain == "travel" or removing_priority else re.search(r"(?:更看重|最看重|最在意|优先考虑|优先|更在意|更想)([^，。；]+)",text)
     if priority: patch["priority"] = priority[1]
-    elif d.domain != "generic" and not current.get("priority", {}).get("cleared"):
+    elif d.domain not in {"generic", "travel"} and not current.get("priority", {}).get("cleared"):
         words = [w for values in PRIORITIES.values() for w in values if w in text and not any(n+w in text for n in ["不", "不要", "不看重"])]
         if words and "priority" not in patch and not (context.data.get("simulation") and budget and set(words) == {"预算"}):
             patch["priority"] = "、".join(dict.fromkeys(words))

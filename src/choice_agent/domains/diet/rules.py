@@ -44,6 +44,12 @@ def extract_slots(message: str, options: dict[str, list[str]]) -> SlotBundle:
     for keyword, (field, value) in simple_aliases.items():
         if keyword in message and value not in values[field]:
             values[field].append(value)
+
+    balanced_light_phrases = ("清淡但不寡淡", "不想太寡淡", "清淡但有味道")
+    if any(phrase in message for phrase in balanced_light_phrases) and "咸鲜" in options.get("taste", []):
+        values["taste"] = [value for value in values["taste"] if value != "清淡"]
+        if "咸鲜" not in values["taste"]:
+            values["taste"].append("咸鲜")
     return SlotBundle(**values)
 
 

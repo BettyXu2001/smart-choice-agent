@@ -122,7 +122,7 @@ def _travel_priority_update(text, current_value):
     for canonical, words in _TRAVEL_PRIORITY_GROUPS:
         if any(
             re.search(
-                rf"(?:不再|不用|取消|不优先|不看重).{{0,8}}{re.escape(word)}|{re.escape(word)}.{{0,8}}(?:不重要|不用优先)",
+                rf"(?:不再|不用|取消|不优先|不看重)[^，,。；;]{{0,8}}{re.escape(word)}|{re.escape(word)}[^，,。；;]{{0,8}}(?:不重要|不用优先)",
                 text,
             )
             for word in words

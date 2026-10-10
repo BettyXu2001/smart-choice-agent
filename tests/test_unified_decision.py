@@ -1,13 +1,14 @@
 import pytest
 
 from choice_agent.decision.evidence import EvidenceValidator
+from choice_agent.domains.diet.evaluator import DietCriterionEvaluator
 from choice_agent.orchestration.diet import DietOrchestrator
 from choice_agent.orchestration.generic import GenericDecisionOrchestrator
 from choice_agent.providers.model import DisabledProvider
 from choice_agent.providers.search import OpenAIWebSearchProvider
 from choice_agent.schemas import (
-    Candidate, ChatRequest, DecisionCommandRequest, DecisionState, Evidence,
-    GenericDecisionMessageRequest, GenericDecisionRequest, SourceDocument,
+    Candidate, ChatRequest, Criterion, DecisionCommandRequest, DecisionState, Evidence,
+    GenericDecisionMessageRequest, GenericDecisionRequest, SlotBundle, SourceDocument,
 )
 from choice_agent.config import Settings
 from choice_agent.agents.base import AgentContext
@@ -388,3 +389,37 @@ def test_model_cannot_downgrade_rule_health_risk(database):
         assert result.decision_state.intent.value == "HEALTH_RISK"
         assert result.decision_state.candidates == []
         assert result.decision_state.recommendation is None
+
+
+def test_diet_evaluator_ignores_unrequested_criteria_weight():
+    decision = DecisionState(
+        decision_id="diet-score",
+        session_id="diet-score",
+        domain_state={"slots": SlotBundle(meal_time=["晚餐"]).model_dump(by_alias=True)},
+    )
+    candidate = Candidate(
+        candidate_id="meal",
+        name="测试餐",
+        attributes={"meal_time": ["晚餐"], "health_goal": ["清淡"]},
+    )
+    evaluator = DietCriterionEvaluator()
+
+    requested = evaluator.evaluate(Criterion(key="meal_time", label="餐次"), candidate, decision)
+    unrequested = evaluator.evaluate(Criterion(key="health_goal", label="健康"), candidate, decision)
+
+    assert requested.normalized_score == 100
+    assert requested.weight == 1
+    assert unrequested.normalized_score == 0
+    assert unrequested.weight == 0
+
+
+def test_diet_match_score_uses_only_expressed_conditions(database):
+    with database.session_factory() as db:
+        response = DietOrchestrator(db, Settings(), DisabledProvider()).chat(
+            1,
+            ChatRequest(message="晚餐想吃清淡一点", source_mode="PUBLIC"),
+        )
+        scores = {item.name: item.match_score for item in response.display_blocks}
+        assert scores["番茄鸡蛋面"] == 1.0
+        assert scores["清汤馄饨"] == 1.0
+        assert scores["鸡胸肉轻食碗"] == 0.5

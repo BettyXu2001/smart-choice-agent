@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import json
 from uuid import uuid4
@@ -30,6 +31,12 @@ _PROTECTED_CONTEXT_KEYS = {
     "decisionId", "decision_id", "domain", "messages", "ownerUserId", "owner_user_id",
     "revision", "sessionId", "session_id", "status",
 }
+
+
+@dataclass(frozen=True)
+class _PanelPatchResult:
+    user_message: str
+    assistant_confirmation: str
 
 
 class DietOrchestrator:
@@ -317,14 +324,18 @@ class DietOrchestrator:
             },
         )
 
-    def _panel_patch(self, decision, session, request):
+    def _panel_patch(self, decision, session, request) -> _PanelPatchResult:
         payload = request.payload
         options = self.repository.slot_options()
         if request.type == "set_source":
             if set(payload) != {"sourceMode"}:
                 raise ValueError("set_source 仅接受 sourceMode")
             session.source_mode = SourceMode(payload["sourceMode"]).value
-            return "已切换为" + ("个人餐食库" if session.source_mode == "PERSONAL" else "公共餐食库") + "。"
+            label = "个人餐食库" if session.source_mode == "PERSONAL" else "公共餐食库"
+            return _PanelPatchResult(
+                user_message=f"切换到{label}",
+                assistant_confirmation=f"已切换为{label}。",
+            )
         if request.type == "confirm_fields":
             keys = payload.get("fields")
             if set(payload) != {"fields"} or not isinstance(keys, list) or not keys or any(not isinstance(k, str) or k not in LABELS for k in keys):
@@ -337,10 +348,11 @@ class DietOrchestrator:
         previous = values(decision)
         apply_fields(decision, patch, options)
         verb = "确认" if request.type == "confirm_fields" else "修改"
-        return "已" + verb + "：" + "；".join(
+        confirmation = "已" + verb + "：" + "；".join(
             f"{LABELS[k]}：{'、'.join(previous[k]) or '未设置'} → {'、'.join(v) or '不限'}"
             for k, v in patch.items()
         ) + "。"
+        return _PanelPatchResult(confirmation, confirmation)
 
     def _execute(self, user_id, session_id, request, command):
         session = self._session(user_id, session_id) if session_id else self.repository.create_session(user_id, request.source_mode)
@@ -372,9 +384,12 @@ class DietOrchestrator:
                 before_input = trace.snapshot(decision)
                 decision.agent_runs = []
                 if command:
-                    message = self._panel_patch(decision, session, request)
+                    patch_result = self._panel_patch(decision, session, request)
+                    message = patch_result.user_message
+                    command_confirmation = patch_result.assistant_confirmation
                 else:
                     message = request.message.strip()
+                    command_confirmation = ""
                     session.source_mode = request.source_mode.value
                     decision.context.update({k: v for k, v in request.context.items() if k not in _PROTECTED_CONTEXT_KEYS})
                 decision.context["sourceMode"] = session.source_mode
@@ -406,7 +421,7 @@ class DietOrchestrator:
                 clarify = False
                 if command and request.type == "confirm_fields":
                     context.data["display_blocks"] = [MealResponse.model_validate(b) for b in decision.domain_state.get("displayBlocks", [])]
-                    context.data["speech_text"] = message
+                    context.data["speech_text"] = command_confirmation
                 elif command:
                     if decision.intent is None or decision.intent == Intent.OTHER:
                         decision.intent = Intent.MEAL_RECOMMENDATION
@@ -417,7 +432,7 @@ class DietOrchestrator:
                         clarify = profile.is_clarifying(result, context)
                     if not clarify:
                         self.unified.recompute(profile, context, trace, refresh_candidates=True)
-                    context.data["speech_text"] = message + "\n" + context.data.get("speech_text", "")
+                    context.data["speech_text"] = command_confirmation + "\n" + context.data.get("speech_text", "")
                 else:
                     result = self.unified.run(profile, context, trace)
                     clarify = result.outcome == "clarify"
@@ -430,7 +445,7 @@ class DietOrchestrator:
                     decision.composition = None
                 speech = context.data.get("clarify_question") if clarify else context.data.get("speech_text", "已更新。")
                 if command and clarify:
-                    speech = message + "\n" + speech
+                    speech = command_confirmation + "\n" + speech
                     context.data["clarify_question"] = speech
                 context.data["speech_text"] = speech
                 decision.messages.append(DecisionMessage(role="assistant", content=speech))
