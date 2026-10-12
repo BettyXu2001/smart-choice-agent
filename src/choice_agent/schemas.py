@@ -355,6 +355,8 @@ class DecisionQuestion(ApiModel):
     reason: str
     candidate_id: str | None = None
     criterion_key: str | None = None
+    kind: Literal["optional"] = "optional"
+    required: bool = False
     expected_impact: Literal["may_change_recommendation"] = "may_change_recommendation"
 
 

@@ -133,3 +133,31 @@ def test_runner_applies_model_and_provider_configuration_to_real_orchestrator(da
         assert disabled.status == "passed"
         assert disabled.trace_snapshot["traceId"]
         assert provider.models == []
+
+
+def test_runner_captures_full_rerank_and_explain_only_execution_paths(database):
+    case = {
+        "originalQuestion": "比较两个 Offer",
+        "caseData": {
+            "domain": "generic",
+            "setup": {"context": {"demoMode": True}},
+            "messages": [
+                "比较两个 Offer\n以下为演示候选：\nA 公司：成长快但波动大；B 公司：平台成熟且稳定。",
+                "更看重稳定",
+                "为什么不选 A 公司？",
+            ],
+            "tags": ["execution-path"],
+        },
+    }
+    with database.session_factory() as db:
+        output = EvaluationRunner(db, provider=DisabledProvider()).run_case(1, case)
+
+    assert output.status == "not_evaluated"
+    traces = output.trace_snapshot["relatedTraces"]
+    assert [trace["traceJson"]["metadata"]["executionMode"] for trace in traces] == [
+        "full",
+        "rerank",
+        "explain_only",
+    ]
+    assert all(trace["traceJson"]["metadata"].get("executedPath") for trace in traces)
+    assert traces[-1]["traceJson"]["metadata"]["candidatePool"]["reused"] is True

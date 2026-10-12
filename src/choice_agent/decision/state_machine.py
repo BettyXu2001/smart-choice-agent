@@ -25,7 +25,12 @@ _ALLOWED_TRANSITIONS: dict[DecisionStatus, set[DecisionStatus]] = {
         DecisionStatus.DECIDED,
     },
     DecisionStatus.SEARCHING: {DecisionStatus.COMPARING, DecisionStatus.DECIDED},
-    DecisionStatus.COMPARING: {DecisionStatus.CLARIFYING, DecisionStatus.COMPARING, DecisionStatus.DECIDED},
+    DecisionStatus.COMPARING: {
+        DecisionStatus.CLARIFYING,
+        DecisionStatus.SEARCHING,
+        DecisionStatus.COMPARING,
+        DecisionStatus.DECIDED,
+    },
     DecisionStatus.DECIDED: {
         DecisionStatus.CLARIFYING,
         DecisionStatus.SEARCHING,

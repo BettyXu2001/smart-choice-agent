@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from choice_agent.agents.base import AgentContext, AgentRuntime, BaseAgent
+from choice_agent.decision.execution import ExecutionMode, plan_execution
+from choice_agent.decision.validation import validate_recommendation
 from choice_agent.domains.profile import DomainProfile, StageHandler
 
 
@@ -23,63 +25,106 @@ class StageRunResult:
 
 
 class StageRunner:
-    """The single decision-stage scheduler, extracted from the Diet pipeline."""
+    """Plan and execute the minimum safe decision-stage path for each turn."""
 
     def run(self, profile: DomainProfile, context: AgentContext, runtime: AgentRuntime) -> StageRunResult:
-        runtime.run(ProfileStage("IntentAgent", profile.intent), context)
-        context.emit_progress("understanding_requirements", "正在理解你的需求")
-        runtime.run(ProfileStage("UnderstandingAgent", profile.understand), context)
+        executed: list[str] = []
+        if not context.data.get("skip_interpretation"):
+            runtime.run(ProfileStage("IntentAgent", profile.intent), context)
+            executed.append("intent")
+            context.emit_progress("understanding_requirements", "正在理解你的需求")
+            runtime.run(ProfileStage("UnderstandingAgent", profile.understand), context)
+            executed.append("understanding")
 
-        if profile.should_run_pre_safety(context):
+            if profile.should_run_pre_safety(context):
+                runtime.run(ProfileStage("RiskAgent", profile.pre_safety), context)
+                return StageRunResult("answer", profile.phase(context))
+            if profile.should_stop_after_understanding(context):
+                self._skip(context, "Candidate Retrieval", "理解阶段已给出答复，后续候选检索跳过")
+                return StageRunResult("answer", profile.phase(context))
+            if profile.should_adjust(context):
+                runtime.run(ProfileStage("AdjustmentAgent", profile.adjust), context)
+                executed.append("adjustment")
+            if profile.should_clarify(context):
+                result = runtime.run(ProfileStage("ClarificationAgent", profile.clarify), context)
+                executed.append("clarification")
+                if profile.is_clarifying(result, context):
+                    self._skip(context, "Candidate Retrieval", "需要先补充关键信息，候选检索跳过")
+                    self._record_terminal_path(context, "blocking_clarification", executed)
+                    return StageRunResult("clarify", "CLARIFY")
+            else:
+                self._skip(context, "Constraint Update", "当前轮次无需澄清")
+
+        if context.data.get("skip_interpretation") and profile.should_run_pre_safety(context):
             runtime.run(ProfileStage("RiskAgent", profile.pre_safety), context)
+            executed.append("pre_safety")
+            self._record_terminal_path(context, "pre_safety", executed)
             return StageRunResult("answer", profile.phase(context))
-        if profile.should_stop_after_understanding(context):
-            if context.trace:
-                context.trace.node(
-                    "Candidate Retrieval",
-                    "operation",
-                    "skipped",
-                    "理解阶段已给出答复，后续候选检索跳过",
-                    input_payload={"domain": profile.key},
-                    output_payload={"phase": profile.phase(context)},
-                )
-            return StageRunResult("answer", profile.phase(context))
-        if profile.should_adjust(context):
-            runtime.run(ProfileStage("AdjustmentAgent", profile.adjust), context)
-        if profile.should_clarify(context):
-            result = runtime.run(ProfileStage("ClarificationAgent", profile.clarify), context)
-            if profile.is_clarifying(result, context):
-                if context.trace:
-                    context.trace.node(
-                        "Candidate Retrieval",
-                        "operation",
-                        "skipped",
-                        "需要先补充关键信息，候选检索跳过",
-                        input_payload={"domain": profile.key},
-                        output_payload={"question": context.data.get("clarify_question")},
-                    )
-                return StageRunResult("clarify", "CLARIFY")
-        elif context.trace:
-            context.trace.node(
-                "Constraint Update",
-                "operation",
-                "skipped",
-                "当前轮次无需澄清",
-                input_payload={"domain": profile.key},
-                output_payload={"status": context.decision.status.value if context.decision.status else None},
-            )
-        if profile.should_compose(context):
-            runtime.run(ProfileStage("PlanningAgent", profile.compose), context)
-        else:
-            runtime.run(ProfileStage("CandidateAgent", profile.source_and_rank), context)
 
-        critic = runtime.run(ProfileStage("CriticAgent", profile.critic), context)
-        if not critic.get("passed", False):
-            raise RuntimeError("候选审查失败：" + "；".join(critic.get("issues", [])))
+        if context.data.get("skip_interpretation") and profile.key != "diet":
+            if profile.should_clarify(context):
+                result = runtime.run(ProfileStage("ClarificationAgent", profile.clarify), context)
+                executed.append("clarification")
+                if profile.is_clarifying(result, context):
+                    self._skip(context, "Candidate Retrieval", "需要先补充关键信息，候选检索跳过")
+                    self._record_terminal_path(context, "blocking_clarification", executed)
+                    return StageRunResult("clarify", "CLARIFY")
+
+        plan = plan_execution(
+            profile,
+            context.decision,
+            context.data.get("execution_baseline"),
+            context.data,
+        )
+        self._record_plan(context, plan)
+        context.emit_progress("execution_planned", f"按 {plan.mode.value} 路径执行", executionMode=plan.mode.value, plannedPath=list(plan.planned_path))
+
+        if plan.mode in {ExecutionMode.FULL, ExecutionMode.REFRESH}:
+            handler, stage_name, step = profile.source_and_rank, "CandidateAgent", "candidate_refresh"
+            if profile.should_compose(context):
+                handler, stage_name, step = profile.compose, "PlanningAgent", "composition"
+            runtime.run(ProfileStage(stage_name, handler), context)
+            executed.append(step)
+            self._critic(profile, context, runtime, executed)
+        elif plan.mode == ExecutionMode.RERANK:
+            handler, stage_name, step = profile.rerank, "RankAgent", "rerank"
+            if profile.should_compose(context):
+                handler, stage_name, step = profile.compose, "PlanningAgent", "composition"
+            runtime.run(ProfileStage(stage_name, handler), context)
+            executed.append(step)
+            self._critic(profile, context, runtime, executed)
+        else:
+            self._skip(context, "Candidate Retrieval", plan.reason)
+            self._skip(context, "Ranking", plan.reason)
+            self._skip(context, "CriticAgent", plan.reason)
+
+        status_before = context.decision.status
+        next_action_before = context.decision.next_action
+        context.emit_progress("explaining_recommendation", "正在整理结论与依据", executionMode=plan.mode.value)
         runtime.run(ProfileStage("ExplanationAgent", profile.explain), context)
+        executed.append("what_if" if plan.mode == ExecutionMode.WHAT_IF else "explanation")
+        if plan.mode == ExecutionMode.WHAT_IF:
+            context.decision.status = status_before
+            context.decision.next_action = next_action_before
+
+        context.emit_progress("validating_recommendation", "正在校验推荐一致性", executionMode=plan.mode.value)
+        self._validate(context, executed)
         if profile.capabilities.post_safety:
             runtime.run(ProfileStage("RiskAgent", profile.post_safety), context)
+            executed.append("safety")
+        if context.trace:
+            context.trace.metadata["executedPath"] = executed
+            context.trace.turn_summary["executedPath"] = executed
+            pool_summary = context.trace.metadata.get("candidatePool", {})
+            pool_summary.update({
+                "candidateCount": len(context.decision.domain_state.get("candidatePool", [])),
+                "evidenceCount": len(context.decision.evidence),
+                "searchRunCount": len(context.decision.search_runs),
+            })
+            context.trace.metadata["candidatePool"] = pool_summary
+        context.emit_progress("recommendation_ready", "决策结果已就绪", executionMode=plan.mode.value, status=context.decision.status.value)
         return StageRunResult("answer", profile.phase(context))
+
     def recompute(
         self,
         profile: DomainProfile,
@@ -87,18 +132,101 @@ class StageRunner:
         runtime: AgentRuntime,
         refresh_candidates: bool,
     ) -> StageRunResult:
-        if profile.should_run_pre_safety(context):
-            runtime.run(ProfileStage("RiskAgent", profile.pre_safety), context)
-            return StageRunResult("answer", profile.phase(context))
-        handler = profile.source_and_rank if refresh_candidates else profile.rerank
-        stage_name = "CandidateAgent" if refresh_candidates else "RankAgent"
-        if profile.should_compose(context):
-            handler, stage_name = profile.compose, "PlanningAgent"
-        runtime.run(ProfileStage(stage_name, handler), context)
+        context.data["skip_interpretation"] = True
+        context.data["requested_execution_mode"] = (
+            ExecutionMode.REFRESH if refresh_candidates else ExecutionMode.RERANK
+        )
+        return self.run(profile, context, runtime)
+
+    @staticmethod
+    def _record_terminal_path(context: AgentContext, mode: str, executed: list[str]) -> None:
+        if not context.trace:
+            return
+        context.trace.metadata.update({
+            "executionMode": mode,
+            "plannedPath": list(executed),
+            "executedPath": list(executed),
+            "skipReasons": {"candidate_refresh": "阻塞性澄清尚未完成"},
+        })
+        context.trace.turn_summary.update({
+            "executionMode": mode,
+            "plannedPath": list(executed),
+            "executedPath": list(executed),
+        })
+
+    @staticmethod
+    def _critic(profile, context, runtime, executed: list[str]) -> None:
         critic = runtime.run(ProfileStage("CriticAgent", profile.critic), context)
+        executed.append("critic")
         if not critic.get("passed", False):
             raise RuntimeError("候选审查失败：" + "；".join(critic.get("issues", [])))
-        runtime.run(ProfileStage("ExplanationAgent", profile.explain), context)
-        if profile.capabilities.post_safety:
-            runtime.run(ProfileStage("RiskAgent", profile.post_safety), context)
-        return StageRunResult("answer", profile.phase(context))
+
+    @staticmethod
+    def _validate(context: AgentContext, executed: list[str]) -> None:
+        before = context.trace.snapshot(context.decision) if context.trace else None
+        node_id = context.trace.start_node(
+            "Final Validation", "operation", "校验正式推荐不变量"
+        ) if context.trace else None
+        try:
+            result = validate_recommendation(context.decision)
+        except Exception as error:
+            if context.trace and node_id:
+                context.trace.finish_node(node_id, "failed", error=str(error))
+            raise
+        if context.trace and node_id:
+            context.trace.finish_node(
+                node_id,
+                "success",
+                output_payload=result,
+                changes=context.trace.diff(before, context.decision) if before else [],
+            )
+        executed.append("validation")
+
+    @staticmethod
+    def _record_plan(context: AgentContext, plan) -> None:
+        context.data["execution_plan"] = plan
+        if not context.trace:
+            return
+        pool = context.decision.domain_state.get("candidatePool", [])
+        source = context.decision.domain_state.get("source", {})
+        pool_summary = {
+            "candidateCount": len(pool),
+            "reused": plan.mode in {ExecutionMode.RERANK, ExecutionMode.EXPLAIN_ONLY, ExecutionMode.WHAT_IF},
+            "sourceMode": source.get("mode"),
+            "evidenceCount": len(context.decision.evidence),
+            "searchRunCount": len(context.decision.search_runs),
+        }
+        context.trace.metadata.update({
+            "executionMode": plan.mode.value,
+            "plannedPath": list(plan.planned_path),
+            "skipReasons": plan.skip_reasons,
+            "candidatePool": pool_summary,
+        })
+        context.trace.turn_summary.update({
+            "executionMode": plan.mode.value,
+            "planReason": plan.reason,
+            "plannedPath": list(plan.planned_path),
+        })
+        context.trace.node(
+            "Execution Plan",
+            "operation",
+            "success",
+            plan.reason,
+            output_payload={
+                "mode": plan.mode.value,
+                "plannedPath": list(plan.planned_path),
+                "skipReasons": plan.skip_reasons,
+            },
+        )
+
+    @staticmethod
+    def _skip(context: AgentContext, stage: str, reason: str) -> None:
+        if context.trace:
+            context.trace.node(
+                stage,
+                "operation",
+                "skipped",
+                reason,
+                input_payload={"domain": context.decision.domain},
+                output_payload={"status": context.decision.status.value},
+            )

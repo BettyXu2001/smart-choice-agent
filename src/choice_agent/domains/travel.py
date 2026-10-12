@@ -37,6 +37,9 @@ class TravelProfile(ComparisonProfile):
         fields = context.decision.domain_state.get("conversationFields", {})
         return not fields.get("departure", {}).get("value") or not fields.get("days", {}).get("value")
 
+    def retrieval_sensitive_fields(self) -> set[str]:
+        return {"departure", "days"}
+
     def clarification_prompt(self, context) -> str:
         fields = context.decision.domain_state.get("conversationFields", {})
         missing_departure = not fields.get("departure", {}).get("value")

@@ -126,7 +126,7 @@ class GenericRankingEngine:
                 )
                 continue
             hard_detail: dict[str, Any] | None = {}
-            hard_failure = self._hard_constraint_failure(decision, candidate, hard_detail)
+            hard_failure = self.hard_constraint_failure(decision, candidate, hard_detail)
             if hard_failure == "missing":
                 counts["missingDataExcluded"] += 1
                 eliminated.append(
@@ -194,9 +194,9 @@ class GenericRankingEngine:
         return ranked
 
     def _violates_hard_constraint(self, decision: DecisionState, candidate: Candidate) -> bool:
-        return self._hard_constraint_failure(decision, candidate) is not None
+        return self.hard_constraint_failure(decision, candidate) is not None
 
-    def _hard_constraint_failure(
+    def hard_constraint_failure(
         self,
         decision: DecisionState,
         candidate: Candidate,
@@ -278,3 +278,11 @@ class GenericRankingEngine:
                     )
                 return "violation"
         return None
+
+    def _hard_constraint_failure(
+        self,
+        decision: DecisionState,
+        candidate: Candidate,
+        detail: dict[str, Any] | None = None,
+    ) -> str | None:
+        return self.hard_constraint_failure(decision, candidate, detail)

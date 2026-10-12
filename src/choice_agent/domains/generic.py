@@ -34,6 +34,9 @@ class GenericProfile(ComparisonProfile):
         manual = context.decision.domain_state.get("manualCandidates", [])
         return len(manual) < 2
 
+    def retrieval_sensitive_fields(self) -> set[str]:
+        return {"target"}
+
     def explain(self, context):
         if len(context.decision.domain_state.get("manualCandidates", [])) < 2:
             context.decision.recommendation = None

@@ -26,13 +26,15 @@ User Request
     ↓
 Orchestrator
     ↓
-Intent / Understanding / Clarification
+Intent / Understanding / Blocking Clarification
     ↓
-Candidate Retrieval + Evidence
+Execution Planner (full / refresh / rerank / explain-only / what-if)
     ↓
-Deterministic Filter & Ranking
+Candidate Retrieval + Evidence (only when required)
     ↓
-Critic + Explanation + Risk
+Deterministic Filter & Ranking (reuses candidatePool when safe)
+    ↓
+Critic + Explanation + Final Validation + Risk
     ↓
 Recommendation
     ↓
@@ -110,6 +112,8 @@ http://127.0.0.1:8000/docs
 
 The core deterministic workflow can run without an LLM API key.
 
+Each turn records its planned and executed path in Trace. Demo mode always uses fixture candidates and rule-based interpretation/explanation, even when model or Web Search credentials are configured.
+
 ## Documentation
 
 For detailed architecture and design decisions, see:
@@ -128,7 +132,7 @@ For detailed architecture and design decisions, see:
 
 Smart Choice Agent 面向旅行、饮食等复杂选择场景，将用户的模糊需求转化为：
 
-**理解需求 → 澄清信息 → 比较候选 → 约束过滤 → 多维排序 → 权衡解释 → 效果评估**
+**理解需求 → 阻塞澄清 → 执行规划 → 按需检索 / 重排 / 解释 → 推荐校验 → 效果评估**
 
 ## 核心亮点
 
@@ -137,6 +141,7 @@ Smart Choice Agent 面向旅行、饮食等复杂选择场景，将用户的模�
 * **Orchestrator + 专职 Agent**：拆分意图理解、澄清、候选准备、审查、解释和风险处理。
 * **评估与回归**：支持多维指标、Bad Case、Regression Dataset 和版本对比。
 * **Trace 与 Fallback**：记录 Agent 执行、状态变化、耗时、异常和降级路径。
+* **增量执行**：每轮按 `full / refresh / rerank / explain-only / what-if` 选择最小安全路径；Trace 记录计划、实际路径、跳过原因和候选池摘要。
 
 ## 整体架构
 

@@ -37,6 +37,9 @@ class ShoppingProfile(ComparisonProfile):
     def needs_clarification(self, context) -> bool:
         return context.decision.domain_state.get("conversationFields", {}).get("category", {}).get("value") is None
 
+    def retrieval_sensitive_fields(self) -> set[str]:
+        return {"category", "usage"}
+
     def matches(self, message: str) -> bool:
         return any(word in message.lower() for word in [
             "买", "购买", "选电脑", "手机", "耳机", "家电", "笔记本", "shopping", "laptop", "phone"

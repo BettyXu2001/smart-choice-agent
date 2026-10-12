@@ -1,5 +1,11 @@
 # Changelog
 
+### 2026-10-12
+
+- 决策工作流新增 full / refresh / rerank / explain-only / what-if 增量执行规划，消息与命令共用路径，并在 Trace 中记录计划、实际路径、跳过原因和候选池摘要。
+- Demo 固定使用 fixture + rules；正式推荐新增候选、硬约束与证据引用不变量校验，失败时随事务回滚。
+- 明确区分阻塞澄清与可选高价值追问，统一 DecisionStatus、流式进度和 Trace 阶段语义，并补充真实 Orchestrator / EvaluationRunner 回归覆盖。
+
 
 ### 2026-10-09
 

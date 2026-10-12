@@ -7,8 +7,11 @@ OFFER = "比较两个 Offer\n以下为演示候选：\nA 公司：AI 产品方�
 LEARNING = "选择入门 AI Agent 的学习路径\n以下为演示候选：\n结构化在线课程：路径完整、上手稳定，适合需要系统框架的学习者；开源项目实战：实践反馈快，但需要自行补齐概念和调试能力；文档与论文路线：信息质量高、自由度大，但学习路径容易分散。"
 
 
-def start(service, text=OFFER, domain="generic"):
-    return service.create(1,GenericDecisionRequest(message=text,domain=domain,context={"demoMode":True,"searchMode":"fixture"}))
+def start(service, text=OFFER, domain="generic", demo=True):
+    context = {"searchMode": "fixture"}
+    if demo:
+        context["demoMode"] = True
+    return service.create(1,GenericDecisionRequest(message=text,domain=domain,context=context))
 
 
 def say(service, result, text):
@@ -109,7 +112,7 @@ class GroundedModel:
 
 def test_model_receives_context_even_when_rules_extract_a_field(database):
     with database.session_factory() as db:
-        model=GroundedModel();service=GenericDecisionOrchestrator(db,provider=model);first=start(service)
+        model=GroundedModel();service=GenericDecisionOrchestrator(db,provider=model);first=start(service, demo=False)
         model.calls.clear()
         result=say(service,first,"更看重稳定，为什么选它？")
         assert len(model.calls)==2
@@ -133,7 +136,7 @@ def test_invalid_model_explanations_fall_back_to_grounded_rules(database,failure
                 else: raise TimeoutError("simulated")
             return value
     with database.session_factory() as db:
-        service=GenericDecisionOrchestrator(db,provider=InvalidModel());first=start(service)
+        service=GenericDecisionOrchestrator(db,provider=InvalidModel());first=start(service, demo=False)
         result=say(service,first,"更看重稳定")
         assert chosen_name(result)=="B 公司"
         assert analysis(result)["mode"]=="rules_fallback"
@@ -148,7 +151,7 @@ def test_model_cannot_recommend_filtered_candidate(database):
             return value
     with database.session_factory() as db:
         service=GenericDecisionOrchestrator(db,provider=WrongCandidate())
-        result=start(service,"买电脑，预算 7000","shopping")
+        result=start(service,"买电脑，预算 7000","shopping", demo=False)
         assert all(c.attributes["price"]<=7000 for c in result.decision_state.candidates)
         assert analysis(result)["mode"]=="rules_fallback"
         assert result.decision_state.recommendation.primary_candidate_id in {c.candidate_id for c in result.decision_state.candidates}
@@ -162,7 +165,7 @@ def test_model_candidate_update_requires_current_quote_and_known_id(database):
                 return {"fields":{},"candidate_updates":[{"candidate_id":"missing","text":"虚构信息","quote":"虚构信息","concern":False}]}
             return super().complete_json(**kwargs)
     with database.session_factory() as db:
-        service=GenericDecisionOrchestrator(db,provider=UpdateModel());result=start(service)
+        service=GenericDecisionOrchestrator(db,provider=UpdateModel());result=start(service, demo=False)
         assert not result.decision_state.domain_state["assistance"]["facts"]
         assert "模型理解不可用" in result.decision_state.domain_state["interpretationWarning"]
 
@@ -197,7 +200,7 @@ def test_quoted_model_correction_can_update_confirmed_field(database):
                 return {"fields":{},"explicit_fields":[{"key":"budget","value":9000,"quote":"预算提高到 9000 元"}]}
             return super().complete_json(**kwargs)
     with database.session_factory() as db:
-        service=GenericDecisionOrchestrator(db,provider=CorrectionModel());first=start(service,"买电脑，预算 8000","shopping")
+        service=GenericDecisionOrchestrator(db,provider=CorrectionModel());first=start(service,"买电脑，预算 8000","shopping", demo=False)
         result=say(service,first,"我现在预算提高到 9000 元")
         field=result.decision_state.domain_state["conversationFields"]["budget"]
         assert field["value"]==9000 and field["confirmed"]
@@ -211,7 +214,7 @@ def test_ungrounded_model_correction_cannot_override_confirmed_field(database):
                 return {"fields":{},"explicit_fields":[{"key":"budget","value":99999,"quote":data["message"]}]}
             return super().complete_json(**kwargs)
     with database.session_factory() as db:
-        service=GenericDecisionOrchestrator(db,provider=BadCorrection());first=start(service,"买电脑，预算 8000","shopping")
+        service=GenericDecisionOrchestrator(db,provider=BadCorrection());first=start(service,"买电脑，预算 8000","shopping", demo=False)
         result=say(service,first,"再帮我比较")
         assert result.decision_state.domain_state["conversationFields"]["budget"]["value"]==8000
         assert "模型理解不可用" in result.decision_state.domain_state["interpretationWarning"]

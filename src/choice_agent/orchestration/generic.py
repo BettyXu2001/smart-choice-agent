@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from choice_agent.agents.base import AgentContext
 from choice_agent.config import Settings
 from choice_agent.decision.commands import apply_command
+from choice_agent.decision.execution import command_execution_mode
 from choice_agent.decision.profile_injection import apply_user_profile_to_decision
 from choice_agent.decision.selector import normalize_avoid_recent_count, normalize_strategy
 from choice_agent.decision.state_machine import assert_expected_revision, DecisionRevisionError
@@ -140,6 +141,7 @@ class GenericDecisionOrchestrator:
         decision.domain_state["pendingReceipt"] = receipt
         profile = self.registry.get(decision.domain)
         from choice_agent.decision.what_if import official_baseline
+        execution_baseline = decision.model_copy(deep=True)
         baseline = official_baseline(decision)
         decision.context = {**decision.context, **self._safe_context(request.context)}
         decision.messages.append(DecisionMessage(role="user", content=message))
@@ -147,7 +149,7 @@ class GenericDecisionOrchestrator:
             {"role": "user", "content": message}
         )
         decision.agent_runs = []
-        return self._run(user_id, profile, decision, message, request.expected_revision, baseline)
+        return self._run(user_id, profile, decision, message, request.expected_revision, baseline, execution_baseline)
 
     def command(
         self, user_id: int, decision_id: str, request: DecisionCommandRequest
@@ -167,6 +169,7 @@ class GenericDecisionOrchestrator:
         decision.domain_state["pendingReceipt"] = receipt
         assert_expected_revision(decision.revision, request.expected_revision)
         from choice_agent.decision.what_if import official_baseline
+        execution_baseline = decision.model_copy(deep=True)
         baseline = official_baseline(decision)
         before = decision.revision
         trace_id = uuid4().hex
@@ -174,6 +177,8 @@ class GenericDecisionOrchestrator:
         with TraceScope(self.db, trace_id, decision.session_id, user_id) as trace:
             try:
                 trace.begin_turn(decision, decision.user_goal, "command", request.expected_revision)
+                if decision.context.get("demoMode"):
+                    trace.metadata["executionProfile"] = "demo_deterministic"
                 before_command = trace.snapshot(decision)
                 decision.context = {**decision.context, **self._safe_context(request.context)}
                 mutation = apply_command(decision, request)
@@ -221,29 +226,23 @@ class GenericDecisionOrchestrator:
                     user_id=user_id,
                     message=message,
                     decision=decision,
-                    data={**self._stage_data(decision), "official_baseline": baseline},
+                    data={
+                        **self._stage_data(decision),
+                        "official_baseline": baseline,
+                        "execution_baseline": execution_baseline,
+                        "requested_execution_mode": (
+                            command_execution_mode(mutation.mode)
+                            if decision.domain == "diet"
+                            or mutation.mode == "full"
+                            or request.type in {"refresh_candidates", "generate_recommendation"}
+                            else None
+                        ),
+                        "skip_interpretation": mutation.mode != "full",
+                    },
                     progress=self.progress,
                     trace=trace,
                 )
-                if mutation.mode == "full":
-                    self.unified.run(profile, context, trace)
-                elif decision.domain != "diet" and (profile.needs_clarification(context)):
-                    clarify_before = trace.snapshot(decision)
-                    profile.clarify(context)
-                    trace.node(
-                        "ClarificationAgent",
-                        "agent",
-                        "success",
-                        "直接生成澄清问题",
-                        input_payload={"message": message},
-                        output_payload={"question": context.data.get("clarify_question")},
-                        changes=trace.diff(clarify_before, decision),
-                    )
-                else:
-                    self.unified.recompute(
-                        profile, context, trace,
-                        refresh_candidates=mutation.mode == "refresh",
-                    )
+                self.unified.run(profile, context, trace)
                 speech = context.data.get("clarify_question") or context.data.get(
                     "speech_text",
                     decision.recommendation.summary if decision.recommendation else "需要更多信息。",
@@ -273,12 +272,14 @@ class GenericDecisionOrchestrator:
             display_blocks=blocks,
         )
 
-    def _run(self, user_id, profile, decision, message, expected_revision, baseline=None):
+    def _run(self, user_id, profile, decision, message, expected_revision, baseline=None, execution_baseline=None):
         trace_id = uuid4().hex
         decision.trace_refs.append(TraceReference(trace_id=trace_id, event_type="REQUEST"))
         with TraceScope(self.db, trace_id, decision.session_id, user_id) as trace:
             try:
                 trace.begin_turn(decision, message, "request", expected_revision)
+                if decision.context.get("demoMode"):
+                    trace.metadata["executionProfile"] = "demo_deterministic"
                 if baseline is not None:
                     trace.initial_snapshot = trace.snapshot(baseline)
                 trace.event(
@@ -311,7 +312,7 @@ class GenericDecisionOrchestrator:
                     user_id=user_id,
                     message=message,
                     decision=decision,
-                    data={**self._stage_data(decision), "official_baseline": baseline},
+                    data={**self._stage_data(decision), "official_baseline": baseline, "execution_baseline": execution_baseline},
                     progress=self.progress,
                     trace=trace,
                 )
@@ -377,7 +378,8 @@ class GenericDecisionOrchestrator:
     def _stage_data(self, decision: DecisionState) -> dict:
         context = decision.context
         if decision.domain != "diet":
-            return {"model_provider":self.provider,"model_name":self.settings.light_model,"main_model_name":self.settings.main_model,
+            model_provider = DisabledProvider() if context.get("demoMode") else self.provider
+            return {"model_provider":model_provider,"model_name":self.settings.light_model,"main_model_name":self.settings.main_model,
                     "recent_messages":[m.model_dump(mode="json") for m in decision.messages[-8:]]}
         return {
             "source_mode": str(context.get("sourceMode", SourceMode.PUBLIC.value)),
@@ -402,6 +404,8 @@ class GenericDecisionOrchestrator:
             default_mode = "web"
         if defaults:
             result.setdefault("searchMode", default_mode if default_mode in {"fixture", "web", "auto"} else "fixture")
+        if result.get("demoMode"):
+            result["searchMode"] = "fixture"
         return result
 
     @staticmethod

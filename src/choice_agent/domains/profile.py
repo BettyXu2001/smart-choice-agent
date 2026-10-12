@@ -100,3 +100,9 @@ class DomainProfile(ABC):
 
     def display_blocks(self, context: AgentContext) -> list[dict[str, Any]]:
         return [candidate.model_dump(mode="json", by_alias=True) for candidate in context.decision.candidates]
+
+    def retrieval_sensitive_fields(self) -> set[str]:
+        return set()
+
+    def supports_incremental_execution(self, data: dict[str, Any]) -> bool:
+        return False

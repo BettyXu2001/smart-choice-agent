@@ -70,6 +70,7 @@ class ComparisonProfile(DomainProfile):
             ]
             transition_decision(context.decision, DecisionStatus.CLARIFYING, DecisionNextAction.ASK_CLARIFY)
             context.data["speech_text"] = question
+            context.data["clarification_kind"] = "blocking"
             context.data["display_blocks"] = []
             context.decision.recommendation = None
             from choice_agent.decision.assistance import state
@@ -77,7 +78,7 @@ class ComparisonProfile(DomainProfile):
             info.pop("analysis", None)
             info.pop("currentAnalysis", None)
             info["lastQuestion"] = question
-            return {"action": "ASK", "questionToAsk": question}
+            return {"action": "ASK", "questionToAsk": question, "clarificationKind": "blocking", "required": True}
         context.decision.clarifying_questions = []
         context.decision.unanswered_questions = []
         context.decision.next_action = DecisionNextAction.SEARCH_CANDIDATES
@@ -89,6 +90,7 @@ class ComparisonProfile(DomainProfile):
         mode = str(context.decision.context.get("searchMode", "fixture")).lower()
         source_mode = "web" if mode == "web" else "fixture"
         context.emit_progress("searching_candidates", "正在寻找候选", sourceMode=source_mode)
+        transition_decision(context.decision, DecisionStatus.SEARCHING, DecisionNextAction.SEARCH_CANDIDATES)
         result = self._search(context)
         manual = ManualCandidateProvider().search(context)
         result = CompositeCandidateProvider.merge([result, manual])
@@ -231,6 +233,9 @@ class ComparisonProfile(DomainProfile):
     def explain(self, context: AgentContext) -> dict[str, Any]:
         from choice_agent.decision.assistance import explain
         return explain(context, self)
+
+    def supports_incremental_execution(self, data: dict[str, Any]) -> bool:
+        return True
 
     def display_blocks(self, context: AgentContext) -> list[dict[str, Any]]:
         if context.decision.status == DecisionStatus.CLARIFYING: return []

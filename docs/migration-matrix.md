@@ -27,6 +27,7 @@
 | 通用决策创建 API | POST /api/v1/decisions | 新增 |
 | 通用决策文本推进 API | POST /api/v1/decisions/{decision_id}/messages | 新增 |
 | Domain Plugin 注册表 | DomainRegistry + Diet/Travel/Shopping/Generic Profile | 已统一 |
+| 增量执行规划 | ExecutionPlan + StageRunner，支持 full / refresh / rerank / explain-only / what-if | Travel / Shopping / Generic 已启用；Diet 保持完整路径并复用校验与 Trace |
 | 旅行 fixture 后端领域 | TravelProfile + ComparisonProfile | 共用比较流程 |
 | 购物 fixture 后端领域 | ShoppingProfile，按商品类别选取离线模拟数据 | 已接入 |
 | 工作台编辑 | Command API + revision/CAS + EditEvent | 已接入 |
@@ -48,6 +49,8 @@
 - V2 会在聊天响应中额外返回 decisionState，旧前端会忽略该扩展字段。
 - 默认使用 SQLite；SQLAlchemy 模型保留切换 MySQL/PostgreSQL 的能力。
 - Diet、Travel、Shopping、Generic 使用同一 StageRunner；职业/学习等未知领域走 Generic 手工比较，不误路由为旅行。
+- 阻塞澄清使用 `UnansweredQuestion(required=true)` 并停止执行；排序后的高价值追问使用 `DecisionQuestion(kind=optional, required=false)`，不阻止正式推荐。
+- Demo 强制 fixture + rules；正式模式按配置使用模型和 Web Search。
 - Diet 单餐、调整、三餐、风险、评估兼容；旧 Agent 名称保留用于 Trace/Evaluation，旧 CandidateAgent/PlanningAgent 的重复实现已移除。
 - Evidence 中的 URL matched 只表示链接来自工具结果，不表示网页陈述已经独立核验；用户输入和演示数据会在 Canvas 中明确标注。
 - 仍待完成严格类型化的阶段 hook、独立 Source/Evidence Trace 和证据 freshness/conflict/coverage 完整策略。共享调度已落地不等于全部架构细化已完成。
