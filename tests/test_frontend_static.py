@@ -148,6 +148,11 @@ def test_trace_management_exports_full_trace_data_and_uses_readable_labels():
     assert "exportTraceJson" in trace
     assert "exportSessionMarkdown" in trace
     assert "sortTracesChronologically" in trace
+    assert 'tool: "工具调用"' in trace
+    assert "function toolName(node)" in trace
+    assert "function parentNodeLabel(node, nodes)" in trace
+    assert "父节点：" in trace
+    assert "工具：" in trace
 
 
 def test_run_mode_is_persistent_in_chat_and_trace_exports():
