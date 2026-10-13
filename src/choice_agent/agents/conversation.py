@@ -2,6 +2,7 @@
 import re
 from choice_agent.decision.conversation import fields, patch_fields, PRIORITIES
 from choice_agent.decision.feedback import classify_feedback, constraint_audit
+from choice_agent.schemas import Constraint, ConstraintKind
 
 _NUMBERS = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
@@ -50,6 +51,24 @@ def interpret(context, provider=None, model=None):
         patch["maxCommuteMinutes"] = commute_limit["minutes"]
         if "commuteBasis" in current:
             patch["commuteBasis"] = commute_limit["basis"]
+    elif commute_limit and d.domain == "generic":
+        d.constraints = [
+            item for item in d.constraints
+            if item.constraint_id != "dynamic:commute_minutes"
+        ]
+        d.constraints.append(Constraint(
+            key="commute_minutes",
+            constraint_id="dynamic:commute_minutes",
+            label="通勤时间上限",
+            kind=ConstraintKind.HARD,
+            operator="lte",
+            value=commute_limit["minutes"],
+            unit="分钟",
+            source="conversation",
+        ))
+        state(d)["changes"].append(
+            f"通勤时间上限：{commute_limit['minutes']} 分钟（{commute_limit['basis']}）"
+        )
     budget = re.search(r"(?:总预算|预算|不超过|不超|最多|上限)[是为改到成不超过提高增加放宽调整：:\s]*(\d+(?:\.\d+)?)\s*(万|千|k)?", text, re.I)
     if not budget and "budget" in current and current["budget"].get("value") is not None:
         budget = re.search(r"^(?:改到|改成|调整到)\s*(\d+(?:\.\d+)?)\s*(万|千|k)?(?:元)?[。！!\s]*$", text, re.I)
