@@ -24,6 +24,9 @@ class StageRunResult:
     phase: str
 
 
+MAX_CRITIC_RECOVERY_ATTEMPTS = 1
+
+
 class StageRunner:
     """Plan and execute the minimum safe decision-stage path for each turn."""
 
@@ -160,8 +163,88 @@ class StageRunner:
     def _critic(profile, context, runtime, executed: list[str]) -> None:
         critic = runtime.run(ProfileStage("CriticAgent", profile.critic), context)
         executed.append("critic")
-        if not critic.get("passed", False):
-            raise RuntimeError("候选审查失败：" + "；".join(critic.get("issues", [])))
+        if critic.get("passed", False):
+            return
+
+        attempts = int(context.data.get("critic_recovery_attempts", 0))
+        issues = list(critic.get("issues", []))
+        issue_codes = list(critic.get("issueCodes", []))
+        if attempts >= MAX_CRITIC_RECOVERY_ATTEMPTS:
+            raise RuntimeError("候选审查恢复失败（已重试 1 次）：" + "；".join(issues))
+
+        context.data["critic_recovery_attempts"] = attempts + 1
+        action = StageRunner._recover_critic_failure(
+            profile, context, runtime, executed, issue_codes
+        )
+        retry = runtime.run(ProfileStage("CriticAgent", profile.critic), context)
+        executed.append("critic_retry")
+        recovered = bool(retry.get("passed", False))
+        context.data["critic_recovery"] = {
+            "attempts": attempts + 1,
+            "action": action,
+            "issues": issues,
+            "issueCodes": issue_codes,
+            "recovered": recovered,
+        }
+        if context.trace:
+            context.trace.node(
+                "Critic Recovery",
+                "operation",
+                "success" if recovered else "failed",
+                "候选审查定向恢复成功" if recovered else "候选审查定向恢复后仍失败",
+                input_payload={"issues": issues, "issueCodes": issue_codes, "maxAttempts": MAX_CRITIC_RECOVERY_ATTEMPTS},
+                output_payload={"action": action, "retry": retry},
+            )
+        if not recovered:
+            retry_issues = list(retry.get("issues", [])) or issues
+            raise RuntimeError("候选审查恢复失败（已重试 1 次）：" + "；".join(retry_issues))
+
+    @staticmethod
+    def _recover_critic_failure(profile, context, runtime, executed: list[str], issue_codes: list[str]) -> str:
+        known_local = {"duplicate_candidate", "score_out_of_range", "excluded_candidate"}
+        pool = context.decision.domain_state.get("candidatePool", [])
+        if "duplicate_candidate" in issue_codes:
+            deduped_pool = []
+            seen_pool = set()
+            for item in pool:
+                candidate_id = str(item.get("candidateId") or item.get("candidate_id") or item.get("id") or "")
+                if candidate_id and candidate_id in seen_pool:
+                    continue
+                if candidate_id:
+                    seen_pool.add(candidate_id)
+                deduped_pool.append(item)
+            context.decision.domain_state["candidatePool"] = deduped_pool
+            deduped_candidates = []
+            seen_candidates = set()
+            for item in context.decision.candidates:
+                if item.candidate_id in seen_candidates:
+                    continue
+                seen_candidates.add(item.candidate_id)
+                deduped_candidates.append(item)
+            context.decision.candidates = deduped_candidates
+
+        if profile.should_compose(context):
+            action = "compose"
+            runtime.run(ProfileStage("PlanningAgent", profile.compose), context)
+            executed.append("critic_recovery_compose")
+        elif pool and (not issue_codes or set(issue_codes).issubset(known_local)):
+            action = "rerank"
+            runtime.run(ProfileStage("RankAgent", profile.rerank), context)
+            executed.append("critic_recovery_rerank")
+        else:
+            action = "refresh"
+            runtime.run(ProfileStage("CandidateAgent", profile.source_and_rank), context)
+            executed.append("critic_recovery_refresh")
+
+        if context.trace:
+            context.trace.fallback(
+                stage="Critic Recovery",
+                reason="Critic 首次审查失败，执行一次定向恢复",
+                from_path="critic_failed",
+                to_path=action,
+                details={"issueCodes": issue_codes, "attempt": 1, "maxAttempts": MAX_CRITIC_RECOVERY_ATTEMPTS},
+            )
+        return action
 
     @staticmethod
     def _validate(context: AgentContext, executed: list[str]) -> None:
