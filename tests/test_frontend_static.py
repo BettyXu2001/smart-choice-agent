@@ -234,6 +234,19 @@ def test_demo_entry_describes_fixture_flow_and_service_requirement():
     assert "请确认本地服务正在运行" in start
 
 
+def test_chat_renders_per_turn_candidate_source_snapshot():
+    app = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    conversation = (STATIC_JS / "conversation.js").read_text(encoding="utf-8")
+
+    assert "function renderSourceSnapshot(snapshot)" in app
+    assert "本轮候选来源" in app
+    assert "仅重新排序，没有重新搜索" in app
+    assert "Web Search" in app
+    assert "sourceSnapshot: turn?.sourceSnapshot" in conversation
+    assert "餐食库范围" in conversation
+    assert "餐食来源 ·" not in conversation
+
+
 def test_new_diet_conversation_defaults_to_public_source():
     app = (STATIC_JS / "app.js").read_text(encoding="utf-8")
     conversation = (STATIC_JS / "conversation.js").read_text(encoding="utf-8")
