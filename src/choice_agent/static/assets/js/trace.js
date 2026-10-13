@@ -70,6 +70,13 @@
             ASK: "继续提问",
             READY: "信息足够"
         },
+        kind: {
+            agent: "Agent",
+            model: "模型调用",
+            tool: "工具调用",
+            operation: "流程操作",
+            search: "搜索调用"
+        },
         stage: {
             "User Message": "用户输入",
             IntentAgent: "意图识别",
@@ -291,15 +298,27 @@
         `;
     }
 
-    function renderNode(node) {
+    function toolName(node) {
+        return node?.input?.toolName || node?.input?.request?.toolName || node?.output?.toolName || "";
+    }
+
+    function parentNodeLabel(node, nodes) {
+        if (!node?.parentId) return "";
+        const parent = nodes.find((item) => item.eventId === node.parentId);
+        return parent ? stageLabel(parent.stage) : node.parentId;
+    }
+
+    function renderNode(node, nodes) {
         const status = String(node.status || "unknown").toLowerCase();
         const shouldOpen = status === "failed" || status === "fallback";
+        const tool = toolName(node);
+        const parent = parentNodeLabel(node, nodes);
         return `
             <details class="trace-node trace-node-${escapeHtml(status)}" ${shouldOpen ? "open" : ""}>
                 <summary>
                     <span class="trace-node-index">${escapeHtml(node.sequence || "")}</span>
                     <span>
-                        <strong>${escapeHtml(stageLabel(node.stage))}</strong>
+                        <strong>${escapeHtml(stageLabel(node.stage))}${tool ? ` · ${escapeHtml(tool)}` : ""}</strong>
                         <small>${escapeHtml(formatMs(node.durationMs ?? 0))} · ${escapeHtml(node.summary || "未记录摘要")}</small>
                     </span>
                     <b>${escapeHtml(statusLabel(status))}</b>
@@ -310,8 +329,10 @@
                         ${renderChanges(node.changes)}
                     </section>
                     <div class="trace-node-meta">
-                        <span>类型：${escapeHtml(node.kind || "-")}</span>
+                        <span>类型：${escapeHtml(valueLabel(node.kind || "-", "kind"))}</span>
                         <span>阶段：${escapeHtml(node.stage || "-")}</span>
+                        ${tool ? `<span>工具：${escapeHtml(tool)}</span>` : ""}
+                        ${parent ? `<span>父节点：${escapeHtml(parent)}</span>` : ""}
                         <span>耗时：${escapeHtml(formatMs(node.durationMs ?? 0))}</span>
                     </div>
                     ${node.error ? `<div class="trace-alert">${escapeHtml(node.error)}</div>` : ""}
@@ -330,7 +351,7 @@
             <div class="trace-observability">
                 ${renderHero(trace)}
                 ${fallbackNodes.length ? `<div class="trace-alert">本轮有 ${escapeHtml(fallbackNodes.length)} 个异常/降级节点：${escapeHtml(fallbackNodes.map((node) => `${stageLabel(node.stage)}：${node.summary || statusLabel(node.status)}`).join("；"))}</div>` : ""}
-                <div class="trace-timeline" aria-label="决策过程时间轴">${nodes.map(renderNode).join("")}</div>
+                <div class="trace-timeline" aria-label="决策过程时间轴">${nodes.map((node) => renderNode(node, nodes)).join("")}</div>
                 <details class="trace-json-details raw"><summary>原始 Trace JSON</summary><pre class="json-box">${escapeHtml(safeJson(json))}</pre></details>
             </div>
         `;
