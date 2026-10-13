@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 
 from choice_agent.db_models import TraceRecord
-from choice_agent.decision.execution import ExecutionMode, plan_execution
+from choice_agent.decision.execution import ExecutionMode, capture_execution_baseline, plan_execution
 from choice_agent.decision.validation import RecommendationInvariantError, validate_recommendation
 from choice_agent.domains.shopping import ShoppingProfile
 from choice_agent.orchestration.generic import GenericDecisionOrchestrator
@@ -42,24 +42,39 @@ def _state() -> DecisionState:
 def test_execution_planner_selects_minimum_safe_path():
     profile = ShoppingProfile()
     baseline = _state()
+    baseline_inputs = capture_execution_baseline(baseline)
 
     unchanged = baseline.model_copy(deep=True)
-    assert plan_execution(profile, unchanged, baseline, {"turn_intent": "explain"}).mode == ExecutionMode.EXPLAIN_ONLY
+    assert plan_execution(profile, unchanged, baseline_inputs, {"turn_intent": "explain"}).mode == ExecutionMode.EXPLAIN_ONLY
 
     rerank = baseline.model_copy(deep=True)
     rerank.criteria[0].weight = 2
-    assert plan_execution(profile, rerank, baseline, {}).mode == ExecutionMode.RERANK
+    assert plan_execution(profile, rerank, baseline_inputs, {}).mode == ExecutionMode.RERANK
 
     refresh = baseline.model_copy(deep=True)
     refresh.domain_state["conversationFields"]["category"]["value"] = "phone"
-    assert plan_execution(profile, refresh, baseline, {}).mode == ExecutionMode.REFRESH
+    assert plan_execution(profile, refresh, baseline_inputs, {}).mode == ExecutionMode.REFRESH
 
     hypothetical = baseline.model_copy(deep=True)
-    assert plan_execution(profile, hypothetical, baseline, {"is_hypothetical": True}).mode == ExecutionMode.WHAT_IF
+    assert plan_execution(profile, hypothetical, baseline_inputs, {"is_hypothetical": True}).mode == ExecutionMode.WHAT_IF
 
     missing_pool = baseline.model_copy(deep=True)
     missing_pool.domain_state["candidatePool"] = []
-    assert plan_execution(profile, missing_pool, baseline, {}).mode == ExecutionMode.REFRESH
+    assert plan_execution(profile, missing_pool, baseline_inputs, {}).mode == ExecutionMode.REFRESH
+
+
+def test_execution_baseline_excludes_runtime_history():
+    decision = _state()
+    decision.domain_state.update({
+        "conversationTurns": [{"role": "user", "message": "历史消息"}],
+        "conversationReceipts": {"request": {"response": {"large": "snapshot"}}},
+    })
+
+    baseline = capture_execution_baseline(decision)
+
+    assert set(baseline) == {"fields", "constraints", "criteria", "excluded", "manualCandidates", "facts"}
+    assert "conversationTurns" not in baseline
+    assert "conversationReceipts" not in baseline
 
 
 def test_recommendation_invariant_rejects_inactive_reference():

@@ -245,3 +245,23 @@ def test_diet_quick_message_reuses_single_submit_path():
     assert "conversation.submitChat(input.form)" in handler
     assert handler.count("conversation.submitChat") == 1
     assert "DietApi" not in handler
+
+
+def test_chat_submission_immediately_shows_message_and_clears_composer():
+    source = (STATIC_JS / "conversation.js").read_text(encoding="utf-8")
+    send = source[
+        source.index("async function sendChatMessage"):
+        source.index("async function submitChat")
+    ]
+    operation = source[
+        source.index("async function runDietOperation"):
+        source.index("function sendDietCommand")
+    ]
+
+    assert 'state.chat.messages = [...state.chat.messages, {role: "user", text' in send
+    assert 'state.chat.draft = ""' in send
+    assert send.index('state.chat.draft = ""') < send.index("await runDietOperation")
+    assert "pendingRequestId: requestId" in send
+    assert "message.pendingRequestId !== operation.body.requestId" in operation
+    assert "state.chat.draft = operation.body.message" in operation
+    assert "state.chat.draft.trim() === operation.body.message" not in operation

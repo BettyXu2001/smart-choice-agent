@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from choice_agent.agents.base import AgentContext
 from choice_agent.config import Settings
 from choice_agent.decision.commands import apply_command
-from choice_agent.decision.execution import command_execution_mode
+from choice_agent.decision.execution import capture_execution_baseline, command_execution_mode
 from choice_agent.decision.profile_injection import apply_user_profile_to_decision
 from choice_agent.decision.selector import normalize_avoid_recent_count, normalize_strategy
 from choice_agent.decision.state_machine import assert_expected_revision, DecisionRevisionError
@@ -141,7 +141,7 @@ class GenericDecisionOrchestrator:
         decision.domain_state["pendingReceipt"] = receipt
         profile = self.registry.get(decision.domain)
         from choice_agent.decision.what_if import official_baseline
-        execution_baseline = decision.model_copy(deep=True)
+        execution_baseline = capture_execution_baseline(decision)
         baseline = official_baseline(decision)
         decision.context = {**decision.context, **self._safe_context(request.context)}
         decision.messages.append(DecisionMessage(role="user", content=message))
@@ -169,7 +169,7 @@ class GenericDecisionOrchestrator:
         decision.domain_state["pendingReceipt"] = receipt
         assert_expected_revision(decision.revision, request.expected_revision)
         from choice_agent.decision.what_if import official_baseline
-        execution_baseline = decision.model_copy(deep=True)
+        execution_baseline = capture_execution_baseline(decision)
         baseline = official_baseline(decision)
         before = decision.revision
         trace_id = uuid4().hex
@@ -238,6 +238,7 @@ class GenericDecisionOrchestrator:
                             else None
                         ),
                         "skip_interpretation": mutation.mode != "full",
+                        "requires_command_clarification": request.type in {"update_fields", "confirm_fields"},
                     },
                     progress=self.progress,
                     trace=trace,

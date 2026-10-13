@@ -186,6 +186,8 @@ understanding -> clarifying -> searching -> comparing -> explaining -> decided
 
 不为了形式统一抽取通用事务基类；只有 Generic / Diet 存在完全相同且已有测试覆盖的代码时，才提取小型 helper。
 
+实施结果：Diet 已复用共享 ExecutionMode、最终校验和 Trace path；经推荐、换一批、反馈、三餐计划和健康风险 characterization tests 验证后，保留自然语言轮次 `full` 执行以保护 hybrid recall / Composition / Risk 分支，仅让已有安全命令路径按语义选择 `rerank` / `refresh`，不扩大增量执行边界。
+
 ### 12. 扩充 Regression Dataset 和确定性断言
 
 扩展 `evaluation/fixtures.py`、`evaluation/runner.py` 和 deterministic evaluator：
@@ -300,27 +302,27 @@ understanding -> clarifying -> searching -> comparing -> explaining -> decided
 
 ### P0
 
-- [ ] 新增纯规则 ExecutionMode / ExecutionPlan 与计划矩阵。
-- [ ] 为 Travel / Shopping / Generic 声明检索敏感字段和增量执行能力。
-- [ ] 让 StageRunner 支持 full / refresh / rerank / explain-only / what-if。
-- [ ] 让自然语言消息与结构化命令共用执行计划。
-- [ ] 将 Demo 固定为 fixture + rules 确定性执行配置。
-- [ ] 新增最终 Recommendation 不变量校验并接入 rollback / Trace。
-- [ ] 完成 P0 专项测试、局部验证和行为验证。
+- [x] 新增纯规则 ExecutionMode / ExecutionPlan 与计划矩阵。
+- [x] 为 Travel / Shopping / Generic 声明检索敏感字段和增量执行能力。
+- [x] 让 StageRunner 支持 full / refresh / rerank / explain-only / what-if。
+- [x] 让自然语言消息与结构化命令共用执行计划。
+- [x] 将 Demo 固定为 fixture + rules 确定性执行配置。
+- [x] 新增最终 Recommendation 不变量校验并接入 rollback / Trace。
+- [x] 完成 P0 专项测试、局部验证和行为验证。
 
 ### P1
 
-- [ ] 明确 blocking clarification 与 optional decision question 的结构化语义。
-- [ ] 统一 DecisionStatus、progress 和 Trace 阶段映射。
-- [ ] Trace 增加 plannedPath / executedPath / skipReasons / candidatePool 使用摘要。
-- [ ] 完成 P1 专项测试、流式验证和旧状态兼容验证。
+- [x] 明确 blocking clarification 与 optional decision question 的结构化语义。
+- [x] 统一 DecisionStatus、progress 和 Trace 阶段映射。
+- [x] Trace 增加 plannedPath / executedPath / skipReasons / candidatePool 使用摘要。
+- [x] 完成 P1 专项测试、流式验证和旧状态兼容验证。
 
 ### P2
 
-- [ ] 让 Diet 复用 ExecutionMode、最终校验和 Trace path，同时保护领域特有分支。
-- [ ] 在 characterization tests 证明安全后，选择性启用 Diet 增量执行。
-- [ ] 为所有执行模式增加真实 Orchestrator Regression Cases 和确定性断言。
-- [ ] 运行 core regression、fault injection 和 Baseline / Candidate 兼容检查。
-- [ ] 更新 README、migration matrix 和 CHANGELOG。
-- [ ] 执行完整测试、编译、JS 语法、diff 和真实行为验证。
-- [ ] 检查最终 diff、逐项核对 Todo，并说明任何未验证项或剩余风险。
+- [x] 让 Diet 复用 ExecutionMode、最终校验和 Trace path，同时保护领域特有分支。
+- [x] 在 characterization tests 证明安全后，选择性启用 Diet 增量执行。
+- [x] 为所有执行模式增加真实 Orchestrator Regression Cases 和确定性断言。
+- [x] 运行 core regression、fault injection 和 Baseline / Candidate 兼容检查。
+- [x] 更新 README、migration matrix 和 CHANGELOG。
+- [x] 执行完整测试、编译、JS 语法、diff 和真实行为验证。
+- [x] 检查最终 diff、逐项核对 Todo，并说明任何未验证项或剩余风险。

@@ -38,6 +38,8 @@ class StageRunner:
 
             if profile.should_run_pre_safety(context):
                 runtime.run(ProfileStage("RiskAgent", profile.pre_safety), context)
+                executed.append("pre_safety")
+                self._record_terminal_path(context, "pre_safety", executed)
                 return StageRunResult("answer", profile.phase(context))
             if profile.should_stop_after_understanding(context):
                 self._skip(context, "Candidate Retrieval", "理解阶段已给出答复，后续候选检索跳过")
@@ -61,7 +63,7 @@ class StageRunner:
             self._record_terminal_path(context, "pre_safety", executed)
             return StageRunResult("answer", profile.phase(context))
 
-        if context.data.get("skip_interpretation") and profile.key != "diet":
+        if context.data.get("requires_command_clarification") and profile.key != "diet":
             if profile.should_clarify(context):
                 result = runtime.run(ProfileStage("ClarificationAgent", profile.clarify), context)
                 executed.append("clarification")
@@ -146,7 +148,7 @@ class StageRunner:
             "executionMode": mode,
             "plannedPath": list(executed),
             "executedPath": list(executed),
-            "skipReasons": {"candidate_refresh": "阻塞性澄清尚未完成"},
+            "skipReasons": {"candidate_refresh": "阻塞性澄清尚未完成" if mode == "blocking_clarification" else "风险预检查已终止后续执行"},
         })
         context.trace.turn_summary.update({
             "executionMode": mode,

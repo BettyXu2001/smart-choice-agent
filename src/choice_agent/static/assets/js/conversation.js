@@ -353,7 +353,6 @@ window.createConversation = function(deps) {
             const loaded = await loadCurrent();
             if (generation !== state.chat.generation) return;
             syncDietState(loaded.decisionState || response.decisionState);
-            if (operation.kind === "chat" && state.chat.draft.trim() === operation.body.message) state.chat.draft = "";
             if (operation.kind === "command") state.chat.editFields = null;
             state.chat.retry = null;
             state.chat.progress = [];
@@ -368,10 +367,17 @@ window.createConversation = function(deps) {
                     if (generation !== state.chat.generation) return;
                     syncDietState(loaded.decisionState);
                     state.chat.error = "条件已被另一处更新。已加载最新状态，你的草稿仍保留，请检查后重新提交。";
+                    if (operation.kind === "chat" && !state.chat.draft.trim()) state.chat.draft = operation.body.message;
                     state.chat.retry = null;
             state.chat.progress = [];
                 } catch (reloadError) { state.chat.error += `；读取最新状态失败：${reloadError.message}`; }
-            } else if (error.status && error.status < 500) state.chat.retry = null;
+            } else if (error.status && error.status < 500) {
+                state.chat.retry = null;
+                if (operation.kind === "chat") {
+                    state.chat.messages = state.chat.messages.filter(message => message.pendingRequestId !== operation.body.requestId);
+                    if (!state.chat.draft.trim()) state.chat.draft = operation.body.message;
+                }
+            }
         } finally {
             if (generation === state.chat.generation) { state.chat.sending = false; renderChat(); }
         }
@@ -476,8 +482,11 @@ window.createConversation = function(deps) {
     async function sendChatMessage(message) {
         const text = String(message || "").trim();
         if (!text || state.chat.sending || state.chat.retry) return;
-        state.chat.draft = text;
-        await runDietOperation({kind: "chat", body: {requestId: crypto.randomUUID(), message: text,
+        const requestId = crypto.randomUUID();
+        state.chat.messages = [...state.chat.messages, {role: "user", text, meals: [], choices: [],
+            sessionId: state.chat.sessionId, pendingRequestId: requestId}];
+        state.chat.draft = "";
+        await runDietOperation({kind: "chat", body: {requestId, message: text,
             sourceMode: state.chat.sourceMode, expectedRevision: state.chat.decision?.revision || 0, context: {}}});
     }
     async function submitChat(form) {
