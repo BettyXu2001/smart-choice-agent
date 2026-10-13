@@ -35,6 +35,24 @@ class DietMealProvider:
 
     def search(self, context: AgentContext) -> CandidateSearchResult:
         source_mode = SourceMode(context.data["source_mode"])
+        if context.trace and hasattr(context.trace, "tool_call"):
+            return context.trace.tool_call(
+                stage="Candidate Retrieval",
+                tool_name="diet_meal_database",
+                input_payload={
+                    "sourceMode": source_mode.value,
+                    "userId": context.user_id if source_mode == SourceMode.PERSONAL else None,
+                },
+                call=lambda: self._search(context, source_mode),
+                output_mapper=lambda result: {
+                    "candidateCount": len(result.candidates),
+                    "sourceCount": len(result.sources),
+                    "runId": result.run.run_id if result.run else None,
+                },
+            )
+        return self._search(context, source_mode)
+
+    def _search(self, context: AgentContext, source_mode: SourceMode) -> CandidateSearchResult:
         meals = self.repository.list_meals(source_mode, context.user_id)
         context.data["meal_records_by_id"] = {str(meal.id): meal for meal in meals}
         source_id = f"diet:{source_mode.value.lower()}"
