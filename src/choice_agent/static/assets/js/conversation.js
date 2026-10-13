@@ -25,7 +25,7 @@ window.createConversation = function(deps) {
                 assistantIndex += 1;
             }
             return { role: m.role, text: m.content, meals: isGeneral() ? [] : turn?.displayBlocks || [], choices: isGeneral() ? turn?.displayBlocks || [] : [],
-                analysis: turn?.analysis, traceId: turn?.traceId, sessionId: decision.sessionId };
+                analysis: turn?.analysis, sourceSnapshot: turn?.sourceSnapshot, traceId: turn?.traceId, sessionId: decision.sessionId };
         });
     }
     async function initializeDiet() {
@@ -283,7 +283,7 @@ window.createConversation = function(deps) {
             </section>
             ${d?.status === "clarifying" ? `<section class="diet-panel-section"><h4>还需补充</h4><p>${escapeHtml((d.clarifyingQuestions || []).join(" "))}</p><button class="btn soft" data-diet-action="focus">补充一下</button></section>` : ""}
             <section class="diet-panel-section" aria-busy="${state.chat.sending}"><div class="card-title"><h4>当前推荐</h4><span role="status">${state.chat.sending ? "更新中…" : ""}</span></div>${results}</section>
-            <details class="diet-panel-section"><summary>餐食来源 · ${state.chat.sourceMode === "PERSONAL" ? "个人餐食库" : "公共餐食库"}</summary><div class="button-row"><button class="btn soft" data-diet-action="source" data-source="PERSONAL" ${busy}>个人餐食</button><button class="btn soft" data-diet-action="source" data-source="PUBLIC" ${busy}>公共餐食</button><a href="#/diet/meals/personal">管理餐食</a></div></details>
+            <details class="diet-panel-section"><summary>餐食库范围 · ${state.chat.sourceMode === "PERSONAL" ? "个人餐食库" : "公共餐食库"}</summary><div class="button-row"><button class="btn soft" data-diet-action="source" data-source="PERSONAL" ${busy}>个人餐食</button><button class="btn soft" data-diet-action="source" data-source="PUBLIC" ${busy}>公共餐食</button><a href="#/diet/meals/personal">管理餐食</a></div></details>
         </aside>`;
     }
     function renderRunModeNotice(runMode) {
