@@ -145,126 +145,38 @@ class CriticAgent(BaseAgent):
     def execute(self, context: AgentContext) -> dict[str, Any]:
         display: list[DietDisplayCandidate] = context.data.get("diet_display_candidates", [])
         issues: list[str] = []
+        issue_codes: list[str] = []
         if display:
             ids = [item.candidate.candidate_id for item in display]
             excluded = {str(item) for item in context.data.get("exclude_ids", [])}
             excluded.update(str(item) for item in context.decision.excluded_candidates)
             if len(ids) != len(set(ids)):
                 issues.append("候选项存在重复")
-            if any(item.score < 0 or item.score > 1 for item in display):
+                issue_codes.append("duplicate_candidate")
+            if any(item.candidate.score < 0 or item.candidate.score > 1 for item in display):
                 issues.append("候选评分超出范围")
+                issue_codes.append("score_out_of_range")
             if set(ids) & excluded:
                 issues.append("候选包含明确排除项")
+                issue_codes.append("excluded_candidate")
             context.data["critic_issues"] = issues
-            return {"passed": not issues, "issues": issues}
+            return {"passed": not issues, "issues": issues, "issueCodes": issue_codes}
 
         ranked: list[RankedMeal] = context.data.get("ranked", [])
-        ids = [item.meal.id for item in ranked]
+        ids = [str(item.meal.id) for item in ranked]
+        excluded = {str(item) for item in context.data.get("exclude_ids", [])}
+        excluded.update(str(item) for item in context.decision.excluded_candidates)
         if len(ids) != len(set(ids)):
             issues.append("候选项存在重复")
+            issue_codes.append("duplicate_candidate")
         if any(item.score < 0 or item.score > 1 for item in ranked):
             issues.append("候选评分超出范围")
-        if set(ids) & set(context.data.get("exclude_ids", [])):
+            issue_codes.append("score_out_of_range")
+        if set(ids) & excluded:
             issues.append("候选包含明确排除项")
+            issue_codes.append("excluded_candidate")
         context.data["critic_issues"] = issues
-        return {"passed": not issues, "issues": issues}
-
-
-def _meal_response(item: RankedMeal, reason: str) -> MealResponse:
-    meal = item.meal
-    return MealResponse(
-        id=meal.id, source_type=SourceMode(meal.source_type), name=meal.name,
-        meal_time=meal.meal_time, mood=meal.mood, scene=meal.scene,
-        health_goal=meal.health_goal, cuisine=meal.cuisine, taste=meal.taste,
-        convenience=meal.convenience, match_score=item.score, reason=reason,
-    )
-
-
-_REASON_FIELD_ORDER = (
-    "meal_time", "health_goal", "taste", "scene", "convenience", "cuisine", "mood",
-)
-
-
-def _candidate_match_summary(attributes: dict[str, list[str]], slots: SlotBundle) -> dict[str, Any]:
-    matched: dict[str, list[str]] = {}
-    missing: dict[str, list[str]] = {}
-    for field in _REASON_FIELD_ORDER:
-        requested = list(getattr(slots, field) or [])
-        if not requested:
-            continue
-        available = set(attributes.get(field, []))
-        hits = [value for value in requested if value in available]
-        misses = [value for value in requested if value not in available]
-        if hits:
-            matched[field] = hits
-        if misses:
-            missing[field] = misses
-    return {"matched": matched, "missing": missing}
-
-
-def _rule_reason(name: str, attributes: dict[str, list[str]], slots: SlotBundle) -> str:
-    summary = _candidate_match_summary(attributes, slots)
-    matched = summary["matched"]
-    phrases: list[str] = []
-    templates = {
-        "meal_time": "适合{}",
-        "health_goal": "符合{}诉求",
-        "taste": "口味偏{}",
-        "scene": "适合{}场景",
-        "convenience": "具备{}特点",
-        "cuisine": "属于{}风味",
-        "mood": "贴合{}状态",
-    }
-    for field in _REASON_FIELD_ORDER:
-        values = matched.get(field)
-        if values:
-            phrases.append(templates[field].format("、".join(values)))
-
-    if not phrases:
-        phrases.append("当前标签未直接命中本轮条件")
-
-    matched_values = {value for values in matched.values() for value in values}
-    extra_labels = {
-        "taste": "口味标签",
-        "convenience": "便利标签",
-        "cuisine": "菜系标签",
-        "health_goal": "健康标签",
-    }
-    for field in ("taste", "convenience", "cuisine", "health_goal"):
-        extra = next((value for value in attributes.get(field, []) if value not in matched_values), None)
-        if extra:
-            phrases.append(f"{extra_labels[field]}还包括{extra}")
-            break
-
-    missing = summary["missing"]
-    missed = next(
-        ((field, values[0]) for field in _REASON_FIELD_ORDER if (values := missing.get(field))),
-        None,
-    )
-    missing_labels = {
-        "meal_time": "餐次",
-        "health_goal": "健康目标",
-        "taste": "口味",
-        "scene": "场景",
-        "convenience": "便利偏好",
-        "cuisine": "菜系",
-        "mood": "心情偏好",
-    }
-    reason = f"{name}{'，'.join(phrases[:3])}"
-    if missed:
-        field, value = missed
-        reason += f"；但未匹配你想要的{missing_labels[field]}“{value}”"
-    return reason + "。"
-
-
-def _reason_is_consistent(
-    reason: str,
-    attributes: dict[str, list[str]],
-    options: dict[str, list[str]],
-) -> bool:
-    candidate_values = {value for values in attributes.values() for value in values}
-    known_values = {str(value) for values in options.values() for value in values}
-    return not any(value in reason and value not in candidate_values for value in known_values)
+        return {"passed": not issues, "issues": issues, "issueCodes": issue_codes}
 
 
 class ExplanationAgent(BaseAgent):
