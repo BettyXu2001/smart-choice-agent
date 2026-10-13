@@ -19,7 +19,6 @@ def test_diet_batch_reject_refreshes_and_excludes_current_batch(database):
         service = DietOrchestrator(db, Settings(), DisabledProvider())
         first = service.chat(1, ChatRequest(
             message="晚餐想吃清淡一点",
-            request_id="diet-batch-first",
         ))
         shown = _displayed_candidate_ids(first.decision_state)
         assert shown
