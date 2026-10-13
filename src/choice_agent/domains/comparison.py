@@ -224,11 +224,18 @@ class ComparisonProfile(DomainProfile):
         candidates = context.decision.candidates
         ids = [item.candidate_id for item in candidates]
         issues: list[str] = []
+        issue_codes: list[str] = []
         if len(ids) != len(set(ids)):
             issues.append("候选项存在重复")
+            issue_codes.append("duplicate_candidate")
         if any(item.score < 0 or item.score > 1 for item in candidates):
             issues.append("候选评分超出范围")
-        return {"passed": not issues, "issues": issues}
+            issue_codes.append("score_out_of_range")
+        excluded = {str(item) for item in context.decision.excluded_candidates}
+        if set(ids) & excluded:
+            issues.append("候选包含明确排除项")
+            issue_codes.append("excluded_candidate")
+        return {"passed": not issues, "issues": issues, "issueCodes": issue_codes}
 
     def explain(self, context: AgentContext) -> dict[str, Any]:
         from choice_agent.decision.assistance import explain
