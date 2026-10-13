@@ -55,15 +55,21 @@ def test_candidate_fact_correction_removes_outdated_concern(database):
         assert len(facts)==1 and not facts[0]["concern"] and "半小时" in facts[0]["text"]
 
 
-def test_learning_background_and_time_update_without_scores(database):
+def test_learning_background_and_time_use_dynamic_generic_facts(database):
     with database.session_factory() as db:
         service=GenericDecisionOrchestrator(db);first=start(service,LEARNING)
         beginner=say(service,first,"零编程基础，每周三小时")
-        assert chosen_name(beginner)=="结构化在线课程"
-        assert beginner.decision_state.domain_state["conversationFields"]["weeklyHours"]["value"]==3
+        facts=beginner.decision_state.domain_state["assistance"]["facts"]
+        assert chosen_name(beginner) is None
+        assert any(f.get("factKey")=="background" and "零编程基础" in f["text"] for f in facts)
+        assert any(f.get("factKey")=="weekly_time" and f.get("value")==3 for f in facts)
+        assert set(beginner.decision_state.domain_state["conversationFields"])=={"target","priority"}
+
         experienced=say(service,beginner,"其实已有 Python 基础，更想动手实践")
+        facts=experienced.decision_state.domain_state["assistance"]["facts"]
         assert chosen_name(experienced)=="开源项目实战"
-        assert "已有" in experienced.decision_state.domain_state["conversationFields"]["background"]["value"]
+        assert any(f.get("factKey")=="background" and "Python" in f["text"] for f in facts)
+        assert not any(f.get("factKey")=="background" and "零编程基础" in f["text"] for f in facts)
         assert all(not c.score_breakdown for c in experienced.decision_state.candidates)
 
 
@@ -182,14 +188,16 @@ def test_followup_answers_resolve_concern_and_do_not_repeat_question(database):
         assert analysis(answered)["question"]!=analysis(concern)["question"]
 
 
-def test_learning_followup_short_answer_is_understood(database):
+def test_learning_explicit_background_followup_is_understood_without_scene_slots(database):
     with database.session_factory() as db:
         service=GenericDecisionOrchestrator(db);first=start(service,LEARNING)
         practice=say(service,first,"动手实践")
-        assert "有编程基础吗" in practice.speech_text
-        confirmed=say(service,practice,"有")
+        assert chosen_name(practice)=="开源项目实战"
+        confirmed=say(service,practice,"我有编程基础")
+        facts=confirmed.decision_state.domain_state["assistance"]["facts"]
         assert chosen_name(confirmed)=="开源项目实战"
-        assert "有编程基础吗" not in confirmed.speech_text
+        assert any(f.get("factKey")=="background" and "编程基础" in f["text"] for f in facts)
+        assert set(confirmed.decision_state.domain_state["conversationFields"])=={"target","priority"}
 
 
 def test_quoted_model_correction_can_update_confirmed_field(database):
