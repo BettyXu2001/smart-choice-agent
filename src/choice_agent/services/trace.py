@@ -271,8 +271,22 @@ class TraceScope:
         self.timeline.append(node)
         return node_id
 
-    def start_node(self, stage: str, kind: str, summary: str, input_payload: Any = None) -> str:
-        node_id = self.node(stage, kind, "running", summary, input_payload=input_payload)
+    def start_node(
+        self,
+        stage: str,
+        kind: str,
+        summary: str,
+        input_payload: Any = None,
+        parent_id: str | None = None,
+    ) -> str:
+        node_id = self.node(
+            stage,
+            kind,
+            "running",
+            summary,
+            input_payload=input_payload,
+            parent_id=parent_id,
+        )
         self.timeline[-1]["_startedPerf"] = perf_counter()
         return node_id
 
@@ -324,8 +338,17 @@ class TraceScope:
             status = "unchanged"
         return {"status": status, "before": before, "after": after}
 
-    def begin_agent_call(self) -> None:
-        self._agent_calls.append({"providerCalls": [], "fallbackReasons": []})
+    def begin_agent_call(self, parent_node_id: str | None = None) -> None:
+        self._agent_calls.append({
+            "providerCalls": [],
+            "fallbackReasons": [],
+            "parentNodeId": parent_node_id,
+        })
+
+    def _current_agent_node_id(self) -> str | None:
+        if not self._agent_calls:
+            return None
+        return self._agent_calls[-1].get("parentNodeId")
 
     def end_agent_call(self) -> dict[str, Any]:
         state = self._agent_calls.pop() if self._agent_calls else {"providerCalls": [], "fallbackReasons": []}
@@ -364,6 +387,7 @@ class TraceScope:
         call: Callable[[], Any],
         retry_count: int = 0,
         output_mapper: Callable[[Any], Any] | None = None,
+        tool_name: str | None = None,
     ) -> Any:
         provider_name = provider if isinstance(provider, str) else getattr(provider, "name", type(provider).__name__)
         fallback_metadata = ProviderCallMetadata(
@@ -372,17 +396,20 @@ class TraceScope:
             prompt_version=prompt_fingerprint(prompt_template) if prompt_template is not None else None,
             retry_count=max(0, retry_count),
         )
+        display_name = tool_name or provider_name
         node_id = self.start_node(
             stage,
             kind,
-            f"调用 {provider_name} / {model or 'unknown'}",
+            f"调用工具 {display_name}" if kind == "tool" else f"调用 {provider_name} / {model or 'unknown'}",
             input_payload={
+                "toolName": tool_name,
                 "provider": provider_name,
                 "model": model,
                 "promptVersion": fallback_metadata.prompt_version,
                 "retryCount": fallback_metadata.retry_count,
                 "request": input_payload,
             },
+            parent_id=self._current_agent_node_id(),
         )
         try:
             raw_result = call()
@@ -412,6 +439,40 @@ class TraceScope:
             node_id,
             "success",
             output_payload={**metadata.as_dict(), "result": rendered},
+        )
+        return result
+
+    def tool_call(
+        self,
+        *,
+        stage: str,
+        tool_name: str,
+        input_payload: Any,
+        call: Callable[[], Any],
+        output_mapper: Callable[[Any], Any] | None = None,
+    ) -> Any:
+        node_id = self.start_node(
+            stage,
+            "tool",
+            f"调用工具 {tool_name}",
+            input_payload={"toolName": tool_name, "arguments": input_payload},
+            parent_id=self._current_agent_node_id(),
+        )
+        try:
+            result = call()
+        except Exception as error:
+            self.finish_node(
+                node_id,
+                "failed",
+                output_payload={"toolName": tool_name, "errorType": type(error).__name__, "error": str(error)},
+                error=f"{type(error).__name__}: {error}",
+            )
+            raise
+        rendered = output_mapper(result) if output_mapper else result
+        self.finish_node(
+            node_id,
+            "success",
+            output_payload={"toolName": tool_name, "result": rendered},
         )
         return result
 
