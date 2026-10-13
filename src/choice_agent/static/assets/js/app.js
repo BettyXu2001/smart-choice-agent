@@ -1786,6 +1786,37 @@
         state.demo.decision = ChoiceAgentDemo.editCandidates(state.demo.decision);
         renderDemoWorkbench(currentRoute());
     }
+    function sourceSnapshotLabel(snapshot) {
+        return {
+            database: "餐食库 / 数据库",
+            web: "Web Search",
+            hybrid: "餐食库 + Web Search",
+            fixture: "演示候选数据",
+            manual: "用户提供"
+        }[snapshot?.source] || "当前候选";
+    }
+    function renderSourceSnapshot(snapshot) {
+        if (!snapshot) return "";
+        const execution = snapshot.retrieved
+            ? "本轮重新检索"
+            : snapshot.reusedCandidatePool
+                ? "仅重新排序，没有重新搜索"
+                : "沿用当前候选状态";
+        const warnings = (snapshot.warnings || []).map(item => `<li>${escapeHtml(item)}</li>`).join("");
+        return `
+            <details class="message-meta source-snapshot">
+                <summary>本轮候选来源 · ${escapeHtml(sourceSnapshotLabel(snapshot))}</summary>
+                <div class="demo-list compact">
+                    <div><strong>执行方式</strong><span>${escapeHtml(execution)}</span></div>
+                    <div><strong>候选来源</strong><span>${escapeHtml(sourceSnapshotLabel(snapshot))}</span></div>
+                    <div><strong>候选数量</strong><span>${escapeHtml(snapshot.candidateCount ?? "-")}</span></div>
+                    <div><strong>触发原因</strong><span>${escapeHtml(snapshot.triggerReason || "未记录")}</span></div>
+                    <div><strong>降级</strong><span>${snapshot.fallback ? "是" : "否"}</span></div>
+                </div>
+                ${warnings ? `<ul class="muted">${warnings}</ul>` : ""}
+            </details>
+        `;
+    }
     function renderMessage(message) {
         const mealCards = (message.meals || []).map((meal) => renderMealCard(meal, { compact: true, sessionId: message.sessionId })).join("") + (message.choices || []).map(c => `<article class="general-choice"><strong>${escapeHtml(c.name)}</strong><p>${escapeHtml(c.summary || "")}</p></article>`).join("");
         const historyReasons = message.analysis?.sources
@@ -1806,6 +1837,7 @@
                 ${missingSlots}
                 ${mealCards ? `<details class="diet-history"><summary>查看当时推荐</summary><div class="grid">${mealCards}</div></details>` : ""}
                 ${historyEvidence}
+                ${renderSourceSnapshot(message.sourceSnapshot)}
                 ${trace ? `<details class="message-meta"><summary>本轮详情</summary>${trace}</details>` : ""}
             </article>
         `;

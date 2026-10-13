@@ -145,29 +145,38 @@ class CriticAgent(BaseAgent):
     def execute(self, context: AgentContext) -> dict[str, Any]:
         display: list[DietDisplayCandidate] = context.data.get("diet_display_candidates", [])
         issues: list[str] = []
+        issue_codes: list[str] = []
         if display:
             ids = [item.candidate.candidate_id for item in display]
             excluded = {str(item) for item in context.data.get("exclude_ids", [])}
             excluded.update(str(item) for item in context.decision.excluded_candidates)
             if len(ids) != len(set(ids)):
                 issues.append("候选项存在重复")
-            if any(item.score < 0 or item.score > 1 for item in display):
+                issue_codes.append("duplicate_candidate")
+            if any(item.candidate.score < 0 or item.candidate.score > 1 for item in display):
                 issues.append("候选评分超出范围")
+                issue_codes.append("score_out_of_range")
             if set(ids) & excluded:
                 issues.append("候选包含明确排除项")
+                issue_codes.append("excluded_candidate")
             context.data["critic_issues"] = issues
-            return {"passed": not issues, "issues": issues}
+            return {"passed": not issues, "issues": issues, "issueCodes": issue_codes}
 
         ranked: list[RankedMeal] = context.data.get("ranked", [])
-        ids = [item.meal.id for item in ranked]
+        ids = [str(item.meal.id) for item in ranked]
+        excluded = {str(item) for item in context.data.get("exclude_ids", [])}
+        excluded.update(str(item) for item in context.decision.excluded_candidates)
         if len(ids) != len(set(ids)):
             issues.append("候选项存在重复")
+            issue_codes.append("duplicate_candidate")
         if any(item.score < 0 or item.score > 1 for item in ranked):
             issues.append("候选评分超出范围")
-        if set(ids) & set(context.data.get("exclude_ids", [])):
+            issue_codes.append("score_out_of_range")
+        if set(ids) & excluded:
             issues.append("候选包含明确排除项")
+            issue_codes.append("excluded_candidate")
         context.data["critic_issues"] = issues
-        return {"passed": not issues, "issues": issues}
+        return {"passed": not issues, "issues": issues, "issueCodes": issue_codes}
 
 
 def _meal_response(item: RankedMeal, reason: str) -> MealResponse:

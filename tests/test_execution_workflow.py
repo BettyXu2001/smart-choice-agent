@@ -211,3 +211,55 @@ def test_blocking_clarification_and_progress_share_structured_execution_semantic
     assert progress[-1]["status"] == "decided"
     assert ready_trace["metadata"]["candidatePool"]["candidateCount"] > 0
     assert ready_trace["metadata"]["candidatePool"]["searchRunCount"] > 0
+
+
+def test_critic_failure_is_repaired_once_then_rechecked(database, monkeypatch):
+    original = ShoppingProfile.critic
+
+    def flaky_critic(self, context):
+        calls = int(context.data.get("_critic_test_calls", 0)) + 1
+        context.data["_critic_test_calls"] = calls
+        if calls == 1:
+            return {
+                "passed": False,
+                "issues": ["候选评分超出范围"],
+                "issueCodes": ["score_out_of_range"],
+            }
+        return original(self, context)
+
+    monkeypatch.setattr(ShoppingProfile, "critic", flaky_critic)
+    with database.session_factory() as db:
+        service = GenericDecisionOrchestrator(db)
+        result = service.create(1, GenericDecisionRequest(
+            message="买电脑，预算 8000",
+            domain="shopping",
+            context={"demoMode": True, "searchMode": "fixture"},
+            request_id="critic-recovery-once",
+        ))
+        trace = _trace(db, result.trace_id)
+
+    critic_nodes = [node for node in trace["timeline"] if node["stage"] == "CriticAgent"]
+    recovery = next(node for node in trace["timeline"] if node["stage"] == "Critic Recovery" and node["status"] == "success")
+    assert len(critic_nodes) == 2
+    assert recovery["output"]["action"] == "rerank"
+    assert result.decision_state.recommendation is not None
+
+
+def test_critic_recovery_stops_after_one_retry(database, monkeypatch):
+    def always_fail(self, context):
+        return {
+            "passed": False,
+            "issues": ["候选评分超出范围"],
+            "issueCodes": ["score_out_of_range"],
+        }
+
+    monkeypatch.setattr(ShoppingProfile, "critic", always_fail)
+    with database.session_factory() as db:
+        service = GenericDecisionOrchestrator(db)
+        with pytest.raises(RuntimeError, match="已重试 1 次"):
+            service.create(1, GenericDecisionRequest(
+                message="买电脑，预算 8000",
+                domain="shopping",
+                context={"demoMode": True, "searchMode": "fixture"},
+                request_id="critic-recovery-fail",
+            ))

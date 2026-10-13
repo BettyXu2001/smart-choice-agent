@@ -55,7 +55,13 @@ def test_commute_limit_eliminates_known_over_limit_candidate(database):
         limited = say(service, result, "我每天最多接受 1 小时通勤", "commute-limit")
         b_id = next(item["candidateId"] for item in limited.decision_state.domain_state["manualCandidates"] if item["name"] == "B 公司")
         assert limited.decision_state.candidate_state[b_id].status == "eliminated"
-        assert limited.decision_state.domain_state["conversationFields"]["maxCommuteMinutes"]["value"] == 60
+        commute = next(
+            item for item in limited.decision_state.constraints
+            if item.constraint_id == "dynamic:commute_minutes"
+        )
+        assert commute.value == 60
+        assert commute.key == "commute_minutes"
+        assert commute.operator == "lte"
         assert limited.decision_state.recommendation.primary_candidate_id != b_id
         change = assistance(limited)["lastOfficialChange"]
         assert change["changed"] is True

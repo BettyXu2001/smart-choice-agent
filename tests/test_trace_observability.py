@@ -151,7 +151,9 @@ def test_trace_records_search_retries_and_auto_fallback_on_same_agent_run(databa
     assert len(attempts) == 2
     failed_search = [
         node for node in trace["timeline"]
-        if node["kind"] == "search" and node["status"] == "failed"
+        if node["kind"] == "tool"
+        and node.get("input", {}).get("toolName") == "web_search"
+        and node["status"] == "failed"
     ]
     assert len(failed_search) == 2
     fallback = next(node for node in trace["timeline"] if node["status"] == "fallback")

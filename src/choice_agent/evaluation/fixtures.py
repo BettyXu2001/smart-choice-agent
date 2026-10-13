@@ -192,26 +192,28 @@ def core_regression_v2_cases() -> list[EvaluationCaseCreate]:
         ],
         "learning-beginner": [
             _auto("constraint_extraction_accuracy", {"checks": [
-                {"path": "domainState.conversationFields.weeklyHours.value", "operator": "equals", "expected": 3},
+                {"path": "domainState.assistance.facts", "operator": "contains", "expected": "零编程基础"},
+                {"path": "domainState.assistance.facts", "operator": "contains", "expected": "每周三小时"},
             ]}),
-            _auto("reason_recommendation_consistency", {"requireReasons": True}),
-            _manual("reason_recommendation_consistency", "学习路径理由的语义充分性需要人工审阅。"),
+            _manual("reason_recommendation_consistency", "动态事实尚不足以确定学习路径时，不应靠 Generic 场景硬编码强行推荐。"),
         ],
         "learning-practice-correction": [
             _auto("correction_update_accuracy", {"beforeTurn": 1, "afterTurn": 2, "checks": [
-                {"path": "domainState.conversationFields.background.value", "operator": "contains", "expected": "Python"},
+                {"path": "domainState.assistance.facts", "operator": "contains", "expected": "Python"},
+            ], "absentChecks": [
+                {"path": "domainState.assistance.facts", "operator": "not_contains", "expected": "零编程基础"},
             ]}),
             _auto("correction_coverage", {"afterTurn": 2, "targets": [
-                {"path": "domainState.conversationFields.background.value", "operator": "contains", "expected": "Python"},
+                {"path": "domainState.assistance.facts", "operator": "contains", "expected": "Python"},
             ]}),
             _auto("sensitivity_to_condition_change", {"beforeTurn": 1, "afterTurn": 2, "mode": "changed"}),
             _manual("reason_recommendation_consistency", "条件变化后推荐语义是否合理需要人工审阅。"),
         ],
         "learning-short-answer": [
             _auto("constraint_extraction_accuracy", {"checks": [
-                {"path": "domainState.conversationFields.background.value", "operator": "contains", "expected": "编程基础"},
+                {"path": "domainState.assistance.facts", "operator": "contains", "expected": "编程基础"},
             ]}),
-            _manual("reason_recommendation_consistency", "短回答承接是否自然需要人工审阅。"),
+            _manual("reason_recommendation_consistency", "显式背景补充后的推荐语义需要人工审阅。"),
         ],
         "travel-fixture": [
             _auto("intent_accuracy", {"domain": "travel"}),
@@ -252,6 +254,9 @@ def core_regression_v2_cases() -> list[EvaluationCaseCreate]:
             "seedVersion": CORE_DATASET["version"],
         })
         case_data["assertions"] = assertions[suffix]
+        if suffix == "learning-short-answer":
+            case_data["messages"] = [LEARNING, "动手实践", "我有编程基础"]
+            payload["expected_behavior"] = "Generic 以动态事实承接显式背景补充，不恢复学习场景固定槽位。"
         case_data["tags"] = [CORE_DATASET["name"], CORE_DATASET["version"], *[
             tag for tag in case_data.get("tags", [])
             if tag not in {CORE_DATASET_V1["name"], CORE_DATASET_V1["version"]}

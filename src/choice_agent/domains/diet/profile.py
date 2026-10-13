@@ -87,6 +87,18 @@ class DietProfile(DomainProfile):
         if feedback_type:
             context.data["feedback_type"] = feedback_type
         if feedback_type in {"refresh_request", "batch_reject"}:
+            if feedback_type == "batch_reject":
+                display_map = context.decision.domain_state.get("displayCandidateMap", {})
+                display_blocks = context.decision.domain_state.get("displayBlocks", [])
+                rejected = [
+                    str(display_map.get(str(item.get("id")), item.get("id")))
+                    for item in display_blocks
+                    if item.get("id") is not None
+                ]
+                context.decision.excluded_candidates = sorted(set([
+                    *context.decision.excluded_candidates,
+                    *rejected,
+                ]))
             context.data["requested_execution_mode"] = "refresh"
         elif feedback_type == "recommendation_misaligned":
             audit = constraint_audit(context.decision)

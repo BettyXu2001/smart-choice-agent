@@ -16,10 +16,10 @@ def classify_feedback(message: str, *, has_candidates: bool = False) -> Feedback
     text = message.strip().lower()
     if not text:
         return None
-    if any(token in text for token in ("换一批", "刷新候选", "刷新一下", "重新搜索", "重新检索", "重新找", "再找一批")):
-        return "refresh_request"
-    if any(token in text for token in ("都不喜欢", "整批不满意", "这批不行", "这一批不行", "没有一个合适", "都不合适", "全部不合适")):
+    if any(token in text for token in ("换一批", "再找一批", "都不喜欢", "都不太想吃", "都不想吃", "这些都不想吃", "整批不满意", "这批不行", "这一批不行", "没有一个合适", "都不合适", "全部不合适")):
         return "batch_reject"
+    if any(token in text for token in ("刷新候选", "刷新一下", "重新搜索", "重新检索", "重新找")):
+        return "refresh_request"
     if any(token in text for token in ("推荐偏离", "偏离目标", "不符合目标", "方向不对", "推荐错了", "不是我要的")):
         return "recommendation_misaligned"
     if has_candidates and re.search(r"(?:不喜欢|不想要|不合适|排除|不要).+", text):

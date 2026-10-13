@@ -21,22 +21,88 @@ def hypothetical(text):
     return bool(re.search(r"如果|假如|假设|要是|会怎样|会有什么变化|会不会改变", text))
 
 
-def add_context_fact(decision, text: str) -> None:
+def add_context_fact(
+    decision,
+    text: str,
+    *,
+    fact_key: str | None = None,
+    value=None,
+    unit: str | None = None,
+) -> None:
     info = state(decision)
     facts = info.setdefault("facts", [])
-    facts[:] = [item for item in facts if not (item.get("candidateId") is None and item.get("text") == text)]
-    facts.append({
+    facts[:] = [
+        item for item in facts
+        if not (
+            item.get("candidateId") is None
+            and (
+                (fact_key is not None and item.get("factKey") == fact_key)
+                or (fact_key is None and item.get("text") == text)
+            )
+        )
+    ]
+    fact = {
         "id": "fact:" + uuid4().hex,
         "candidateId": None,
         "text": text,
         "quote": text,
         "kind": "context",
+        "factKey": fact_key,
         "concern": False,
         "source": "conversation",
         "confirmed": True,
         "revision": decision.revision + 1,
-    })
+    }
+    if value is not None:
+        fact["value"] = value
+    if unit:
+        fact["unit"] = unit
+    facts.append(fact)
     info["changes"].append("补充决策事实：" + text)
+
+
+def _generic_context_facts(text: str) -> list[dict]:
+    result: list[dict] = []
+    clauses = [item.strip() for item in re.split(r"[，,。；;]", text) if item.strip()]
+    for clause in clauses:
+        weekly = re.search(
+            r"每周[^，,。；;]{0,8}(?P<value>\d+(?:\.\d+)?|一|两|二|三|四|五|六|七|八|九|十)\s*小时",
+            clause,
+        )
+        if weekly:
+            result.append({
+                "fact_key": "weekly_time",
+                "text": clause,
+                "value": _number(weekly.group("value")),
+                "unit": "小时/周",
+            })
+            continue
+        if (
+            any(word in clause for word in ["基础", "经验", "掌握", "熟悉"])
+            and any(word.lower() in clause.lower() for word in ["编程", "python", "开发", "技术", "算法", "产品"])
+        ):
+            result.append({"fact_key": "background", "text": clause})
+    return result
+
+
+def _generic_short_priority(text: str) -> str | None:
+    value = text.strip(" ，,。！!?？；;")
+    if len(value) > 12:
+        return None
+    keywords = ("稳定", "成长", "成本", "价格", "性能", "便携", "续航", "通勤", "实践", "实战", "轻松", "风险")
+    return value if any(word in value for word in keywords) else None
+
+
+def _priority_match_terms(priority: str) -> list[str]:
+    cleaned = re.sub(r"(?:更看重|最看重|最在意|更在意|优先考虑|优先|更想)", "", priority)
+    chunks = [item for item in re.split(r"[、,，/；;\s]+", cleaned) if item]
+    terms: list[str] = []
+    for chunk in chunks:
+        if len(chunk) <= 2:
+            terms.append(chunk)
+        else:
+            terms.extend(chunk[index:index + 2] for index in range(len(chunk) - 1))
+    return list(dict.fromkeys(term for term in terms if len(term) >= 2))
 
 
 _NUMBERS = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
@@ -224,6 +290,8 @@ def prepare_turn(context):
         short_priority = re.fullmatch(r"(.{1,40}?)(?:更重要|优先|最重要)[。！]*", text)
         if short_priority:
             patch["priority"] = short_priority[1]
+        elif (inferred_priority := _generic_short_priority(text)):
+            patch["priority"] = inferred_priority
     if d.domain == "travel":
         travel_patch = _travel_patch(text, previous_question, fields(d))
         if context.data.get("simulation") and "priority" in travel_patch and not re.search(r"更看重|最看重|优先|更在意|省钱|便宜", text):
@@ -234,8 +302,9 @@ def prepare_turn(context):
         info["changes"].extend(f"{fields(d)[k]['label']}：{v}" for k,v in patch.items())
     matches = matched_candidates(d,text)
     question = context.data["turn_intent"] == "explain" or bool(re.search(r"？|吗$|多少|是否|怎么样|能不能|是不是", text))
-    if d.domain == "generic" and len(d.messages) > 1 and not matches and not question and not patch and not context.data.get("feedback_type"):
-        add_context_fact(d, text)
+    if d.domain == "generic" and len(d.messages) > 1 and not matches and not question and not context.data.get("feedback_type"):
+        for fact in _generic_context_facts(text):
+            add_context_fact(d, **fact)
     fact_cue = any(w in text for w in ["通勤", "薪资", "薪酬", "工资", "加班", "远程", "补充", "改成", "纠正", "担心", "不能接受", "不太能接受"])
     if len(matches) == 1:
         info["focusCandidateId"] = matches[0]["candidateId"]
@@ -527,16 +596,17 @@ def rule_analysis(context, decision):
     else:
         for c in candidates: c.score_breakdown=[]
         decision.domain_state["qualitative"]=True
-        # Bounded textual dimensions: these are evidence matches, never candidate scores.
-        if "稳定" in priority:
-            positive=["薪酬稳定","平台成熟","稳定性高","稳定"]
-            negative=["业务阶段较早","早期","不稳定"]
-        elif any(w in priority for w in ["成长","方向","匹配"]):
-            positive=["成长空间更大","成长空间大","方向更匹配","方向匹配"]
-            negative=["传统产品","不匹配"]
-        else: positive=[];negative=[]
-        supported=[c for c in candidates if any(w in c.summary for w in positive) and not any(w in c.summary for w in negative)]
-        if len(supported)==1: chosen=supported[0]
+        # Generic qualitative ranking stays evidence-grounded: match the expressed priority
+        # against candidate summaries instead of introducing scene-specific slots.
+        terms = _priority_match_terms(priority)
+        matched = [
+            (candidate, sum(len(term) for term in terms if term in candidate.summary))
+            for candidate in candidates
+        ]
+        best = max((score for _, score in matched), default=0)
+        supported = [candidate for candidate, score in matched if score == best and score > 0]
+        if len(supported) == 1:
+            chosen = supported[0]
         if not chosen and len(candidates)==1: chosen=candidates[0]
         if chosen and len(candidates)==1:
             result["reasons"].append(point(chosen,f"排除其他选项后只剩 {chosen.name}；它的已知取舍需要继续核对。"))
