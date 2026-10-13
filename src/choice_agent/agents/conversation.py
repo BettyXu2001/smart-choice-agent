@@ -84,6 +84,11 @@ def interpret(context, provider=None, model=None):
     from choice_agent.schemas import DecisionCommandRequest
     candidates = d.domain_state.get("candidatePool", [])
     if feedback_type in {"refresh_request", "batch_reject"}:
+        if feedback_type == "batch_reject":
+            current_ids = [str(c.get("candidateId")) for c in d.candidates if getattr(c, "candidate_id", None)]
+            if not current_ids:
+                current_ids = [str(c.get("candidateId")) for c in candidates if c.get("candidateId")]
+            d.excluded_candidates = sorted(set([*d.excluded_candidates, *current_ids]))
         context.data["requested_execution_mode"] = "refresh"
         operation = "refresh"
     elif feedback_type == "recommendation_misaligned":
