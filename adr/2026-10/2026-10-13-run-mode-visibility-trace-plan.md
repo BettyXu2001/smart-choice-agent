@@ -2,7 +2,9 @@
 
 ## 状态
 
-2026-10-13：Research 已完成，等待用户 Review 和明确实施批准。当前未修改产品代码。
+2026-10-13：用户已明确批准实施。产品代码、测试与 CHANGELOG 已完成，自动验证和本地 HTTP 行为验证通过。
+
+验证说明：真实外部 Live 调用因未使用用户 API Key 未执行；浏览器自动化辅助进程因本机沙箱初始化失败无法完成截图级检查，已用前端静态契约、完整测试套件、默认 Demo / 运行时 Live capability 和真实 fixture Trace 链路替代验证。
 
 ## 目标和成功标准
 
@@ -192,13 +194,13 @@ Badge 每次 `renderChat()` 都根据 state 重建，因此发送消息、恢复
 
 ## Todo
 
-- [ ] 新增并测试后端共享 run mode 判定。
-- [ ] 将 `run_mode` 接入通用与饮食的所有 TraceScope 入口，包括失败 Trace。
-- [ ] 扩展 capability 与前端 effective mode 状态同步。
-- [ ] 在通用 / 饮食对话标题增加常驻 Demo / Live Badge。
-- [ ] 增加按会话去重的 Demo 首次轻提示和可访问性标记。
-- [ ] 完善设置保存 / 清除后的模式切换 Toast 与 Badge 即时刷新。
-- [ ] 在 Trace 列表、详情、JSON / Markdown 与 Session 导出中体现运行模式并兼容旧 Trace。
-- [ ] 补充后端与前端专项测试。
-- [ ] 更新 `CHANGELOG.md` 的 2026-10-13 条目。
-- [ ] 执行 JS / Python / 行为验证，检查最终 diff，并记录未验证项和剩余风险。
+- [x] 新增并测试后端共享 run mode 判定。
+- [x] 将 `run_mode` 接入通用与饮食的所有 TraceScope 入口，包括失败 Trace。
+- [x] 扩展 capability 与前端 effective mode 状态同步。
+- [x] 在通用 / 饮食对话标题增加常驻 Demo / Live Badge。
+- [x] 增加按会话去重的 Demo 首次轻提示和可访问性标记。
+- [x] 完善设置保存 / 清除后的模式切换 Toast 与 Badge 即时刷新。
+- [x] 在 Trace 列表、详情、JSON / Markdown 与 Session 导出中体现运行模式并兼容旧 Trace。
+- [x] 补充后端与前端专项测试。
+- [x] 更新 `CHANGELOG.md` 的 2026-10-13 条目。
+- [x] 执行 JS / Python / 行为验证，检查最终 diff，并记录未验证项和剩余风险。

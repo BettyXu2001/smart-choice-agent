@@ -15,6 +15,7 @@ from choice_agent.providers.observability import (
     result_metadata,
 )
 from choice_agent.repositories.trace_repository import TraceRepository
+from choice_agent.run_mode import RunMode
 from choice_agent.schemas import AgentRun
 
 
@@ -171,12 +172,20 @@ def _recommendation_summary(value: Any) -> dict[str, Any] | None:
 
 
 class TraceScope:
-    def __init__(self, db: Session, trace_id: str, session_id: str, user_id: int):
+    def __init__(
+        self,
+        db: Session,
+        trace_id: str,
+        session_id: str,
+        user_id: int,
+        run_mode: RunMode = "demo",
+    ):
         self.db = db
         self.repository = TraceRepository(db)
         self.trace_id = trace_id
         self.session_id = session_id
         self.user_id = user_id
+        self.run_mode = run_mode
         self.started = perf_counter()
         self.events: list[dict[str, Any]] = []
         self.timeline: list[dict[str, Any]] = []
@@ -518,6 +527,7 @@ class TraceScope:
             "traceId": self.trace_id,
             "sessionId": self.session_id,
             "userId": self.user_id,
+            "run_mode": self.run_mode,
             "status": self.status,
             "durationMs": duration_ms,
             "schemaVersion": 3,

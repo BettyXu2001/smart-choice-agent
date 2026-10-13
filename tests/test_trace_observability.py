@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from sqlalchemy import select
 
 from choice_agent.db_models import TraceRecord
@@ -9,7 +11,7 @@ from choice_agent.domains.travel import TravelProfile
 from choice_agent.orchestration.generic import GenericDecisionOrchestrator
 from choice_agent.providers.search import OpenAIWebSearchProvider
 from choice_agent.providers.observability import ModelCompletion, ProviderCallMetadata
-from choice_agent.services.trace import _redact
+from choice_agent.services.trace import TraceScope, _redact
 from choice_agent.schemas import (
     Candidate,
     Constraint,
@@ -58,6 +60,7 @@ def test_trace_timeline_records_decision_process(database):
 
     stages = [node["stage"] for node in trace["timeline"]]
     assert trace["schemaVersion"] == 3
+    assert trace["run_mode"] == "demo"
     assert trace["metadata"]["commitStatus"] == "committed"
     assert trace["turnSummary"]["userMessage"] == "买电脑，预算 8000"
     assert "User Message" in stages
@@ -70,6 +73,17 @@ def test_trace_timeline_records_decision_process(database):
     assert "ExplanationAgent" in stages
     assert trace["recommendationChange"]["status"] == "initial"
     assert all("model_api_key" not in json.dumps(node) for node in trace["timeline"])
+
+
+def test_failed_trace_preserves_run_mode(database):
+    with database.session_factory() as db:
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            with TraceScope(db, "trace-run-mode-failure", "session-run-mode", 1, run_mode="live"):
+                raise RuntimeError("simulated failure")
+        trace = _trace_json(db, "trace-run-mode-failure")
+
+    assert trace["status"] == "FAILED"
+    assert trace["run_mode"] == "live"
 
 
 def test_trace_records_model_fallback(database):

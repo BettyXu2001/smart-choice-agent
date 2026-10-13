@@ -25,7 +25,7 @@ class TravelProfile(ComparisonProfile):
 
     def __init__(self, web_provider=None):
         super().__init__(
-            FixtureCandidateProvider("travel", TRAVEL_FIXTURES),
+            TravelFixtureProvider("travel", TRAVEL_FIXTURES),
             AttributeCriterionEvaluator({
                 "travel_hours": (0, 4), "budget": (0, 2000),
                 "relaxation": (0, 100), "crowd_level": (0, 100), "nature": (0, 100),
@@ -68,11 +68,29 @@ class TravelProfile(ComparisonProfile):
         return constraints or [Constraint(key="fit", kind=ConstraintKind.SOFT, values=["综合匹配"], source="inferred")]
 
 
+class TravelFixtureProvider(FixtureCandidateProvider):
+    def search(self, context):
+        result = super().search(context)
+        departure = context.decision.domain_state.get("conversationFields", {}).get("departure", {}).get("value")
+        for source in result.sources:
+            source.title = "旅行模拟候选（路线/预算为上海出发演示基准）"
+        if departure and departure != "上海":
+            for candidate in result.candidates:
+                candidate.attributes.pop("travel_hours", None)
+                candidate.attributes.pop("budget", None)
+                candidate.evidence = [item for item in candidate.evidence if item.criterion_key not in {"travel_hours", "budget"}]
+            result.evidence = [item for item in result.evidence if item.criterion_key not in {"travel_hours", "budget"}]
+            result.warnings.append(f"fixture 路程和预算仅为上海出发演示基准，当前从{departure}出发，不参与路线或预算评价")
+        else:
+            result.warnings.append("fixture 路程和预算是模拟参考，不是真实路线或报价")
+        return result
+
+
 TRAVEL_FIXTURES = [
-    {"id": "moganshan", "name": "莫干山", "summary": "自然景观强，适合慢节奏；周末热门民宿区可能偏贵。", "attributes": {"travel_hours": 2.5, "budget": 1450, "relaxation": 88, "crowd_level": 48, "nature": 92}},
-    {"id": "shaoxing", "name": "绍兴", "summary": "交通近、预算稳定，适合轻松城市漫游。", "attributes": {"travel_hours": 1.5, "budget": 950, "relaxation": 78, "crowd_level": 42, "nature": 58}},
-    {"id": "ningbo-dongqian", "name": "宁波东钱湖", "summary": "湖景开阔，适合轻度骑行和散步。", "attributes": {"travel_hours": 2.8, "budget": 1280, "relaxation": 84, "crowd_level": 30, "nature": 84}},
-    {"id": "suzhou", "name": "苏州", "summary": "距离最近，但核心区域周末人流较高。", "attributes": {"travel_hours": 0.6, "budget": 900, "relaxation": 68, "crowd_level": 72, "nature": 64}},
+    {"id": "moganshan", "name": "莫干山", "summary": "模拟目的地：自然景观强，适合慢节奏；周末热门民宿区可能偏贵。", "attributes": {"travel_hours": 2.5, "budget": 1450, "relaxation": 88, "crowd_level": 48, "nature": 92}},
+    {"id": "shaoxing", "name": "绍兴", "summary": "模拟目的地：交通近、预算稳定，适合轻松城市漫游。", "attributes": {"travel_hours": 1.5, "budget": 950, "relaxation": 78, "crowd_level": 42, "nature": 58}},
+    {"id": "ningbo-dongqian", "name": "宁波东钱湖", "summary": "模拟目的地：湖景开阔，适合轻度骑行和散步。", "attributes": {"travel_hours": 2.8, "budget": 1280, "relaxation": 84, "crowd_level": 30, "nature": 84}},
+    {"id": "suzhou", "name": "苏州", "summary": "模拟目的地：距离最近，但核心区域周末人流较高。", "attributes": {"travel_hours": 0.6, "budget": 900, "relaxation": 68, "crowd_level": 72, "nature": 64}},
 ]
 
 

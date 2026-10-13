@@ -101,6 +101,10 @@
         return settings.searchEnabled && Boolean(settings.searchApiKey);
     }
 
+    function configuredRunMode() {
+        return hasConfiguredModel() || hasConfiguredSearch() ? "live" : "demo";
+    }
+
     function attachModelHeaders(headers) {
         const settings = getModelSettings();
         if (!settings.enabled || !settings.apiKey) {
@@ -286,6 +290,7 @@
         clearModelSettings,
         hasConfiguredModel,
         hasConfiguredSearch,
+        configuredRunMode,
         state: (sessionId) => dietRequest(`/sessions/${encodeURIComponent(sessionId)}/state`),
         command: (sessionId, payload) => dietRequest(`/sessions/${encodeURIComponent(sessionId)}/commands`, { method: "POST", body: payload }),
         createSession: () => dietRequest("/sessions", { method: "POST" }),

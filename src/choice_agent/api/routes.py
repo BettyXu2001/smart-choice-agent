@@ -19,6 +19,7 @@ from choice_agent.orchestration.diet import DietOrchestrator
 from choice_agent.orchestration.generic import GenericDecisionOrchestrator
 from choice_agent.providers.model import ModelProvider, OpenAICompatibleProvider
 from choice_agent.providers.search import SearchProviderError
+from choice_agent.run_mode import resolve_run_mode
 from choice_agent.repositories.decision_repository import DecisionRepository
 from choice_agent.repositories.diet_repository import DietRepository
 from choice_agent.repositories.profile_repository import ProfileRepository
@@ -132,6 +133,7 @@ def search_capabilities(
         supported_domains=["diet", "shopping", "travel"],
         web_search_configured=bool(active_settings.search_api_key.strip()),
         default_search_mode=default_mode,
+        run_mode=resolve_run_mode(active_settings),
     )
 def user_id(x_user_id: int = Header(default=1, alias="X-User-Id")) -> int:
     if x_user_id < 1:

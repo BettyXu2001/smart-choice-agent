@@ -7,7 +7,22 @@ from choice_agent.config import Settings
 from choice_agent.orchestration.diet import DietOrchestrator
 from choice_agent.providers.model import DisabledProvider
 from choice_agent.repositories.diet_repository import DietRepository
+from choice_agent.run_mode import resolve_run_mode
 from choice_agent.schemas import ChatRequest, SourceMode
+
+
+def test_run_mode_uses_runtime_credentials_and_explicit_demo_override():
+    assert resolve_run_mode(Settings()) == "demo"
+    assert resolve_run_mode(Settings(enable_llm=True, model_api_key="model-key")) == "live"
+    assert resolve_run_mode(Settings(search_api_key="search-key")) == "live"
+    assert resolve_run_mode(
+        Settings(enable_llm=True, model_api_key="model-key"),
+        {"demoMode": True},
+    ) == "demo"
+    assert resolve_run_mode(
+        Settings(search_api_key="search-key"),
+        {"searchMode": "fixture"},
+    ) == "demo"
 
 
 def test_runtime_model_headers_create_enabled_temporary_provider():

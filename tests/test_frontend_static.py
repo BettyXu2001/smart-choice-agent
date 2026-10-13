@@ -150,6 +150,24 @@ def test_trace_management_exports_full_trace_data_and_uses_readable_labels():
     assert "sortTracesChronologically" in trace
 
 
+def test_run_mode_is_persistent_in_chat_and_trace_exports():
+    api = (STATIC_JS / "api.js").read_text(encoding="utf-8")
+    app = (STATIC_JS / "app.js").read_text(encoding="utf-8")
+    conversation = (STATIC_JS / "conversation.js").read_text(encoding="utf-8")
+    trace = (STATIC_JS / "trace.js").read_text(encoding="utf-8")
+
+    assert "function configuredRunMode" in api
+    assert "function resolveRunMode" in app
+    assert '已切换至 ${runModeLabel(nextMode)} 模式' in app
+    assert "demoNoticeGenerations" in conversation
+    assert 'class="run-mode-badge"' in conversation
+    assert "当前为 Demo 模式，部分推荐结果或工具调用为模拟数据。" in conversation
+    assert 'role="status"' in conversation
+    assert "json.run_mode" in trace
+    assert "运行模式" in trace
+    assert "- Run Mode:" in trace
+
+
 def test_formal_general_decision_uses_auto_search_when_configured():
     source = (STATIC_JS / "app.js").read_text(encoding="utf-8")
     submit = source[source.index("async function submitGeneralDecision") : source.index("function handleSubmit")]

@@ -48,7 +48,7 @@
             autoSending: false,
             messages: defaultChatMessages(),
             decision: null, draft: "", editFields: null, panelOpen: false,
-            initialized: false, generation: 0, retry: null, error: ""
+            initialized: false, generation: 0, retry: null, error: "", demoNoticeGenerations: new Set()
         },
         traces: {
             rows: [],
@@ -287,10 +287,12 @@
         } else if (route === "/diet") {
             navigate("/diet/chat");
         } else if (route === "/diet/chat") {
+            loadSearchCapabilities();
             conversation.enter("diet");
         } else if (route === "/demo" || route.startsWith("/demo/decision/")) {
             renderDemoWorkbench(route);
         } else if (route.startsWith("/decisions/")) {
+            loadSearchCapabilities();
             renderGenericDecision(route);
         } else if (route === "/diet/meals/personal") {
             renderPersonalMeals();
@@ -323,6 +325,25 @@
         }
         return `<div class="search-progress" role="status" aria-live="polite">${events.map((event, index) => `<div class="search-progress-row ${index === events.length - 1 ? "active" : ""}"><span></span><p>${escapeHtml(event.message || "正在处理")}</p></div>`).join("")}</div>`;
     }
+    function resolveRunMode(decision) {
+        const context = decision?.context || {};
+        const source = decision?.domainState?.source || {};
+        if (context.demoMode === true || context.searchMode === "fixture" || source.mode === "fixture") return "demo";
+        const capabilityMode = state.home.searchCapabilities?.runMode;
+        return capabilityMode === "live" || capabilityMode === "demo" ? capabilityMode : DietApi.configuredRunMode();
+    }
+
+    function runModeLabel(mode) {
+        return mode === "live" ? "Live" : "Demo";
+    }
+
+    function refreshModeSurface() {
+        const route = currentRoute();
+        if (route === "/") renderGeneralHome();
+        else if (route === "/settings") renderSettings();
+        else if (route === "/diet/chat" || route.startsWith("/decisions/")) conversation.renderChat();
+    }
+
     function loadSearchCapabilities() {
         if (state.home.searchCapabilities || state.home.capabilitiesLoading) {
             return;
@@ -333,16 +354,15 @@
             if (!capabilities.webSearchConfigured) {
                 state.home.realtimeSearch = false;
             }
-            if (currentRoute() === "/") renderGeneralHome();
+            refreshModeSurface();
         }).catch(() => {
-            state.home.searchCapabilities = {supportedDomains:["shopping","travel"], webSearchConfigured:false, defaultSearchMode:"fixture"};
+            state.home.searchCapabilities = {supportedDomains:["shopping","travel"], webSearchConfigured:false, defaultSearchMode:"fixture", runMode:DietApi.configuredRunMode()};
             state.home.realtimeSearch = false;
-            if (currentRoute() === "/") renderGeneralHome();
+            refreshModeSurface();
         }).finally(() => {
             state.home.capabilitiesLoading = false;
         });
     }
-
     function renderGeneralHome() {
         loadSearchCapabilities();
         const searchCapabilities = state.home.searchCapabilities;
@@ -815,11 +835,13 @@
         `;
     }
     function renderSettings() {
+        loadSearchCapabilities();
         const settings = DietApi.getModelSettings();
         state.settings.model = settings;
         const modelConfigured = settings.enabled && Boolean(settings.apiKey);
         const searchConfigured = settings.searchEnabled && Boolean(settings.searchApiKey);
         const configured = modelConfigured || searchConfigured;
+        const runMode = resolveRunMode();
         app.innerHTML = `
             <section class="settings-layout">
                 <div class="section settings-panel">
@@ -828,7 +850,7 @@
                             <h2>设置</h2>
                             <p>浏览器真实 API 配置</p>
                         </div>
-                        <span class="settings-status" data-mode="${configured ? "model" : "demo"}">${configured ? "真实 API" : "演示模式"}</span>
+                        <span class="settings-status" data-mode="${runMode}">${runModeLabel(runMode)}</span>
                     </div>
                     <form id="modelSettingsForm" class="settings-form">
                         <label class="toggle-row">
@@ -2080,6 +2102,8 @@
                         traceId: row.traceId,
                         sessionId: row.sessionId,
                         statusLabel: row.status || "UNKNOWN",
+                        runMode: "",
+                        runModeLabel: "未记录",
                         createdLabel: row.createdAt || "-",
                         userMessage: row.traceId,
                         intent: "-",
@@ -2093,6 +2117,7 @@
                             <span class="trace-run-top">
                                 <b>${escapeHtml(item.createdLabel)}</b>
                                 <span class="badge">${escapeHtml(item.statusLabel)}</span>
+                                <span class="run-mode-badge" data-run-mode="${escapeHtml(item.runMode || "unknown")}">${escapeHtml(item.runModeLabel)}</span>
                             </span>
                             <strong>${escapeHtml(item.userMessage)}</strong>
                             <span class="trace-run-meta">${escapeHtml(item.intent)} / ${escapeHtml(item.domain)} · ${escapeHtml(item.duration)}</span>
@@ -2408,6 +2433,7 @@
         }
     }
     function saveModelSettings(form) {
+        const previousMode = resolveRunMode();
         const formData = new FormData(form);
         try {
             state.settings.model = DietApi.saveModelSettings({
@@ -2423,17 +2449,20 @@
             });
             state.home.searchCapabilities = null;
             const active = DietApi.hasConfiguredModel() || DietApi.hasConfiguredSearch();
-            showToast(active ? "真实 API 设置已保存" : "设置已保存，当前为演示模式");
+            const nextMode = DietApi.configuredRunMode();
+            showToast(previousMode !== nextMode ? `已切换至 ${runModeLabel(nextMode)} 模式` : active ? "真实 API 设置已保存" : "Demo 模式设置已保存");
             renderSettings();
         } catch (error) {
             showToast("真实 API 设置保存失败", "error");
         }
     }
     function clearModelSettings() {
+        const previousMode = resolveRunMode();
         try {
             state.settings.model = DietApi.clearModelSettings();
             state.home.searchCapabilities = null;
-            showToast("真实 API 设置已清除，当前为演示模式");
+            const nextMode = DietApi.configuredRunMode();
+            showToast(previousMode !== nextMode ? `已切换至 ${runModeLabel(nextMode)} 模式` : "真实 API 设置已清除");
             renderSettings();
         } catch (error) {
             showToast("真实 API 设置清除失败", "error");
@@ -2689,7 +2718,7 @@
     });
     app.addEventListener("change", handleChange);
     app.addEventListener("submit", handleSubmit);
-    const conversation = window.createConversation({state, app, currentRoute, navigate, showToast, ensureSlotOptions, SLOT_LABELS, defaultChatMessages, renderMessage, renderMealCard, escapeHtml, genericRouteId, renderGeneralDetails});
+    const conversation = window.createConversation({state, app, currentRoute, navigate, showToast, ensureSlotOptions, SLOT_LABELS, defaultChatMessages, renderMessage, renderMealCard, escapeHtml, genericRouteId, renderGeneralDetails, resolveRunMode});
     const evaluationDashboard = window.createEvaluationDashboard ? window.createEvaluationDashboard({state, app, navigate, showToast, escapeHtml, safeJson, statCard, formatScore}) : null;
     const {renderChat, closeDietPanel, sendDietCommand, handleDietAction, submitChat, resetChat, prepareChatFromHome} = conversation;
     initTheme();

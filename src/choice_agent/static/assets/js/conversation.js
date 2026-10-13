@@ -1,5 +1,5 @@
 window.createConversation = function(deps) {
-    const {state, app, currentRoute, navigate, showToast, ensureSlotOptions, SLOT_LABELS, defaultChatMessages, renderMessage, renderMealCard, escapeHtml, genericRouteId, renderGeneralDetails} = deps;
+    const {state, app, currentRoute, navigate, showToast, ensureSlotOptions, SLOT_LABELS, defaultChatMessages, renderMessage, renderMealCard, escapeHtml, genericRouteId, renderGeneralDetails, resolveRunMode} = deps;
     function dietStorageKey() { return `choiceAgent.dietSession.${DietApi.getUserId()}`; }
     function rememberDietSession(sessionId) {
         try {
@@ -286,6 +286,12 @@ window.createConversation = function(deps) {
             <details class="diet-panel-section"><summary>餐食来源 · ${state.chat.sourceMode === "PERSONAL" ? "个人餐食库" : "公共餐食库"}</summary><div class="button-row"><button class="btn soft" data-diet-action="source" data-source="PERSONAL" ${busy}>个人餐食</button><button class="btn soft" data-diet-action="source" data-source="PUBLIC" ${busy}>公共餐食</button><a href="#/diet/meals/personal">管理餐食</a></div></details>
         </aside>`;
     }
+    function renderRunModeNotice(runMode) {
+        if (runMode !== "demo" || state.chat.demoNoticeGenerations.has(state.chat.generation)) return "";
+        state.chat.demoNoticeGenerations.add(state.chat.generation);
+        return `<p class="run-mode-notice" role="status">当前为 Demo 模式，部分推荐结果或工具调用为模拟数据。</p>`;
+    }
+
     function renderChat() {
         if (!activeRoute()) return;
         if (!state.chat.initialized) { initializeDiet(); return; }
@@ -297,8 +303,11 @@ window.createConversation = function(deps) {
         const focused = document.activeElement;
         const focusId = focused?.id;
         const selection = focused?.selectionStart;
+        const runMode = resolveRunMode(state.chat.decision);
+        const modeNotice = renderRunModeNotice(runMode);
         app.innerHTML = `<section class="chat-layout diet-conversation ${isGeneral() ? "general-conversation" : ""}" data-mobile-pane="${isGeneral() ? (state.chat.mobilePane || "canvas") : ""}">${isGeneral() ? `<div class="general-mobile-tabs"><button class="btn soft" data-diet-action="general-pane" data-pane="canvas">决策</button><button class="btn ghost" data-diet-action="general-pane" data-pane="chat">对话</button></div>` : ""}
-            <div class="section chat-window"><div class="card-title"><div><span class="eyebrow">${isGeneral() ? "从想法，走到适合你的选择" : "每一顿，都更合心意"}</span><h2>${isGeneral() ? "一起把选择想清楚" : "今天想怎么吃？"}</h2></div><div class="inline-actions"><button id="dietPanelToggle" class="btn soft diet-panel-toggle" data-diet-action="open" aria-expanded="${state.chat.panelOpen}">当前决策</button><button class="btn ghost" data-action="new-session">新会话</button></div></div>
+            <div class="section chat-window"><div class="card-title"><div><span class="eyebrow">${isGeneral() ? "从想法，走到适合你的选择" : "每一顿，都更合心意"}</span><div class="chat-title-row"><h2>${isGeneral() ? "一起把选择想清楚" : "今天想怎么吃？"}</h2><span class="run-mode-badge" data-run-mode="${runMode}">${runMode === "live" ? "Live" : "Demo"}</span></div></div><div class="inline-actions"><button id="dietPanelToggle" class="btn soft diet-panel-toggle" data-diet-action="open" aria-expanded="${state.chat.panelOpen}">当前决策</button><button class="btn ghost" data-action="new-session">新会话</button></div></div>
+            ${modeNotice}
             <div id="messages" class="messages">${state.chat.messages.map(renderMessage).join("")}${renderSearchProgress()}${state.chat.sending && !(state.chat.progress || []).length ? '<p class="muted" role="status">正在整理你的选择…</p>' : ""}</div>
             <div class="diet-composer-wrap">${state.chat.error ? `<div class="diet-error" role="alert">${escapeHtml(state.chat.error)}<button class="btn ghost" data-diet-action="${state.chat.retry ? "retry" : "reload"}" ${state.chat.sending ? "disabled" : ""}>${state.chat.retry ? "重试这次操作" : "重新加载"}</button></div>` : ""}
             <div class="chips diet-quick">${(isGeneral() ? ["更看重成本", "帮我比较一下", "刷新候选"] : ["晚餐想吃清淡一点", "帮我规划三餐", "换一批"]).map(text => `<button class="chip" data-action="quick-message" data-message="${text}">${text}</button>`).join("")}</div>

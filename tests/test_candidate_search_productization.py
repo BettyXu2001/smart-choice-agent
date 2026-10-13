@@ -45,6 +45,7 @@ def test_search_capabilities_hide_provider_details():
         "supportedDomains": ["diet", "shopping", "travel"],
         "webSearchConfigured": True,
         "defaultSearchMode": "fixture",
+        "runMode": "live",
     }
     assert "secret" not in json.dumps(payload)
     assert "base" not in json.dumps(payload).lower()
@@ -61,6 +62,7 @@ def test_search_capabilities_use_runtime_search_settings():
         "supportedDomains": ["diet", "shopping", "travel"],
         "webSearchConfigured": True,
         "defaultSearchMode": "web",
+        "runMode": "live",
     }
     assert "browser-secret" not in json.dumps(payload)
 

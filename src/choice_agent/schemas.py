@@ -401,6 +401,7 @@ class SearchCapabilitiesResponse(ApiModel):
     supported_domains: list[str] = Field(default_factory=list)
     web_search_configured: bool = False
     default_search_mode: str = "fixture"
+    run_mode: Literal["demo", "live"] = "demo"
 
 
 class CandidateSearchProgressCounts(ApiModel):

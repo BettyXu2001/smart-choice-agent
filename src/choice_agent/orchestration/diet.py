@@ -11,6 +11,7 @@ from choice_agent.agents.base import AgentContext, AgentRuntime
 from choice_agent.agents.stages import ProfileStage
 from choice_agent.config import Settings
 from choice_agent.decision.selector import normalize_avoid_recent_count, normalize_strategy
+from choice_agent.decision.source_snapshot import source_snapshot
 from choice_agent.decision.state_machine import assert_expected_revision
 from choice_agent.domains.diet.profile import DietProfile
 from choice_agent.domains.diet.state import LABELS, apply_fields, metadata, values
@@ -25,6 +26,7 @@ from choice_agent.schemas import (
     DietPanelCommand, EditEvent, FeedbackRequest, Intent, MealResponse, SlotBundle,
     SourceMode, TraceReference,
 )
+from choice_agent.run_mode import resolve_run_mode
 from choice_agent.services.trace import TraceScope
 
 _PROTECTED_CONTEXT_KEYS = {
@@ -139,7 +141,7 @@ class DietOrchestrator:
         message = f"{action_labels[request.action]}：{item['name']}"
         display_map = decision.domain_state.get("displayCandidateMap", {})
         selected_candidate_id = str(display_map.get(str(request.item_id), request.item_id))
-        with TraceScope(self.db, trace_id, session.id, user_id) as trace:
+        with TraceScope(self.db, trace_id, session.id, user_id, resolve_run_mode(self.settings, decision.context)) as trace:
             try:
                 trace.begin_turn(decision, message, "feedback", request.expected_revision)
                 trace.metadata.update({
@@ -266,6 +268,8 @@ class DietOrchestrator:
                     "responseType": "FEEDBACK",
                     "feedbackType": request.action,
                     "feedbackCandidateId": selected_candidate_id,
+                    "feedbackCategory": "candidate_dislike" if request.action == "DISLIKE" else "preference_update",
+                    "sourceSnapshot": source_snapshot(decision, context.data),
                 })
                 feedback_output = {
                     "feedbackType": request.action,
@@ -373,7 +377,7 @@ class DietOrchestrator:
             raise
         trace_id = uuid4().hex
         before = decision.revision
-        with TraceScope(self.db, trace_id, session.id, user_id) as trace:
+        with TraceScope(self.db, trace_id, session.id, user_id, resolve_run_mode(self.settings, decision.context)) as trace:
             try:
                 trace.begin_turn(
                     decision,
@@ -481,6 +485,9 @@ class DietOrchestrator:
                     "requestId": identifier, "revision": decision.revision, "userText": message,
                     "speechText": speech, "displayBlocks": blocks, "traceId": trace_id,
                     "responseType": "CLARIFY" if clarify else "ANSWER",
+                    "feedbackType": context.data.get("feedback_type"),
+                    "constraintAudit": context.data.get("constraint_audit"),
+                    "sourceSnapshot": source_snapshot(decision, context.data),
                 })
                 response = self.presenter.clarify(context, trace_id) if clarify else self.presenter.answer(context, trace_id)
                 # A receipt stores a bounded snapshot without embedding other receipts or history recursively.

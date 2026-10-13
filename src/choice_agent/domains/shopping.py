@@ -57,9 +57,9 @@ class ShoppingProfile(ComparisonProfile):
 
 
 SHOPPING_FIXTURES = [
-    {"id": "portable-13", "name": "轻薄本 13", "summary": "便携和续航突出，适合移动办公。", "attributes": {"price": 6999, "performance": 72, "portability": 94, "battery": 90, "durability": 76, "support": 82}},
-    {"id": "balanced-14", "name": "均衡本 14", "summary": "性能、价格和便携性较均衡。", "attributes": {"price": 7599, "performance": 84, "portability": 80, "battery": 78, "durability": 84, "support": 80}},
-    {"id": "creator-16", "name": "创作本 16", "summary": "性能强，重量和续航存在取舍。", "attributes": {"price": 10999, "performance": 96, "portability": 52, "battery": 62, "durability": 88, "support": 78}},
+    {"id": "portable-13", "name": "模拟轻薄本方案 13", "summary": "模拟商品：便携和续航突出，适合移动办公。", "attributes": {"price": 6999, "performance": 72, "portability": 94, "battery": 90, "durability": 76, "support": 82, "usage_tags": ["办公", "出差", "移动"]}},
+    {"id": "balanced-14", "name": "模拟均衡本方案 14", "summary": "模拟商品：性能、价格和便携性较均衡。", "attributes": {"price": 7599, "performance": 84, "portability": 80, "battery": 78, "durability": 84, "support": 80, "usage_tags": ["办公", "学习", "综合"]}},
+    {"id": "creator-16", "name": "模拟创作本方案 16", "summary": "模拟商品：性能强，重量和续航存在取舍。", "attributes": {"price": 10999, "performance": 96, "portability": 52, "battery": 62, "durability": 88, "support": 78, "usage_tags": ["剪辑", "创作", "游戏", "建模"]}},
 ]
 
 def shopping_category(message: str) -> str | None:
@@ -79,7 +79,19 @@ class ShoppingFixtureProvider(FixtureCandidateProvider):
         if category is None:
             raise ValueError("请先指定商品类别")
         if category == "laptop":
-            return super().search(context)
+            result = super().search(context)
+            usage = str(context.decision.domain_state.get("conversationFields", {}).get("usage", {}).get("value") or "")
+            if usage:
+                matched = [
+                    candidate for candidate in result.candidates
+                    if any(tag in usage or usage in tag for tag in candidate.attributes.get("usage_tags", []))
+                ]
+                if matched:
+                    result.candidates = matched
+                else:
+                    result.warnings.append("模拟商品未覆盖该用途，usage 已参与召回但没有精确匹配")
+            result.warnings.append("fixture 候选均为模拟商品，不代表具体在售商品、实时价格或库存")
+            return result
         labels = {"phone": "手机", "headphones": "耳机", "appliance": "家电"}
         prices = {"phone": [1999, 3499, 5999], "headphones": [199, 699, 1499], "appliance": [1999, 3999, 6999]}
         fixtures = [

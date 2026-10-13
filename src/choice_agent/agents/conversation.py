@@ -1,6 +1,7 @@
 """Turn interpretation: deterministic explicit edits, optional model suggestions."""
 import re
 from choice_agent.decision.conversation import fields, patch_fields, PRIORITIES
+from choice_agent.decision.feedback import classify_feedback, constraint_audit
 
 _NUMBERS = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
@@ -29,6 +30,9 @@ def _commute_limit(text):
 def interpret(context, provider=None, model=None):
     d, text = context.decision, context.message.strip()
     from choice_agent.decision.assistance import prepare_turn, model_understand, state
+    feedback_type = classify_feedback(text, has_candidates=bool(d.domain_state.get("candidatePool")))
+    if feedback_type:
+        context.data["feedback_type"] = feedback_type
     prepare_turn(context)
     if context.data.get("is_hypothetical"):
         return {"intent":"what_if","confidence":1.0}
@@ -79,6 +83,22 @@ def interpret(context, provider=None, model=None):
     from choice_agent.decision.commands import apply_command
     from choice_agent.schemas import DecisionCommandRequest
     candidates = d.domain_state.get("candidatePool", [])
+    if feedback_type in {"refresh_request", "batch_reject"}:
+        context.data["requested_execution_mode"] = "refresh"
+        operation = "refresh"
+    elif feedback_type == "recommendation_misaligned":
+        audit = constraint_audit(d)
+        context.data["constraint_audit"] = audit
+        context.data["requested_execution_mode"] = audit["executionMode"]
+        operation = "recommendation_misaligned"
+    elif feedback_type == "candidate_dislike":
+        disliked = [c for c in candidates if c["name"] in text or c["candidateId"] in text]
+        if len(disliked) == 1:
+            d.excluded_candidates = sorted(set([*d.excluded_candidates, disliked[0]["candidateId"]]))
+            context.data["requested_execution_mode"] = "rerank"
+            operation = "candidate_dislike"
+        else:
+            question = "请告诉我具体不喜欢哪个候选。"
     for verb, kind in [("排除", "exclude_candidate"), ("恢复", "restore_candidate")]:
         if verb in text:
             matches = [c for c in candidates if c["name"] in text or c["candidateId"] in text]
@@ -107,7 +127,7 @@ def interpret(context, provider=None, model=None):
                         if created["candidateId"] not in ids:
                             ids.append(created["candidateId"])
                     operation = "add_candidate"
-    if "换一批" in text or "刷新" in text: operation = "refresh"
+    if feedback_type in {"refresh_request", "batch_reject"}: operation = "refresh"
     if not context.data.get("simulation"):
         model_understand(context)
     understood = bool(patch or state(d).get("changes") or operation != "compare" or context.data.get("turn_intent") == "explain")

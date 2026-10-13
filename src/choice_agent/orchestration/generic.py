@@ -16,6 +16,7 @@ from choice_agent.decision.execution import capture_execution_baseline, command_
 from choice_agent.decision.profile_injection import apply_user_profile_to_decision
 from choice_agent.decision.selector import normalize_avoid_recent_count, normalize_strategy
 from choice_agent.decision.state_machine import assert_expected_revision, DecisionRevisionError
+from choice_agent.decision.source_snapshot import source_snapshot
 from choice_agent.domains.diet.profile import DietProfile
 from choice_agent.domains.generic import GenericProfile
 from choice_agent.domains.registry import DomainRegistry
@@ -31,6 +32,7 @@ from choice_agent.schemas import (
     DecisionCommandRequest, DecisionMessage, DecisionState, EditEvent, GenericDecisionMessageRequest,
     GenericDecisionRequest, GenericDecisionResponse, SlotBundle, SourceMode, TraceReference,
 )
+from choice_agent.run_mode import resolve_run_mode
 from choice_agent.services.trace import TraceScope
 
 
@@ -174,7 +176,7 @@ class GenericDecisionOrchestrator:
         before = decision.revision
         trace_id = uuid4().hex
         decision.trace_refs.append(TraceReference(trace_id=trace_id, event_type="COMMAND"))
-        with TraceScope(self.db, trace_id, decision.session_id, user_id) as trace:
+        with TraceScope(self.db, trace_id, decision.session_id, user_id, resolve_run_mode(self.settings, decision.context)) as trace:
             try:
                 trace.begin_turn(decision, decision.user_goal, "command", request.expected_revision)
                 if decision.context.get("demoMode"):
@@ -276,7 +278,7 @@ class GenericDecisionOrchestrator:
     def _run(self, user_id, profile, decision, message, expected_revision, baseline=None, execution_baseline=None):
         trace_id = uuid4().hex
         decision.trace_refs.append(TraceReference(trace_id=trace_id, event_type="REQUEST"))
-        with TraceScope(self.db, trace_id, decision.session_id, user_id) as trace:
+        with TraceScope(self.db, trace_id, decision.session_id, user_id, resolve_run_mode(self.settings, decision.context)) as trace:
             try:
                 trace.begin_turn(decision, message, "request", expected_revision)
                 if decision.context.get("demoMode"):
@@ -366,7 +368,7 @@ class GenericDecisionOrchestrator:
                 session.last_recommendations = list(dict.fromkeys([*(session.last_recommendations or []), *ids]))
         blocks = profile.display_blocks(context)
         decision.domain_state["displayBlocks"] = blocks
-        decision.domain_state.setdefault("conversationTurns", []).append({"revision":decision.revision,"traceId":context.trace_id,"displayBlocks":blocks,"speechText":decision.messages[-1].content,"analysis":decision.domain_state.get("assistance",{}).get("analysis")})
+        decision.domain_state.setdefault("conversationTurns", []).append({"revision":decision.revision,"traceId":context.trace_id,"displayBlocks":blocks,"speechText":decision.messages[-1].content,"analysis":decision.domain_state.get("assistance",{}).get("analysis"),"feedbackType":context.data.get("feedback_type"),"constraintAudit":context.data.get("constraint_audit"),"sourceSnapshot":source_snapshot(decision, context.data)})
         pending = decision.domain_state.pop("pendingReceipt", None)
         if pending:
             snapshot = public_decision(decision)

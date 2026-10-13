@@ -21,6 +21,24 @@ def hypothetical(text):
     return bool(re.search(r"如果|假如|假设|要是|会怎样|会有什么变化|会不会改变", text))
 
 
+def add_context_fact(decision, text: str) -> None:
+    info = state(decision)
+    facts = info.setdefault("facts", [])
+    facts[:] = [item for item in facts if not (item.get("candidateId") is None and item.get("text") == text)]
+    facts.append({
+        "id": "fact:" + uuid4().hex,
+        "candidateId": None,
+        "text": text,
+        "quote": text,
+        "kind": "context",
+        "concern": False,
+        "source": "conversation",
+        "confirmed": True,
+        "revision": decision.revision + 1,
+    })
+    info["changes"].append("补充决策事实：" + text)
+
+
 _NUMBERS = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
 
@@ -203,17 +221,9 @@ def prepare_turn(context):
             pending[0].update(concern=False,resolution="accepted",resolvedRevision=d.revision+1)
             info["changes"].append("你确认这项顾虑可以接受，已恢复比较")
     if d.domain == "generic":
-        if previous_question and "编程基础" in previous_question:
-            if text.strip("。！ ") in {"有","有的","会","是的"}: patch["background"]="已有编程基础"
-            elif text.strip("。！ ") in {"没有","不会","没有的"}: patch["background"]="零编程基础"
-        short_priority=re.fullmatch(r"(稳定|成长|成长方向|成本|日常成本|系统框架|动手实践|实践)(?:更重要|优先|最重要)?[。！]*",text)
-        if short_priority: patch["priority"]=short_priority[1]
-        if re.search(r"零(?:编程)?基础|没有(?:编程)?基础|不会编程", text): patch["background"] = "零编程基础"
-        elif re.search(r"(?:有|已有|会|掌握|学过).{0,8}(?:Python|python|编程).{0,4}(?:基础)?", text): patch["background"] = "已有 Python / 编程基础"
-        hours = re.search(r"每周(?:只有|最多|能用|可用|有|投入|学习|大约|时间|是|为|\s)*(\d+(?:\.\d+)?|一|两|二|三|四|五|六|七|八|九|十)\s*(?:个)?小时", text)
-        if hours:
-            value=hours[1]
-            patch["weeklyHours"] = float(value) if re.fullmatch(r"\d+(?:\.\d+)?",value) else {"一":1,"两":2,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10}[value]
+        short_priority = re.fullmatch(r"(.{1,40}?)(?:更重要|优先|最重要)[。！]*", text)
+        if short_priority:
+            patch["priority"] = short_priority[1]
     if d.domain == "travel":
         travel_patch = _travel_patch(text, previous_question, fields(d))
         if context.data.get("simulation") and "priority" in travel_patch and not re.search(r"更看重|最看重|优先|更在意|省钱|便宜", text):
@@ -224,6 +234,8 @@ def prepare_turn(context):
         info["changes"].extend(f"{fields(d)[k]['label']}：{v}" for k,v in patch.items())
     matches = matched_candidates(d,text)
     question = context.data["turn_intent"] == "explain" or bool(re.search(r"？|吗$|多少|是否|怎么样|能不能|是不是", text))
+    if d.domain == "generic" and len(d.messages) > 1 and not matches and not question and not patch and not context.data.get("feedback_type"):
+        add_context_fact(d, text)
     fact_cue = any(w in text for w in ["通勤", "薪资", "薪酬", "工资", "加班", "远程", "补充", "改成", "纠正", "担心", "不能接受", "不太能接受"])
     if len(matches) == 1:
         info["focusCandidateId"] = matches[0]["candidateId"]
@@ -255,7 +267,7 @@ def model_context(context):
 def explicit_patch(context, updates):
     """Accept quoted corrections only when their field and value are locally checkable."""
     current=fields(context.decision)
-    aliases={"budget":["预算"],"days":["天"],"maxTransitHours":["交通","车程","路程"],"weeklyHours":["每周"],"priority":["看重","在意","优先"],"category":["买","商品","换成","改成"],"departure":["出发","从"],"background":["基础","编程"],"usage":["用途","用来","用于"],"target":["目标"]}
+    aliases={"budget":["预算"],"days":["天"],"maxTransitHours":["交通","车程","路程"],"priority":["看重","在意","优先"],"category":["买","商品","换成","改成"],"departure":["出发","从"],"usage":["用途","用来","用于"],"target":["目标"]}
     patch={}
     for update in updates:
         if update.key not in current or update.quote not in context.message: raise ValueError("纠正缺少本轮字段原文")
@@ -515,7 +527,6 @@ def rule_analysis(context, decision):
     else:
         for c in candidates: c.score_breakdown=[]
         decision.domain_state["qualitative"]=True
-        background=current.get("background",{}).get("value") or ""
         # Bounded textual dimensions: these are evidence matches, never candidate scores.
         if "稳定" in priority:
             positive=["薪酬稳定","平台成熟","稳定性高","稳定"]
@@ -523,12 +534,6 @@ def rule_analysis(context, decision):
         elif any(w in priority for w in ["成长","方向","匹配"]):
             positive=["成长空间更大","成长空间大","方向更匹配","方向匹配"]
             negative=["传统产品","不匹配"]
-        elif any(w in priority for w in ["实践","实战"]) and "已有" in background:
-            positive=["实践反馈快","项目实战","实践"]
-            negative=["实践少"]
-        elif "框架" in priority or "零" in background or 0 < (current.get("weeklyHours",{}).get("value") or 100) <= 3:
-            positive=["路径完整","上手稳定","系统框架"]
-            negative=["自行补齐","需要自行组织"]
         else: positive=[];negative=[]
         supported=[c for c in candidates if any(w in c.summary for w in positive) and not any(w in c.summary for w in negative)]
         if len(supported)==1: chosen=supported[0]
@@ -536,13 +541,11 @@ def rule_analysis(context, decision):
         if chosen and len(candidates)==1:
             result["reasons"].append(point(chosen,f"排除其他选项后只剩 {chosen.name}；它的已知取舍需要继续核对。"))
         elif chosen:
-            result["reasons"].append(point(chosen,f"{chosen.name}的已有说明是：{chosen.summary}。这与{'你的基础和可用时间' if background or current.get('weeklyHours',{}).get('value') else '你表达的优先项'}更吻合。"))
+            result["reasons"].append(point(chosen,f"{chosen.name}的已有说明是：{chosen.summary}。这与你表达的优先项更吻合。"))
         for c in candidates:
             if c!=chosen: result["tradeoffs"].append(point(c,f"{c.name}：{candidate_text(decision,c)}"))
         if not chosen:
-            if "学习" in decision.user_goal:
-                result["question"]="你目前有编程基础吗？" if any(w in priority for w in ["实践","实战"]) and not background else "你更希望先获得系统框架，还是通过动手项目学习？"
-            elif len(candidates)==1:
+            if len(candidates)==1:
                 result["question"]=f"排除其他选项后只剩 {candidates[0].name}。它的已知取舍可以接受吗，还是需要补充其他候选？"
             else:
                 result["question"]="稳定、成长方向和日常成本中，哪一项最不能妥协？"

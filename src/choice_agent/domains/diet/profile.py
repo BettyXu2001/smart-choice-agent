@@ -13,6 +13,7 @@ from choice_agent.agents.diet import (
 from choice_agent.config import Settings
 from choice_agent.decision.engine import RankedMeal, SLOT_FIELDS
 from choice_agent.decision.evidence import EvidenceValidator
+from choice_agent.decision.feedback import classify_feedback, constraint_audit
 from choice_agent.decision.ranking import GenericRankingEngine
 from choice_agent.decision.selector import SelectionCandidate, select_candidates
 from choice_agent.decision.state_machine import transition_decision
@@ -79,6 +80,27 @@ class DietProfile(DomainProfile):
     def intent(self, context: AgentContext) -> dict[str, Any]:
         result = IntentAgent(self.provider, self.settings.light_model).execute(context)
         context.decision.intent_key = context.decision.intent.value if context.decision.intent else None
+        feedback_type = classify_feedback(
+            context.message,
+            has_candidates=bool(context.decision.domain_state.get("candidatePool")),
+        )
+        if feedback_type:
+            context.data["feedback_type"] = feedback_type
+        if feedback_type in {"refresh_request", "batch_reject"}:
+            context.data["requested_execution_mode"] = "refresh"
+        elif feedback_type == "recommendation_misaligned":
+            audit = constraint_audit(context.decision)
+            context.data["constraint_audit"] = audit
+            context.data["requested_execution_mode"] = audit["executionMode"]
+        elif feedback_type == "candidate_dislike":
+            pool = context.decision.domain_state.get("candidatePool", [])
+            disliked = [item for item in pool if item["name"] in context.message]
+            if len(disliked) == 1:
+                context.decision.excluded_candidates = sorted(set([
+                    *context.decision.excluded_candidates,
+                    disliked[0]["candidateId"],
+                ]))
+                context.data["requested_execution_mode"] = "rerank"
         return result
 
     def understand(self, context: AgentContext) -> dict[str, Any]:
@@ -122,30 +144,6 @@ class DietProfile(DomainProfile):
             evidence=context.decision.evidence,
             warnings=list(context.decision.domain_state.get("source", {}).get("warnings", [])),
         )
-        ranked = self._rank_preview(context, current)
-        if len(ranked) < self.target_candidate_count and self._web_enabled():
-            try:
-                web = self._web_search(context, "rerank_insufficient")
-                if web.candidates:
-                    merged = CompositeCandidateProvider.merge([current, web])
-                    meta = {
-                        "mode": "hybrid",
-                        "label": "餐食库 + 实时 Web Search",
-                        "realTime": True,
-                        "recallReason": "rerank_web_supplement",
-                        "warnings": [*current.warnings, *web.warnings],
-                    }
-                    return self._apply_recall_result(context, merged, meta, reused_candidate_pool=True)
-            except RuntimeError as error:
-                current.warnings.append(f"Web Search 失败，已保留餐食库候选：{error}")
-                if context.trace:
-                    context.trace.fallback(
-                        stage="Fallback",
-                        reason=f"Diet Web Search 失败，复用当前候选池：{type(error).__name__}: {error}",
-                        from_path="diet_web_search",
-                        to_path="diet_candidate_pool",
-                        details={"error": str(error)},
-                    )
         meta = {
             "mode": context.decision.domain_state.get("source", {}).get("mode", "database"),
             "label": context.decision.domain_state.get("source", {}).get("label", "餐食库"),
@@ -289,6 +287,7 @@ class DietProfile(DomainProfile):
 
     def _rank_preview(self, context: AgentContext, result: CandidateSearchResult) -> list[Candidate]:
         candidates, _, _ = EvidenceValidator().validate(result.candidates, result.sources)
+        candidates = self._filter_obvious_conflicts(context, candidates)
         ranked = GenericRankingEngine().rank(
             context.decision,
             candidates,
@@ -307,6 +306,7 @@ class DietProfile(DomainProfile):
         reused_candidate_pool: bool,
     ) -> dict[str, Any]:
         candidates, evidence, validation_warnings = EvidenceValidator().validate(result.candidates, result.sources)
+        candidates = self._filter_obvious_conflicts(context, candidates)
         warnings = list(dict.fromkeys([*result.warnings, *validation_warnings, *meta.get("warnings", [])]))
         if context.trace:
             context.trace.node(
@@ -451,6 +451,23 @@ class DietProfile(DomainProfile):
             "reusedCandidatePool": reused_candidate_pool,
         }
 
+    def _filter_obvious_conflicts(self, context: AgentContext, candidates: list[Candidate]) -> list[Candidate]:
+        slots = context.data["slots"]
+        requested = set(slots.taste) | set(slots.health_goal)
+        if not requested.intersection({"清淡", "低油", "少油"}):
+            return candidates
+        conflicts = {"麻辣", "重辣", "重油", "油腻", "油香"}
+        kept = []
+        removed = []
+        for candidate in candidates:
+            values = set(candidate.attributes.get("taste", [])) | set(candidate.attributes.get("health_goal", []))
+            if values.intersection(conflicts):
+                removed.append(candidate.candidate_id)
+            else:
+                kept.append(candidate)
+        if removed:
+            context.decision.domain_state["dietConflictFilteredIds"] = removed
+        return kept
     def _tie_breaker(self, candidate: Candidate):
         if candidate.candidate_id.isdigit():
             return (0, int(candidate.candidate_id))

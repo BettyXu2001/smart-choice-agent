@@ -124,6 +124,10 @@
         return valueLabel(String(status || "unknown").toLowerCase(), "status");
     }
 
+    function runModeLabel(mode) {
+        return mode === "live" ? "Live" : mode === "demo" ? "Demo" : "未记录";
+    }
+
     function shortId(value) {
         const text = String(value || "-");
         return text.length > 14 ? `${text.slice(0, 8)}...${text.slice(-4)}` : text;
@@ -187,7 +191,8 @@
         const summary = json.turnSummary || {};
         const nodes = timeline(trace);
         const recommendationChange = json.recommendationChange || summary.recommendationChange || {};
-        return { trace, json, metadata, summary, nodes, recommendationChange };
+        const runMode = json.run_mode || json.runMode || "";
+        return { trace, json, metadata, summary, nodes, recommendationChange, runMode };
     }
 
     function candidateLabel(trace, candidateId) {
@@ -214,12 +219,15 @@
     }
 
     function traceListSummary(trace) {
+        const runMode = normalizeTrace(trace).runMode;
         const { metadata, summary, nodes } = normalizeTrace(trace);
         return {
             traceId: trace.traceId || metadata.traceId || "-",
             sessionId: trace.sessionId || metadata.sessionId || "-",
             status: trace.status || summary.status || "UNKNOWN",
             statusLabel: statusLabel(trace.status || summary.status),
+            runMode,
+            runModeLabel: runModeLabel(runMode),
             createdAt: trace.createdAt || "",
             createdLabel: formatDate(trace.createdAt),
             userMessage: summary.userMessage || "未记录用户输入",
@@ -232,7 +240,7 @@
     }
 
     function renderHero(trace) {
-        const { metadata, summary, nodes } = normalizeTrace(trace);
+        const { metadata, summary, nodes, runMode } = normalizeTrace(trace);
         const revision = `${metadata.revisionBefore ?? "-"} -> ${metadata.revisionAfter ?? "-"}`;
         return `
             <section class="trace-detail-hero">
@@ -246,6 +254,7 @@
                     <div><span>耗时</span><strong>${escapeHtml(formatMs(trace.durationMs ?? traceJson(trace).durationMs))}</strong></div>
                     <div><span>步骤数</span><strong>${escapeHtml(nodes.length)}</strong></div>
                     <div><span>Revision</span><strong>${escapeHtml(revision)}</strong></div>
+                    <div><span>运行模式</span><strong><span class="run-mode-badge" data-run-mode="${escapeHtml(runMode || "unknown")}">${escapeHtml(runModeLabel(runMode))}</span></strong></div>
                     <div class="wide"><span>推荐变化</span><strong>${escapeHtml(recommendationChangeText(trace))}</strong></div>
                     <div><span>意图 / 领域</span><strong>${escapeHtml(`${valueLabel(summary.intent || "", "intent")} / ${valueLabel(metadata.domain || "", "domain")}`)}</strong></div>
                 </div>
@@ -334,7 +343,7 @@
     }
 
     function traceMarkdown(trace, heading = "Trace") {
-        const { metadata, summary, nodes, json } = normalizeTrace(trace);
+        const { metadata, summary, nodes, json, runMode } = normalizeTrace(trace);
         const lines = [
             `# ${heading} ${trace.traceId || ""}`.trim(),
             "",
@@ -342,6 +351,7 @@
             `- Session ID: ${trace.sessionId || "-"}`,
             `- Created At: ${trace.createdAt || "-"}`,
             `- Status: ${statusLabel(trace.status || summary.status)}`,
+            `- Run Mode: ${runModeLabel(runMode)}`,
             `- Duration: ${formatMs(trace.durationMs ?? json.durationMs)}`,
             `- Intent / Domain: ${valueLabel(summary.intent || "", "intent")} / ${valueLabel(metadata.domain || "", "domain")}`,
             `- Revision: ${metadata.revisionBefore ?? "-"} -> ${metadata.revisionAfter ?? "-"}`,
