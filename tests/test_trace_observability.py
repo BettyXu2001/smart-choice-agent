@@ -282,6 +282,14 @@ def test_search_response_usage_flows_into_candidate_agent_run(database):
     assert candidate_run["estimatedCost"] == 0.00003
     assert candidate_run["promptVersion"].startswith("sha256:")
 
+    candidate_agent = next(node for node in trace["timeline"] if node.get("stage") == "CandidateAgent" and node.get("kind") == "agent")
+    web_tool = next(node for node in trace["timeline"] if node.get("kind") == "tool" and node.get("input", {}).get("toolName") == "web_search")
+    assert web_tool["parentId"] == candidate_agent["eventId"]
+    assert web_tool["input"]["provider"] == "openai_web_search"
+    assert web_tool["input"]["model"] == "priced-search-model"
+    assert web_tool["output"]["result"]["candidateCount"] == 1
+    assert web_tool["output"]["result"]["sourceCount"] == 1
+
 
 def test_ranking_diagnostics_include_hard_filter_reason():
     decision = DecisionState(

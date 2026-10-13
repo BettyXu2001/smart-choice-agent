@@ -82,13 +82,14 @@ class OpenAIWebSearchProvider:
                 result = (
                     context.trace.provider_call(
                         stage="Candidate Retrieval",
-                        kind="search",
+                        kind="tool",
                         provider=self.name,
                         model=self.model,
                         prompt_template=self.instruction,
                         input_payload={"body": body, "attempt": attempt + 1},
                         call=execute,
                         retry_count=attempt,
+                        tool_name="web_search",
                         output_mapper=lambda item: {
                             "candidateCount": len(item.candidates),
                             "sourceCount": len(item.sources),
