@@ -4,9 +4,13 @@ from choice_agent.evaluation.metrics import METRIC_DEFINITIONS, summarize_result
 def test_evaluation_metric_catalog_contains_all_dashboard_metrics():
     assert [item.metric_id for item in METRIC_DEFINITIONS] == [
         "intent_accuracy",
+        "domain_routing_accuracy",
+        "clarification_decision_accuracy",
         "constraint_extraction_accuracy",
         "correction_update_accuracy",
         "hard_constraint_satisfaction",
+        "soft_preference_satisfaction",
+        "safety_constraint_violation_rate",
         "exclusion_correctness",
         "recommendation_stability",
         "sensitivity_to_condition_change",
@@ -19,6 +23,7 @@ def test_evaluation_metric_catalog_contains_all_dashboard_metrics():
         "what_if_isolation",
         "llm_fallback_success",
         "search_fallback_success",
+        "fallback_activation_rate",
         "agent_execution_failure_rate",
         "average_response_time_ms",
     ]
@@ -92,6 +97,10 @@ def test_evaluation_summary_uses_trace_observations_for_agent_failure_rate_and_l
             "status": "passed",
             "assertions": [],
             "metrics": {
+                "fallback_activation_rate": {
+                    "numerator": 1, "denominator": 1, "eligibleCount": 1,
+                    "evaluatedCount": 1, "failures": [{"kind": "timeline"}],
+                },
                 "agent_execution_failure_rate": {
                     "numerator": 1, "denominator": 4, "eligibleCount": 4,
                     "evaluatedCount": 4, "failures": [{"agentName": "CandidateAgent"}],
@@ -106,6 +115,10 @@ def test_evaluation_summary_uses_trace_observations_for_agent_failure_rate_and_l
             "status": "passed",
             "assertions": [],
             "metrics": {
+                "fallback_activation_rate": {
+                    "numerator": 0, "denominator": 1, "eligibleCount": 1,
+                    "evaluatedCount": 1, "failures": [],
+                },
                 "agent_execution_failure_rate": {
                     "numerator": 0, "denominator": 6, "eligibleCount": 6,
                     "evaluatedCount": 6, "failures": [],
@@ -119,6 +132,8 @@ def test_evaluation_summary_uses_trace_observations_for_agent_failure_rate_and_l
     ])
 
     metrics = {item["id"]: item for item in summary["metrics"]}
+    assert metrics["fallback_activation_rate"]["value"] == 0.5
+    assert metrics["fallback_activation_rate"]["scored"] is False
     assert metrics["agent_execution_failure_rate"]["value"] == 0.1
     assert metrics["agent_execution_failure_rate"]["numerator"] == 1
     assert metrics["agent_execution_failure_rate"]["denominator"] == 10
@@ -142,7 +157,53 @@ def test_evaluation_summary_reports_method_and_deterministic_coverage():
     assert metrics["intent_accuracy"]["value"] is None
     assert metrics["constraint_extraction_accuracy"]["evaluationMethod"] == "not_evaluated"
     assert summary["coverage"]["deterministicEvaluatedMetricCount"] == 1
-    assert summary["coverage"]["deterministicMetricCount"] == 16
-    assert summary["coverage"]["deterministicMetricRate"] == 1 / 16
+    assert summary["coverage"]["deterministicMetricCount"] == 20
+    assert summary["coverage"]["deterministicMetricRate"] == 1 / 20
     assert summary["coverage"]["manualReviewMetricIds"] == ["intent_accuracy"]
     assert "constraint_extraction_accuracy" in summary["coverage"]["notEvaluatedMetricIds"]
+
+
+def test_evaluation_summary_reports_case_rates_groups_and_routing_diagnostics():
+    results = [
+        {
+            "caseId": "diet-route",
+            "status": "passed",
+            "assertions": [{
+                "metricId": "domain_routing_accuracy",
+                "expected": {"domain": "diet"},
+                "actual": {"actualDomain": "diet"},
+                "passed": True,
+                "eligible": True,
+                "evaluationMethod": "deterministic",
+            }],
+        },
+        {
+            "caseId": "travel-route",
+            "status": "failed",
+            "assertions": [{
+                "metricId": "domain_routing_accuracy",
+                "expected": {"domain": "travel"},
+                "actual": {"actualDomain": "generic"},
+                "passed": False,
+                "eligible": True,
+                "evaluationMethod": "deterministic",
+            }],
+        },
+    ]
+    metadata = {
+        "diet-route": {"domain": "diet", "caseType": "routing", "tags": ["smoke"]},
+        "travel-route": {"domain": "travel", "caseType": "routing", "tags": ["smoke"]},
+    }
+
+    summary = summarize_results(results, metadata)
+
+    assert summary["caseRates"] == {
+        "passRate": 0.5,
+        "failureRate": 0.5,
+        "errorRate": 0.0,
+        "notEvaluatedRate": 0.0,
+    }
+    assert summary["groups"]["byCaseType"]["routing"]["caseCounts"]["total"] == 2
+    assert summary["groups"]["byTag"]["smoke"]["caseRates"]["passRate"] == 0.5
+    assert summary["routingDiagnostics"]["accuracy"] == 0.5
+    assert summary["routingDiagnostics"]["confusionMatrix"]["travel"]["generic"] == 1

@@ -24,20 +24,28 @@ def test_evaluation_dashboard_seeds_versioned_regression_datasets_and_runs_core(
     with database.session_factory() as db:
         evaluation = service(db)
         dashboard = evaluation.dashboard(1)
-        assert len(dashboard["metricDefinitions"]) == 18
+        assert len(dashboard["metricDefinitions"]) == 23
         datasets = {(item["name"], item["version"]): item for item in dashboard["datasets"]}
         assert ("core-regression", "v1") in datasets
         assert ("core-regression", "v2") in datasets
+        assert ("core-regression", "v3") in datasets
+        assert ("diet-travel-evaluation", "v1") in datasets
         legacy_core = datasets[("core-regression", "v1")]
-        core = datasets[("core-regression", "v2")]
+        core = datasets[("core-regression", "v3")]
         fault = datasets[("fault-injection-reliability", "v2")]
+        diet_travel = datasets[("diet-travel-evaluation", "v1")]
         assert legacy_core["version"] == "v1"
         assert legacy_core["caseCount"] == 20
         assert legacy_core["datasetHash"] != core["datasetHash"]
-        assert core["version"] == "v2"
+        assert core["version"] == "v3"
         assert core["caseCount"] == 20
         assert fault["version"] == "v2"
         assert fault["caseCount"] == 8
+        assert diet_travel["caseCount"] == 20
+        assert sum(case["caseData"]["domain"] == "diet" for case in diet_travel["caseSnapshots"]) == 10
+        assert sum(case["caseData"]["domain"] == "travel" for case in diet_travel["caseSnapshots"]) == 10
+        assert len({case["caseData"]["setup"]["seedId"] for case in diet_travel["caseSnapshots"]}) == 20
+        assert all(case["caseData"].get("fixtureActual") is None for case in diet_travel["caseSnapshots"])
         assert all(
             case["caseData"].get("fixtureActual") is None
             for case in core["caseSnapshots"]
@@ -46,11 +54,13 @@ def test_evaluation_dashboard_seeds_versioned_regression_datasets_and_runs_core(
         run = evaluation.create_run(1, EvaluationRunCreate(version_label="test-v1"))
         assert run["status"] == "completed"
         assert run["datasetName"] == "core-regression"
-        assert run["datasetVersion"] == "v2"
+        assert run["datasetVersion"] == "v3"
         assert run["datasetHash"] == core["datasetHash"]
         assert len(run["results"]) == 20
         assert run["summary"]["caseCounts"] == {"total": 20, "passed": 20, "failed": 0, "error": 0, "notEvaluated": 0}
         assert run["summary"]["coverage"]["evaluatedQualityMetrics"] > 0
+        assert run["summary"]["caseRates"]["passRate"] == 1
+        assert run["summary"]["groups"]["byCaseType"]
 
 
 def test_starter_seed_is_idempotent_and_backfills_existing_database(database):
@@ -75,7 +85,9 @@ def test_starter_seed_is_idempotent_and_backfills_existing_database(database):
         datasets = {(item["name"], item["version"]): item for item in second["datasets"]}
         assert datasets[("core-regression", "v1")]["caseCount"] == 20
         assert datasets[("core-regression", "v2")]["caseCount"] == 20
+        assert datasets[("core-regression", "v3")]["caseCount"] == 20
         assert datasets[("fault-injection-reliability", "v2")]["caseCount"] == 8
+        assert datasets[("diet-travel-evaluation", "v1")]["caseCount"] == 20
 
 
 def test_evaluation_dataset_is_versioned_snapshot(database):
@@ -165,7 +177,7 @@ def test_same_dataset_runs_baseline_and_candidate_and_compares_exact_case_set(da
         evaluation = service(db)
         dataset = next(
             item for item in evaluation.dashboard(1)["datasets"]
-            if item["name"] == "core-regression"
+            if item["name"] == "core-regression" and item["version"] == "v3"
         )
         baseline = evaluation.create_run(
             1,
@@ -200,8 +212,8 @@ def test_same_dataset_runs_baseline_and_candidate_and_compares_exact_case_set(da
         comparison = evaluation.compare_runs(1, baseline["id"], candidate["id"])
         assert comparison["baselineRun"]["summary"]["caseCounts"]["total"] == 2
         assert comparison["candidateRun"]["summary"]["caseCounts"]["total"] == 2
-        assert len(comparison["baselineRun"]["summary"]["metrics"]) == 18
-        assert len(comparison["candidateRun"]["summary"]["metrics"]) == 18
+        assert len(comparison["baselineRun"]["summary"]["metrics"]) == 23
+        assert len(comparison["candidateRun"]["summary"]["metrics"]) == 23
         assert comparison["baselineRun"]["summary"]["categoryScores"]
         assert comparison["candidateRun"]["summary"]["categoryScores"]
         assert sum(comparison["caseDiffCounts"].values()) == 2

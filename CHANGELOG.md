@@ -1,5 +1,11 @@
 # Changelog
 
+### 2026-10-17
+
+- Evaluation 升级至 v3，新增领域路由准确率、澄清决策准确率、软偏好满足率、安全约束违规率和 Fallback 激活率，共 23 项指标。
+- 发布 20 条 `core-regression/v3` Case，并新增 Case 比率、domain/caseType/tag 分组及路由 Precision/Recall/F1 和混淆矩阵汇总。
+- 发布 20 条 `diet-travel-evaluation/v1` 饮食/旅行专项 Case，并记录 `repeat=2` 的完整 23 项指标结果与 Bad Case。
+
 ### 2026-10-13
 
 - 修复多轮对话发送后用户消息未立即显示、输入框内容需等待响应才清空的问题。

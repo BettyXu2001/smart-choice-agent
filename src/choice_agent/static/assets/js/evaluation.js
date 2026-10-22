@@ -61,7 +61,7 @@
             const comparison = dashboard.comparison;
             return `
                 <div class="grid four evaluation-overview">
-                    ${statCard("当前版本得分", summary.overallScore === null || summary.overallScore === undefined ? "未评测" : `${summary.overallScore}`, `确定性覆盖 ${coverage.deterministicEvaluatedMetricCount || 0}/${coverage.deterministicMetricCount || 16}；人工 ${coverage.manualReviewMetricIds?.length || 0}`)}
+                    ${statCard("当前版本得分", summary.overallScore === null || summary.overallScore === undefined ? "未评测" : `${summary.overallScore}`, `确定性覆盖 ${coverage.deterministicEvaluatedMetricCount || 0}/${coverage.deterministicMetricCount ?? 0}；人工 ${coverage.manualReviewMetricIds?.length || 0}`)}
                     ${statCard("与上一版本差异", comparison ? `${comparison.scoreDelta > 0 ? "+" : ""}${comparison.scoreDelta}` : "不可比", comparison ? `基线 ${comparison.baselineRunId.slice(0, 8)}` : "需相同数据集/评估器/模式")}
                     ${statCard("失败 Case", summary.caseCounts?.failed || 0, `错误 ${summary.caseCounts?.error || 0}，未评测 ${summary.caseCounts?.notEvaluated || 0}`)}
                     ${statCard("Regression Dataset", dashboard.datasets.length, `${dashboard.cases.filter(item => item.status === "verified").length} 个已验证 Case`)}
@@ -179,6 +179,9 @@
 
         function renderRunDetail(run) {
             const results = run.results || [];
+            const summary = run.summary || {};
+            const rates = summary.caseRates || {};
+            const routing = summary.routingDiagnostics || {};
             return `
                 <section class="section evaluation-panel">
                     <div class="card-title">
@@ -187,6 +190,8 @@
                             <p>${escapeHtml(run.versionLabel)} · ${escapeHtml(run.datasetName)} / ${escapeHtml(run.datasetVersion)} · ${escapeHtml(run.status)}</p>
                         </div>
                     </div>
+                    <p class="muted">Case 通过率 ${formatRate(rates.passRate)} · 失败率 ${formatRate(rates.failureRate)} · 错误率 ${formatRate(rates.errorRate)} · 未评测率 ${formatRate(rates.notEvaluatedRate)}</p>
+                    ${routing.sampleCount ? `<p class="muted">路由样本 ${escapeHtml(routing.sampleCount)} · Accuracy ${formatRate(routing.accuracy)} · Macro P/R/F1 ${formatRate(routing.macroPrecision)} / ${formatRate(routing.macroRecall)} / ${formatRate(routing.macroF1)}</p>` : ""}
                     ${results.length ? `<div class="table-wrap">
                         <table>
                             <thead><tr><th>Case</th><th>状态</th><th>轮次</th><th>失败断言</th><th>Trace</th></tr></thead>
@@ -204,8 +209,13 @@
                         </table>
                     </div>` : `<div class="empty">这个运行还没有结果。</div>`}
                     ${results[0] ? `<details class="evaluation-json"><summary>查看首个结果 Trace / 输出 JSON</summary><pre class="json-box">${escapeHtml(safeJson({outputs: results[0].outputs, trace: results[0].traceSnapshot, assertions: results[0].assertions}))}</pre></details>` : ""}
+                    <details class="evaluation-json"><summary>查看分组汇总与路由混淆矩阵</summary><pre class="json-box">${escapeHtml(safeJson({groups: summary.groups || {}, routingDiagnostics: routing}))}</pre></details>
                 </section>
             `;
+        }
+
+        function formatRate(value) {
+            return value === null || value === undefined ? "未评测" : `${Math.round(value * 10000) / 100}%`;
         }
 
         function renderBadCases(dashboard) {

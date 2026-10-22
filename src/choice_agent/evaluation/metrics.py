@@ -5,7 +5,7 @@ from math import ceil
 from typing import Any
 
 
-EVALUATOR_VERSION = "evaluation-v2"
+EVALUATOR_VERSION = "evaluation-v3"
 
 
 @dataclass(frozen=True)
@@ -21,9 +21,13 @@ class MetricDefinition:
 
 METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
     MetricDefinition("intent_accuracy", "需求理解", "Intent 识别准确率", description="匹配金标签操作意图的轮次占比。"),
+    MetricDefinition("domain_routing_accuracy", "需求理解", "领域路由准确率", description="未显式注入领域时，系统选择正确业务领域的请求占比。"),
+    MetricDefinition("clarification_decision_accuracy", "需求理解", "澄清决策准确率", description="需要追问时追问且信息充分时不多问的请求占比。"),
     MetricDefinition("constraint_extraction_accuracy", "需求理解", "约束抽取准确率", description="字段、值、硬软属性和候选归属正确的约束占比。"),
     MetricDefinition("correction_update_accuracy", "需求理解", "用户纠正后的状态更新准确率", description="纠正后新值生效、旧值移除且归属正确的轮次占比。"),
     MetricDefinition("hard_constraint_satisfaction", "决策质量", "硬约束满足率", description="推荐满足全部硬约束的可判定请求占比。"),
+    MetricDefinition("soft_preference_satisfaction", "决策质量", "软偏好满足率", description="首选候选的评分明细覆盖用户强调偏好并达到预期匹配度的请求占比。"),
+    MetricDefinition("safety_constraint_violation_rate", "决策质量", "安全约束违规率", direction="lower_is_better", description="可判定安全场景中未正确触发风险控制或仍给出禁止结果的比例。"),
     MetricDefinition("exclusion_correctness", "决策质量", "排除候选正确率", description="排除集合匹配预期的轮次占比。"),
     MetricDefinition("recommendation_stability", "决策质量", "推荐稳定性", description="相同输入和固定来源下推荐保持稳定的重复配对占比。"),
     MetricDefinition("sensitivity_to_condition_change", "决策质量", "条件变化后的结论敏感性", description="条件变化后结论按预期改变或维持的配对占比。"),
@@ -36,18 +40,23 @@ METRIC_DEFINITIONS: tuple[MetricDefinition, ...] = (
     MetricDefinition("what_if_isolation", "多轮交互", "What-if 不污染正式状态成功率", description="假设轮次前后正式业务投影不变的占比。"),
     MetricDefinition("llm_fallback_success", "工程可靠性", "LLM 调用失败 Fallback 成功率", description="模型调用失败后仍返回有效降级结果并通过状态断言的请求占比。"),
     MetricDefinition("search_fallback_success", "工程可靠性", "Search 调用失败 Fallback 成功率", description="搜索调用失败后仍返回有效降级结果且来源变化可观察的请求占比。"),
+    MetricDefinition("fallback_activation_rate", "工程可靠性", "Fallback 激活率", direction="lower_is_better", scored=False, description="有可观测 Trace 的请求中实际进入任一 Fallback 的比例；单独展示，不进入总分。"),
     MetricDefinition("agent_execution_failure_rate", "工程可靠性", "Agent 执行失败率", direction="lower_is_better", description="失败 AgentRun 占全部 AgentRun 比例。"),
     MetricDefinition("average_response_time_ms", "工程可靠性", "平均响应时间", direction="lower_is_better", unit="ms", scored=False, description="有耗时请求的 durationMs 均值；单独展示，不进入总分。"),
 )
 
 METRIC_BY_ID = {item.metric_id: item for item in METRIC_DEFINITIONS}
 QUALITY_METRIC_IDS = [item.metric_id for item in METRIC_DEFINITIONS if item.scored]
-TRACE_OBSERVATION_METRIC_IDS = {"agent_execution_failure_rate", "average_response_time_ms"}
+TRACE_OBSERVATION_METRIC_IDS = {"fallback_activation_rate", "agent_execution_failure_rate", "average_response_time_ms"}
 DETERMINISTIC_TARGET_METRIC_IDS = (
     "intent_accuracy",
+    "domain_routing_accuracy",
+    "clarification_decision_accuracy",
     "constraint_extraction_accuracy",
     "correction_update_accuracy",
     "hard_constraint_satisfaction",
+    "soft_preference_satisfaction",
+    "safety_constraint_violation_rate",
     "exclusion_correctness",
     "recommendation_stability",
     "sensitivity_to_condition_change",
@@ -134,19 +143,46 @@ def _assertion_method(assertion: dict[str, Any]) -> str:
     return "manual" if assertion.get("operator") == "manual" else "deterministic"
 
 def trace_observation_metrics(trace_snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    fallback_metric = empty_metric("fallback_activation_rate", "not_applicable")
     agent_metric = empty_metric("agent_execution_failure_rate", "not_applicable")
     latency_metric = empty_metric("average_response_time_ms", "not_applicable")
     agent_events: list[dict[str, Any]] = []
     related = trace_snapshot.get("relatedTraces") if isinstance(trace_snapshot, dict) else None
     snapshots = related if isinstance(related, list) else [trace_snapshot] if trace_snapshot else []
+    fallback_signals = []
+    trace_documents = 0
     for snapshot in snapshots:
         trace = snapshot.get("traceJson") if isinstance(snapshot, dict) else None
         if not isinstance(trace, dict):
             continue
+        trace_documents += 1
+        fallback_signals.extend(
+            {"kind": "timeline", "stage": node.get("stage"), "summary": node.get("summary")}
+            for node in trace.get("timeline", [])
+            if isinstance(node, dict) and str(node.get("kind", "")).lower() == "fallback"
+        )
+        fallback_signals.extend(
+            {"kind": "event", "agentName": event.get("agentName") or event.get("agent_name")}
+            for event in trace.get("events", [])
+            if isinstance(event, dict) and event.get("fallbackUsed") is True
+        )
         agent_events.extend(
             event for event in trace.get("events", [])
             if isinstance(event, dict) and event.get("eventType") == "AGENT_CALL"
         )
+    if trace_documents:
+        activated = bool(fallback_signals)
+        fallback_metric.update({
+            "value": 1.0 if activated else 0.0,
+            "numerator": 1 if activated else 0,
+            "denominator": 1,
+            "eligibleCount": 1,
+            "evaluatedCount": 1,
+            "missingReason": None,
+            "method": "trace_observation",
+            "evaluationMethod": "deterministic",
+            "failures": fallback_signals,
+        })
     if agent_events:
         failures = sum(1 for event in agent_events if str(event.get("status", "")).upper() == "FAILED")
         agent_metric.update({
@@ -181,6 +217,7 @@ def trace_observation_metrics(trace_snapshot: dict[str, Any]) -> dict[str, dict[
             "evaluationMethod": "deterministic",
         })
     return {
+        "fallback_activation_rate": fallback_metric,
         "agent_execution_failure_rate": agent_metric,
         "average_response_time_ms": latency_metric,
     }
@@ -199,7 +236,7 @@ def aggregate_result_observation(results: list[dict[str, Any]], metric_id: str) 
     numerator = sum(float(item.get("numerator") or 0) for item in observations)
     denominator = sum(int(item.get("denominator") or 0) for item in observations)
     metric.update({
-        "value": round(numerator / denominator, 4 if metric_id == "agent_execution_failure_rate" else 2),
+        "value": round(numerator / denominator, 4 if metric_id in {"fallback_activation_rate", "agent_execution_failure_rate"} else 2),
         "numerator": numerator,
         "denominator": denominator,
         "eligibleCount": sum(int(item.get("eligibleCount") or 0) for item in observations),
@@ -212,7 +249,10 @@ def aggregate_result_observation(results: list[dict[str, Any]], metric_id: str) 
     return metric
 
 
-def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_results(
+    results: list[dict[str, Any]],
+    case_metadata: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     merged: dict[str, list[dict[str, Any]]] = {metric_id: [] for metric_id in METRIC_BY_ID}
     for result in results:
         for assertion in result.get("assertions", []):
@@ -267,7 +307,14 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         metric_id for metric_id in DETERMINISTIC_TARGET_METRIC_IDS
         if metric_by_id[metric_id]["value"] is None and metric_id not in manual_metric_ids
     ]
-    return {
+    case_counts = {
+        "total": len(results),
+        "passed": sum(1 for result in results if result.get("status") == "passed"),
+        "failed": failed_cases,
+        "error": error_cases,
+        "notEvaluated": sum(1 for result in results if result.get("status") == "not_evaluated"),
+    }
+    summary = {
         "overallScore": overall,
         "categoryScores": category_scores,
         "metrics": metrics,
@@ -286,14 +333,111 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
             "manualReviewMetricIds": manual_metric_ids,
             "notEvaluatedMetricIds": not_evaluated_metric_ids,
         },
-        "caseCounts": {
-            "total": len(results),
-            "passed": sum(1 for result in results if result.get("status") == "passed"),
-            "failed": failed_cases,
-            "error": error_cases,
-            "notEvaluated": sum(1 for result in results if result.get("status") == "not_evaluated"),
-        },
+        "caseCounts": case_counts,
+        "caseRates": _case_rates(case_counts),
         "performance": summarize_performance(results),
+        "groups": {"byDomain": {}, "byCaseType": {}, "byTag": {}},
+        "routingDiagnostics": routing_diagnostics(results),
+    }
+    if case_metadata:
+        summary["groups"] = _group_summaries(results, case_metadata)
+    return summary
+
+
+def _case_rates(counts: dict[str, int]) -> dict[str, float | None]:
+    total = counts["total"]
+    if not total:
+        return {"passRate": None, "failureRate": None, "errorRate": None, "notEvaluatedRate": None}
+    return {
+        "passRate": round(counts["passed"] / total, 4),
+        "failureRate": round(counts["failed"] / total, 4),
+        "errorRate": round(counts["error"] / total, 4),
+        "notEvaluatedRate": round(counts["notEvaluated"] / total, 4),
+    }
+
+
+def _group_summaries(
+    results: list[dict[str, Any]],
+    case_metadata: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    dimensions: dict[str, dict[str, list[dict[str, Any]]]] = {
+        "byDomain": {},
+        "byCaseType": {},
+        "byTag": {},
+    }
+    for result in results:
+        metadata = case_metadata.get(str(result.get("caseId"))) or {}
+        values = {
+            "byDomain": [str(metadata.get("domain") or "unknown")],
+            "byCaseType": [str(metadata.get("caseType") or "general")],
+            "byTag": [str(tag) for tag in metadata.get("tags") or [] if str(tag)],
+        }
+        for dimension, keys in values.items():
+            for key in dict.fromkeys(keys):
+                dimensions[dimension].setdefault(key, []).append(result)
+    output: dict[str, dict[str, Any]] = {}
+    for dimension, groups in dimensions.items():
+        output[dimension] = {}
+        for key, grouped_results in sorted(groups.items()):
+            grouped = summarize_results(grouped_results)
+            output[dimension][key] = {
+                name: value for name, value in grouped.items()
+                if name not in {"groups", "performance", "routingDiagnostics"}
+            }
+    return output
+
+
+def routing_diagnostics(results: list[dict[str, Any]]) -> dict[str, Any]:
+    pairs: list[tuple[str, str]] = []
+    for result in results:
+        for assertion in result.get("assertions", []):
+            if (assertion.get("metricId") or assertion.get("metric_id")) != "domain_routing_accuracy":
+                continue
+            if _assertion_method(assertion) != "deterministic" or assertion.get("passed") is None:
+                continue
+            expected = assertion.get("expected") or {}
+            actual = assertion.get("actual") or {}
+            expected_domain = expected.get("domain") if isinstance(expected, dict) else None
+            actual_domain = actual.get("actualDomain") if isinstance(actual, dict) else None
+            if expected_domain and actual_domain:
+                pairs.append((str(expected_domain), str(actual_domain)))
+    if not pairs:
+        return {
+            "sampleCount": 0,
+            "accuracy": None,
+            "macroPrecision": None,
+            "macroRecall": None,
+            "macroF1": None,
+            "perDomain": {},
+            "confusionMatrix": {},
+        }
+    labels = sorted({label for pair in pairs for label in pair})
+    confusion = {
+        expected: {actual: sum(1 for gold, predicted in pairs if gold == expected and predicted == actual) for actual in labels}
+        for expected in labels
+    }
+    per_domain = {}
+    for label in labels:
+        true_positive = confusion[label][label]
+        false_positive = sum(confusion[other][label] for other in labels if other != label)
+        false_negative = sum(confusion[label][other] for other in labels if other != label)
+        precision = true_positive / (true_positive + false_positive) if true_positive + false_positive else 0.0
+        recall = true_positive / (true_positive + false_negative) if true_positive + false_negative else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        per_domain[label] = {
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "f1": round(f1, 4),
+            "support": sum(confusion[label].values()),
+        }
+    return {
+        "sampleCount": len(pairs),
+        "accuracy": round(sum(1 for gold, predicted in pairs if gold == predicted) / len(pairs), 4),
+        "macroPrecision": round(sum(item["precision"] for item in per_domain.values()) / len(per_domain), 4),
+        "macroRecall": round(sum(item["recall"] for item in per_domain.values()) / len(per_domain), 4),
+        "macroF1": round(sum(item["f1"] for item in per_domain.values()) / len(per_domain), 4),
+        "perDomain": per_domain,
+        "confusionMatrix": confusion,
     }
 
 

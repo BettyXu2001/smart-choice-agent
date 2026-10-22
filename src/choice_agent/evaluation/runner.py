@@ -117,7 +117,17 @@ class EvaluationRunner:
                 provider=self._provider_for(case_data, execution_provider),
             )
             try:
-                outputs = isolated._run_diet(owner_id, messages) if case_data.domain == "diet" else isolated._run_generic(owner_id, case_data.domain, messages, case_data)
+                auto_route = bool((case_data.setup or {}).get("autoRoute"))
+                outputs = (
+                    isolated._run_diet(owner_id, messages)
+                    if case_data.domain == "diet" and not auto_route
+                    else isolated._run_generic(
+                        owner_id,
+                        None if auto_route else case_data.domain,
+                        messages,
+                        case_data,
+                    )
+                )
                 trace_snapshot = isolated._trace_snapshot(owner_id, isolated._trace_ids(outputs))
                 return outputs, trace_snapshot
             except Exception as error:
@@ -222,7 +232,7 @@ class EvaluationRunner:
             "turns": turns,
         }
 
-    def _run_generic(self, owner_id: int, domain: str, messages: list[str], case_data: EvaluationCaseData) -> dict[str, Any]:
+    def _run_generic(self, owner_id: int, domain: str | None, messages: list[str], case_data: EvaluationCaseData) -> dict[str, Any]:
         setup = case_data.setup or {}
         context = {"searchMode": "fixture", **dict(setup.get("context") or {})}
         if (setup.get("mockSearch") or setup.get("mockAgent")) and "searchMode" not in dict(setup.get("context") or {}):

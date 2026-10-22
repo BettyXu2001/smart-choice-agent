@@ -21,6 +21,11 @@ def state(*, primary="a", revision=1, what_if=False):
                 "candidateId": "a",
                 "name": "A",
                 "attributes": {"price": 80},
+                "scoreBreakdown": [{
+                    "criterionKey": "fit",
+                    "normalizedScore": 90,
+                    "weight": 1.5,
+                }],
                 "evidence": [
                     {
                         "evidenceId": "ev-a",
@@ -45,6 +50,10 @@ def state(*, primary="a", revision=1, what_if=False):
             "tradeoffDetails": [],
         },
         "domainState": {
+            "sceneResolution": {
+                "candidateDomains": [],
+                "needsClarification": False,
+            },
             "conversationFields": {
                 "budget": {"value": 80 if revision > 1 else 100},
                 "preference": {"value": "stable"},
@@ -98,6 +107,15 @@ def outputs_for_what_if():
     current["turns"][1]["decisionState"] = hypothetical
     return current
 
+
+def outputs_for_safety():
+    current = outputs_with_turns()
+    decision = current["decisionState"]
+    decision["riskFlags"] = ["medical_risk"]
+    decision["recommendation"] = None
+    decision["candidates"] = []
+    return current
+
 def assert_auto_passes(metric_id, expected, outputs):
     result = evaluate_auto_assertion(metric_id, expected, outputs)
     assert result.passed is True, result
@@ -108,9 +126,13 @@ def assert_auto_passes(metric_id, expected, outputs):
     ("metric_id", "expected", "outputs"),
     [
         ("intent_accuracy", {"domain": "generic", "intent": "compare"}, outputs_with_turns()),
+        ("domain_routing_accuracy", {"domain": "generic", "needsClarification": False}, outputs_with_turns()),
+        ("clarification_decision_accuracy", {"shouldClarify": False}, outputs_with_turns()),
         ("constraint_extraction_accuracy", {"constraints": [{"key": "budget", "value": 100}]}, outputs_with_turns()),
         ("correction_update_accuracy", {"beforeTurn": 0, "afterTurn": 1, "checks": [{"path": "domainState.conversationFields.budget.value", "expected": 80}]}, outputs_with_turns()),
         ("hard_constraint_satisfaction", {}, outputs_with_turns()),
+        ("soft_preference_satisfaction", {"criteria": [{"key": "fit", "minimumNormalizedScore": 80, "minimumWeight": 1}]}, outputs_with_turns()),
+        ("safety_constraint_violation_rate", {"requireRiskFlags": True, "forbidRecommendation": True, "forbidCandidates": True}, outputs_for_safety()),
         ("exclusion_correctness", {"includes": ["b"], "excludes": ["a"]}, outputs_with_turns()),
         ("sensitivity_to_condition_change", {"beforeTurn": 0, "afterTurn": 1, "mode": "changed", "expectedPrimaryCandidateId": "c"}, outputs_with_turns(after_primary="c")),
         ("reason_recommendation_consistency", {"requireReasons": True, "requirePrimaryReference": True}, outputs_with_turns()),
@@ -140,9 +162,13 @@ def test_repetition_stability_covers_recommendation_stability():
 def test_all_target_metrics_have_direct_deterministic_coverage_in_tests():
     covered = {
         "intent_accuracy",
+        "domain_routing_accuracy",
+        "clarification_decision_accuracy",
         "constraint_extraction_accuracy",
         "correction_update_accuracy",
         "hard_constraint_satisfaction",
+        "soft_preference_satisfaction",
+        "safety_constraint_violation_rate",
         "exclusion_correctness",
         "recommendation_stability",
         "sensitivity_to_condition_change",
@@ -157,6 +183,23 @@ def test_all_target_metrics_have_direct_deterministic_coverage_in_tests():
         "agent_execution_failure_rate",
     }
     assert covered == set(DETERMINISTIC_TARGET_METRIC_IDS)
+
+
+@pytest.mark.parametrize(
+    ("metric_id", "expected"),
+    [
+        ("domain_routing_accuracy", {}),
+        ("clarification_decision_accuracy", {}),
+        ("soft_preference_satisfaction", {}),
+        ("safety_constraint_violation_rate", {}),
+    ],
+)
+def test_new_auto_evaluators_require_explicit_gold(metric_id, expected):
+    result = evaluate_auto_assertion(metric_id, expected, outputs_with_turns())
+
+    assert result.passed is None
+    assert result.evaluation_method == "not_evaluated"
+    assert result.reason
 
 
 def test_unsupported_fact_without_structured_claims_is_not_evaluated():

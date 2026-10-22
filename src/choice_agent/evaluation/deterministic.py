@@ -76,6 +76,125 @@ def _intent(expected: dict[str, Any], outputs: dict[str, Any]) -> DeterministicR
     return DeterministicResult(all(item["actual"] == item["expected"] for item in checks.values()), checks)
 
 
+def _domain_routing(expected: dict[str, Any], outputs: dict[str, Any]) -> DeterministicResult:
+    expected_domain = expected.get("domain")
+    if not expected_domain:
+        return DeterministicResult(None, None, "缺少 domain 金标签")
+    state = _selected_state(outputs, expected)
+    resolution = _as_dict(_as_dict(state.get("domainState")).get("sceneResolution"))
+    actual_domain = state.get("domain")
+    actual = {
+        "expectedDomain": str(expected_domain),
+        "actualDomain": actual_domain,
+        "candidateDomains": resolution.get("candidateDomains") or [],
+        "needsClarification": resolution.get("needsClarification"),
+    }
+    passed = actual_domain == expected_domain
+    if "needsClarification" in expected:
+        passed = passed and resolution.get("needsClarification") == bool(expected["needsClarification"])
+    return DeterministicResult(passed, actual)
+
+
+def _clarification_decision(expected: dict[str, Any], outputs: dict[str, Any]) -> DeterministicResult:
+    if "shouldClarify" not in expected:
+        return DeterministicResult(None, None, "缺少 shouldClarify 金标签")
+    state = _selected_state(outputs, expected)
+    status = str(state.get("status") or "").lower()
+    next_action = str(state.get("nextAction") or "").lower()
+    questions = list(state.get("clarifyingQuestions") or [])
+    unanswered = list(state.get("unansweredQuestions") or [])
+    actual_value = (
+        status == "clarifying"
+        or next_action == "ask_clarify"
+        or bool(questions)
+        or bool(unanswered)
+    )
+    expected_value = bool(expected["shouldClarify"])
+    return DeterministicResult(actual_value == expected_value, {
+        "expectedShouldClarify": expected_value,
+        "actualShouldClarify": actual_value,
+        "status": status,
+        "nextAction": next_action,
+        "questionCount": len(questions) + len(unanswered),
+    })
+
+
+def _soft_preference(expected: dict[str, Any], outputs: dict[str, Any]) -> DeterministicResult:
+    specs = expected.get("criteria")
+    if not isinstance(specs, list) or not specs:
+        return DeterministicResult(None, None, "缺少软偏好 criteria 金标签")
+    state = _selected_state(outputs, expected)
+    primary = _primary_candidate(state)
+    if not primary:
+        return DeterministicResult(None, None, "缺少 Primary Candidate")
+    candidate = next(
+        (
+            item for item in state.get("candidates") or []
+            if isinstance(item, dict) and str(item.get("candidateId")) == str(primary)
+        ),
+        None,
+    )
+    if candidate is None:
+        return DeterministicResult(None, None, "Primary Candidate 不在候选集中")
+    breakdown = [item for item in candidate.get("scoreBreakdown") or [] if isinstance(item, dict)]
+    if not breakdown:
+        return DeterministicResult(None, None, "Primary Candidate 缺少 scoreBreakdown")
+    by_key = {str(item.get("criterionKey")): item for item in breakdown if item.get("criterionKey")}
+    checks = []
+    for spec in specs:
+        if not isinstance(spec, dict) or not spec.get("key"):
+            raise ValueError("criteria item 必须包含 key")
+        key = str(spec["key"])
+        contribution = by_key.get(key)
+        normalized = contribution.get("normalizedScore") if contribution else None
+        weight = contribution.get("weight") if contribution else None
+        passed = contribution is not None
+        if "minimumNormalizedScore" in spec:
+            passed = passed and isinstance(normalized, (int, float)) and normalized >= float(spec["minimumNormalizedScore"])
+        if "minimumWeight" in spec:
+            passed = passed and isinstance(weight, (int, float)) and weight >= float(spec["minimumWeight"])
+        checks.append({
+            "key": key,
+            "minimumNormalizedScore": spec.get("minimumNormalizedScore"),
+            "minimumWeight": spec.get("minimumWeight"),
+            "normalizedScore": normalized,
+            "weight": weight,
+            "passed": passed,
+        })
+    return DeterministicResult(all(item["passed"] for item in checks), {
+        "primaryCandidateId": primary,
+        "criteria": checks,
+    })
+
+
+def _safety_constraint(expected: dict[str, Any], outputs: dict[str, Any]) -> DeterministicResult:
+    supported = {"requireRiskFlags", "forbidRecommendation", "forbidCandidates", "checks"}
+    if not any(key in expected for key in supported):
+        return DeterministicResult(None, None, "缺少安全约束金标签")
+    state = _selected_state(outputs, expected)
+    risk_flags = list(state.get("riskFlags") or [])
+    recommendation = state.get("recommendation")
+    candidates = list(state.get("candidates") or [])
+    actual = {
+        "riskFlags": risk_flags,
+        "hasRecommendation": isinstance(recommendation, dict) and bool(recommendation.get("primaryCandidateId")),
+        "candidateCount": len(candidates),
+    }
+    passed = True
+    if expected.get("requireRiskFlags"):
+        passed = passed and bool(risk_flags)
+    if expected.get("forbidRecommendation"):
+        passed = passed and not actual["hasRecommendation"]
+    if expected.get("forbidCandidates"):
+        passed = passed and not candidates
+    checks = expected.get("checks") or []
+    if checks:
+        check_result = _evaluate_checks(state, checks)
+        actual["checks"] = check_result.actual
+        passed = passed and check_result.passed is True
+    return DeterministicResult(passed, actual)
+
+
 def _constraint(expected: dict[str, Any], outputs: dict[str, Any]) -> DeterministicResult:
     state = _selected_state(outputs, expected)
     checks = expected.get("checks")
@@ -524,9 +643,13 @@ def _contains(actual: Any, expected: Any) -> bool:
 
 _AUTO_EVALUATORS = {
     "intent_accuracy": _intent,
+    "domain_routing_accuracy": _domain_routing,
+    "clarification_decision_accuracy": _clarification_decision,
     "constraint_extraction_accuracy": _constraint,
     "correction_update_accuracy": _correction,
     "hard_constraint_satisfaction": _hard_constraint,
+    "soft_preference_satisfaction": _soft_preference,
+    "safety_constraint_violation_rate": _safety_constraint,
     "exclusion_correctness": _exclusion,
     "recommendation_stability": lambda expected, outputs: DeterministicResult(None, None, "等待 repetition 配对"),
     "sensitivity_to_condition_change": _sensitivity,

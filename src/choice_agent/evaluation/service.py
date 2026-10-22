@@ -223,7 +223,19 @@ class EvaluationService:
                 ))
         self._finalize_repetition_metrics(result_rows)
         result_payloads = [self.result_response(result) for result in result_rows]
-        summary = summarize_results(result_payloads)
+        case_metadata = {
+            str(snapshot["id"]): {
+                "domain": (snapshot.get("caseData") or {}).get("domain", "generic"),
+                "caseType": (
+                    (snapshot.get("caseData") or {}).get("caseType")
+                    or (snapshot.get("caseData") or {}).get("case_type")
+                    or "general"
+                ),
+                "tags": (snapshot.get("caseData") or {}).get("tags", []),
+            }
+            for snapshot in snapshots
+        }
+        summary = summarize_results(result_payloads, case_metadata)
         status = "completed" if not summary["caseCounts"]["error"] else "partial"
         run = self.repository.update_run(run, status=status, summary_json=summary, finished_at=datetime.now())
         self._sync_case_regression_status(owner_id, run, result_payloads)

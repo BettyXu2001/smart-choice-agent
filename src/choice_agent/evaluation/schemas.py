@@ -71,6 +71,7 @@ class EvaluationAssertion(EvaluationModel):
 
 class EvaluationCaseData(EvaluationModel):
     domain: str = "generic"
+    case_type: str = Field(default="general", min_length=1, max_length=64)
     setup: dict[str, Any] = Field(default_factory=dict)
     messages: list[str] = Field(default_factory=list, max_length=10)
     commands: list[dict[str, Any]] = Field(default_factory=list, max_length=10)

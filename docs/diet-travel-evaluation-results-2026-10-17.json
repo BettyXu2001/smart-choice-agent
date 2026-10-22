@@ -1,0 +1,168 @@
+{
+  "generatedAt": "2026-10-17",
+  "environment": {
+    "database": "in-memory SQLite",
+    "provider": "disabled",
+    "mode": "fixture",
+    "repeat": 2,
+    "limit": 20
+  },
+  "dataset": {
+    "name": "diet-travel-evaluation",
+    "version": "v1",
+    "hash": "2289e4af9a804523239613a90ace9a307374e9de416fb42d5c38d0ff3ce94bf4",
+    "caseCount": 20
+  },
+  "run": {
+    "id": "3e81577bfb494880bbfa90d17e99031e",
+    "status": "completed",
+    "evaluatorVersion": "evaluation-v3",
+    "versionLabel": "diet-travel-v1-offline-2026-10-17",
+    "resultCount": 40
+  },
+  "summary": {
+    "overallScore": 99.16,
+    "categoryScores": {
+      "需求理解": 96.0,
+      "决策质量": 100.0,
+      "解释质量": 100.0,
+      "多轮交互": 100.0,
+      "工程可靠性": 99.78
+    },
+    "caseCounts": {
+      "total": 40,
+      "passed": 38,
+      "failed": 2,
+      "error": 0,
+      "notEvaluated": 0
+    },
+    "caseRates": {
+      "passRate": 0.95,
+      "failureRate": 0.05,
+      "errorRate": 0.0,
+      "notEvaluatedRate": 0.0
+    },
+    "coverage": {
+      "evaluatedQualityMetrics": 21,
+      "qualityMetricCount": 21,
+      "status": "full",
+      "deterministicEvaluatedMetricCount": 20,
+      "deterministicMetricCount": 20,
+      "deterministicMetricRate": 1.0,
+      "catalogDeterministicEvaluatedMetricCount": 21,
+      "catalogQualityMetricCount": 21,
+      "deterministicEvaluatedAssertionCount": 88,
+      "deterministicEligibleAssertionCount": 88,
+      "deterministicAssertionRate": 1.0,
+      "manualReviewMetricIds": [],
+      "notEvaluatedMetricIds": []
+    },
+    "performance": {
+      "caseCount": 40,
+      "latencySampleCount": 40,
+      "averageLatencyMs": 517.4,
+      "p95LatencyMs": 1696.0,
+      "totalTokens": null,
+      "averageTokensPerCase": null,
+      "estimatedTotalCost": null,
+      "knownEstimatedCost": null,
+      "tokenUsageCaseCount": 0,
+      "providerCallCount": 8,
+      "unreportedUsageCallCount": 8,
+      "unknownPriceCallCount": 0
+    },
+    "routingDiagnostics": {
+      "sampleCount": 4,
+      "accuracy": 1.0,
+      "macroPrecision": 1.0,
+      "macroRecall": 1.0,
+      "macroF1": 1.0,
+      "perDomain": {
+        "diet": {"precision": 1.0, "recall": 1.0, "f1": 1.0, "support": 2},
+        "travel": {"precision": 1.0, "recall": 1.0, "f1": 1.0, "support": 2}
+      },
+      "confusionMatrix": {
+        "diet": {"diet": 2, "travel": 0},
+        "travel": {"diet": 0, "travel": 2}
+      }
+    },
+    "metrics": [
+      {"id": "intent_accuracy", "value": 1.0, "numerator": 4, "denominator": 4, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "domain_routing_accuracy", "value": 1.0, "numerator": 4, "denominator": 4, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "clarification_decision_accuracy", "value": 1.0, "numerator": 4, "denominator": 4, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "constraint_extraction_accuracy", "value": 0.8, "numerator": 8, "denominator": 10, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "correction_update_accuracy", "value": 1.0, "numerator": 4, "denominator": 4, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "hard_constraint_satisfaction", "value": 1.0, "numerator": 10, "denominator": 10, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "soft_preference_satisfaction", "value": 1.0, "numerator": 4, "denominator": 4, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "safety_constraint_violation_rate", "value": 0.0, "numerator": 0, "denominator": 2, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "exclusion_correctness", "value": 1.0, "numerator": 2, "denominator": 2, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "recommendation_stability", "value": 1.0, "numerator": 6, "denominator": 6, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "sensitivity_to_condition_change", "value": 1.0, "numerator": 2, "denominator": 2, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "reason_recommendation_consistency", "value": 1.0, "numerator": 4, "denominator": 4, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "evidence_reference_validity", "value": 1.0, "numerator": 4, "denominator": 4, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "unsupported_fact_rate", "value": 0.0, "numerator": 0, "denominator": 4, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "excluded_candidate_recommend_rate", "value": 0.0, "numerator": 0, "denominator": 4, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "multi_turn_state_retention", "value": 1.0, "numerator": 2, "denominator": 2, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "correction_coverage", "value": 1.0, "numerator": 4, "denominator": 4, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "what_if_isolation", "value": 1.0, "numerator": 2, "denominator": 2, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "llm_fallback_success", "value": 1.0, "numerator": 2, "denominator": 2, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "search_fallback_success", "value": 1.0, "numerator": 10, "denominator": 10, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "fallback_activation_rate", "value": 0.1, "numerator": 4, "denominator": 40, "evaluationMethod": "deterministic", "scored": false},
+      {"id": "agent_execution_failure_rate", "value": 0.0066, "numerator": 2, "denominator": 304, "evaluationMethod": "deterministic", "scored": true},
+      {"id": "average_response_time_ms", "value": 517.4, "numerator": 20696, "denominator": 40, "evaluationMethod": "deterministic", "scored": false}
+    ],
+    "groups": {
+      "byDomain": {
+        "diet": {"total": 20, "passed": 18, "failed": 2, "passRate": 0.9, "overallScore": 99.0},
+        "travel": {"total": 20, "passed": 20, "failed": 0, "passRate": 1.0, "overallScore": 99.92}
+      },
+      "byCaseType": {
+        "clarification": {"total": 4, "passed": 4},
+        "conflict": {"total": 2, "passed": 2},
+        "correction": {"total": 4, "passed": 4},
+        "edge": {"total": 6, "passed": 6},
+        "hard_constraint": {"total": 4, "passed": 2, "failed": 2},
+        "recommendation": {"total": 4, "passed": 4},
+        "reliability": {"total": 2, "passed": 2},
+        "routing": {"total": 4, "passed": 4},
+        "safety": {"total": 2, "passed": 2},
+        "soft_preference": {"total": 4, "passed": 4},
+        "stability": {"total": 2, "passed": 2},
+        "what_if": {"total": 2, "passed": 2}
+      },
+      "byTag": {
+        "diet": {"total": 20, "passed": 18, "failed": 2},
+        "travel": {"total": 20, "passed": 20},
+        "hard_constraint": {"total": 4, "passed": 2, "failed": 2},
+        "exclusion": {"total": 4, "passed": 2, "failed": 2},
+        "fault_injection": {"total": 6, "passed": 6},
+        "fallback": {"total": 4, "passed": 4},
+        "multi_turn": {"total": 8, "passed": 8},
+        "stability": {"total": 6, "passed": 6},
+        "unsupported_fact": {"total": 4, "passed": 4}
+      }
+    }
+  },
+  "caseOutcomes": [
+    {"seedId": "diet-travel-v1.diet-route", "domain": "diet", "caseType": "routing", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.diet-recommendation", "domain": "diet", "caseType": "recommendation", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.diet-clarification", "domain": "diet", "caseType": "clarification", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.diet-hard-exclusion", "domain": "diet", "caseType": "hard_constraint", "statuses": ["failed", "failed"], "failedMetric": "constraint_extraction_accuracy", "expected": "healthGoal not_contains 清淡", "actual": ["清淡"]},
+    {"seedId": "diet-travel-v1.diet-soft-preference", "domain": "diet", "caseType": "soft_preference", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.diet-safety", "domain": "diet", "caseType": "safety", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.diet-correction", "domain": "diet", "caseType": "correction", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.diet-refresh", "domain": "diet", "caseType": "edge", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.diet-unverified-restriction", "domain": "diet", "caseType": "edge", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.diet-stability", "domain": "diet", "caseType": "stability", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.travel-route", "domain": "travel", "caseType": "routing", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.travel-clarification", "domain": "travel", "caseType": "clarification", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.travel-hard-budget", "domain": "travel", "caseType": "hard_constraint", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.travel-soft-preference", "domain": "travel", "caseType": "soft_preference", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.travel-conflict", "domain": "travel", "caseType": "conflict", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.travel-correction", "domain": "travel", "caseType": "correction", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.travel-rain-what-if", "domain": "travel", "caseType": "what_if", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.travel-model-timeout", "domain": "travel", "caseType": "recommendation", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.travel-search-fallback", "domain": "travel", "caseType": "reliability", "statuses": ["passed", "passed"]},
+    {"seedId": "diet-travel-v1.travel-agent-failure", "domain": "travel", "caseType": "edge", "statuses": ["passed", "passed"]}
+  ]
+}
