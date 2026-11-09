@@ -127,9 +127,9 @@ class EvaluationService:
         row = self.repository.get_case(owner_id, case_id)
         if row is None:
             raise KeyError("Case 不存在或无权限访问")
-        changes = {key: value for key, value in body.model_dump(mode="json", by_alias=False, exclude={"revision"}, exclude_none=True).items()}
+        changes = body.model_dump(mode="json", by_alias=False, exclude={"revision"}, exclude_unset=True)
         if "case_data" in changes:
-            changes["case_data"] = changes["case_data"]
+            changes["case_data"] = body.case_data.model_dump(mode="json", by_alias=False)
         if changes.get("status") == "verified" and row.status != "verified":
             raise EvaluationConflictError("Case 只能由通过的回归运行自动标记为 verified")
         updated = self.repository.update_case(row, body.revision, changes)
@@ -421,14 +421,24 @@ class EvaluationService:
                     metrics=metrics,
                 )
     def _sync_case_regression_status(self, owner_id: int, run, results: list[dict[str, Any]]) -> None:
+        warnings = []
         for result in results:
             row = self.repository.get_case(owner_id, result["caseId"])
             if row is None or not row.fix_version or row.revision != result["caseRevision"]:
                 continue
+            status = None
             if result["status"] == "passed" and row.status == "awaiting_regression":
-                self.repository.update_case(row, row.revision, {"status": "verified"})
+                status = "verified"
             elif result["status"] == "failed" and row.status == "verified":
-                self.repository.update_case(row, row.revision, {"status": "reopened"})
+                status = "reopened"
+            if status:
+                case_id = row.id
+                try:
+                    self.repository.update_case(row, row.revision, {"status": status})
+                except EvaluationConflictError as error:
+                    warnings.append({"caseId": case_id, "message": str(error)})
+        if warnings:
+            self.repository.update_run(run, summary_json={**run.summary_json, "caseSyncWarnings": warnings})
 
     def _effective_run_configuration(self, body: EvaluationRunCreate) -> EvaluationRunConfiguration:
         if body.run_configuration is not None:

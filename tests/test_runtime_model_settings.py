@@ -29,6 +29,7 @@ def test_runtime_model_headers_create_enabled_temporary_provider():
     base_settings = Settings(
         database_url="sqlite:///./test.db",
         model_base_url="https://server.example/v1",
+        model_base_url_allowlist=("https://browser.example/v1",),
         main_model="server-main",
         light_model="server-light",
         enable_llm=False,
@@ -45,7 +46,7 @@ def test_runtime_model_headers_create_enabled_temporary_provider():
     )
 
     assert runtime_settings.model_api_key == "browser-test-key"
-    assert runtime_settings.model_base_url == "https://browser.example/v1/"
+    assert runtime_settings.model_base_url == "https://browser.example/v1"
     assert runtime_settings.main_model == "browser-main"
     assert runtime_settings.light_model == "browser-light"
     assert runtime_settings.enable_llm is True
@@ -100,6 +101,7 @@ def test_runtime_search_headers_create_temporary_search_settings():
         database_url="sqlite:///./test.db",
         search_provider="fixture",
         search_base_url="https://server.example/v1",
+        search_base_url_allowlist=("https://browser-search.example/v1",),
         search_model="server-search",
     )
 
@@ -119,7 +121,7 @@ def test_runtime_search_headers_create_temporary_search_settings():
 
     assert runtime_settings.search_provider == "openai"
     assert runtime_settings.search_api_key == "browser-search-key"
-    assert runtime_settings.search_base_url == "https://browser-search.example/v1/"
+    assert runtime_settings.search_base_url == "https://browser-search.example/v1"
     assert runtime_settings.search_model == "browser-search"
     assert provider.enabled is False
 

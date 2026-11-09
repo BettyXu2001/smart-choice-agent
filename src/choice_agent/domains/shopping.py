@@ -40,6 +40,12 @@ class ShoppingProfile(ComparisonProfile):
     def retrieval_sensitive_fields(self) -> set[str]:
         return {"category", "usage"}
 
+    def budget_attribute(self) -> str:
+        return "price"
+
+    def budget_requires_refresh(self, direction, coverage) -> bool:
+        return direction not in {"tightened", "unchanged"} and not coverage["sufficient"]
+
     def matches(self, message: str) -> bool:
         return any(word in message.lower() for word in [
             "买", "购买", "选电脑", "手机", "耳机", "家电", "笔记本", "shopping", "laptop", "phone"
@@ -91,6 +97,7 @@ class ShoppingFixtureProvider(FixtureCandidateProvider):
                 else:
                     result.warnings.append("模拟商品未覆盖该用途，usage 已参与召回但没有精确匹配")
             result.warnings.append("fixture 候选均为模拟商品，不代表具体在售商品、实时价格或库存")
+            result.budget_coverage = {"complete": True, "budgetIndependent": True}
             return result
         labels = {"phone": "手机", "headphones": "耳机", "appliance": "家电"}
         prices = {"phone": [1999, 3499, 5999], "headphones": [199, 699, 1499], "appliance": [1999, 3999, 6999]}
@@ -106,4 +113,6 @@ class ShoppingFixtureProvider(FixtureCandidateProvider):
             }
             for index, price in enumerate(prices[category])
         ]
-        return FixtureCandidateProvider(f"shopping:{category}", fixtures).search(context)
+        result = FixtureCandidateProvider(f"shopping:{category}", fixtures).search(context)
+        result.budget_coverage = {"complete": True, "budgetIndependent": True}
+        return result

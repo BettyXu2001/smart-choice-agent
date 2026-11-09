@@ -69,7 +69,12 @@ def interpret(context, provider=None, model=None):
         state(d)["changes"].append(
             f"通勤时间上限：{commute_limit['minutes']} 分钟（{commute_limit['basis']}）"
         )
-    budget = re.search(r"(?:总预算|预算|不超过|不超|最多|上限)[是为改到成不超过提高增加放宽调整：:\s]*(\d+(?:\.\d+)?)\s*(万|千|k)?", text, re.I)
+    budget = re.search(
+        r"(?:总预算|预算)\s*从\s*\d+(?:\.\d+)?\s*(?:万|千|k)?\s*元?\s*"
+        r"(?:提高|增加|放宽|下调|降低|减少|收紧|调|改|升|降)?(?:到|至|为|成)\s*(\d+(?:\.\d+)?)\s*(万|千|k)?",
+        text, re.I,
+    )
+    budget = budget or re.search(r"(?:总预算|预算|不超过|不超|最多|上限)[是为改到成不超过提高增加放宽调整降低至下减少收紧升：:\s]*(\d+(?:\.\d+)?)\s*(万|千|k)?", text, re.I)
     if not budget and "budget" in current and current["budget"].get("value") is not None:
         budget = re.search(r"^(?:改到|改成|调整到)\s*(\d+(?:\.\d+)?)\s*(万|千|k)?(?:元)?[。！!\s]*$", text, re.I)
     if budget and "budget" in current and not ("小时" in text and "预算" not in text and "元" not in text):

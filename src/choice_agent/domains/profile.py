@@ -106,3 +106,9 @@ class DomainProfile(ABC):
 
     def supports_incremental_execution(self, data: dict[str, Any]) -> bool:
         return False
+
+    def budget_attribute(self) -> str | None:
+        return None
+
+    def budget_requires_refresh(self, direction: str, coverage: dict[str, Any]) -> bool:
+        return False

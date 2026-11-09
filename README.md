@@ -94,6 +94,17 @@ Python · FastAPI · Pydantic · SQLAlchemy · SQLite · OpenAI-compatible APIs
 
 ## Quick Start
 
+Set a persistent `CHOICE_AGENT_SESSION_SECRET` of at least 32 bytes before starting the server. Generate it once with `python -c "import secrets; print(secrets.token_hex(32))"`; save and reuse that value across restarts. For local HTTP also set `CHOICE_AGENT_COOKIE_SECURE=false`. Public HTTPS deployments should keep it `true` (the default). The app does not automatically load `.env`.
+
+PowerShell (set the secret in the shell once; do not regenerate it on every launch):
+
+```powershell
+$env:CHOICE_AGENT_SESSION_SECRET = "<your saved secret>"
+$env:CHOICE_AGENT_COOKIE_SECURE = "false"
+```
+
+For Bash use `export CHOICE_AGENT_SESSION_SECRET='<your saved secret>'` and `export CHOICE_AGENT_COOKIE_SECURE=false`.
+
 ```bash
 python -m pip install -e .
 python scripts/init_db.py
@@ -114,14 +125,16 @@ http://127.0.0.1:8000/docs
 
 The core deterministic workflow can run without an LLM API key.
 
+Browser model/search Base URLs must be authorized by the deployment operator. Models support `https://api.deepseek.com` and `https://api.openai.com/v1` by default; search supports `https://api.openai.com/v1`. Each server-configured Base URL is also trusted. To authorize another gateway, set `CHOICE_AGENT_MODEL_BASE_URL_ALLOWLIST` or `CHOICE_AGENT_SEARCH_BASE_URL_ALLOWLIST` to a JSON array of exact HTTPS Base URLs. Provider requests do not follow redirects; use the final endpoint. See [deployment details](docs/deploy.md#provider-endpoint-authorization).
+
 Each turn records its planned and executed path in Trace. Demo mode always uses fixture candidates and rule-based interpretation/explanation, even when model or Web Search credentials are configured.
 
 ## Documentation
 
 For detailed architecture and design decisions, see:
 
-* [`docs/PROJECT_OVERVIEW.md`](docs/PROJECT_OVERVIEW.md)
-* [`docs/EVALUATION.md`](docs/EVALUATION.md)
+* [`docs/deploy.md`](docs/deploy.md)
+* [`docs/evaluation-v3-results-2026-10-17.md`](docs/evaluation-v3-results-2026-10-17.md)
 * [`adr/`](adr/) — architecture and implementation decisions
 
 ---
@@ -240,6 +253,12 @@ http://127.0.0.1:8000/docs
 
 完整架构与设计说明：
 
-* [`docs/PROJECT_OVERVIEW.md`](docs/PROJECT_OVERVIEW.md)
-* [`docs/EVALUATION.md`](docs/EVALUATION.md)
+* [`docs/deploy.md`](docs/deploy.md)
+* [`docs/evaluation-v3-results-2026-10-17.md`](docs/evaluation-v3-results-2026-10-17.md)
 * [`adr/`](adr/) — 架构与实现决策记录
+
+## 匿名会话与旧数据
+
+公开访问使用服务端签名的 HttpOnly Cookie，每个浏览器自动建立独立身份。HTTP 客户端须先调用 `GET /api/v1/identity`，保存并在后续请求携带 Cookie；`X-User-Id` 不再选择身份。签名密钥必须至少 32 字节，并在重启和所有实例间保持一致。本地 HTTP 显式设置 `CHOICE_AGENT_COOKIE_SECURE=false`，公网 HTTPS 保持默认 `true`。应用不会自动读取 `.env`。
+
+清除 Cookie、Cookie 到期、换设备或更换签名密钥后无法找回原匿名身份；旧数据仍保留，不会自动迁给新访客。既有演示用户的数据不会按旧 localStorage ID 自动认领。本轮未新增账户找回、配额或费用限制。

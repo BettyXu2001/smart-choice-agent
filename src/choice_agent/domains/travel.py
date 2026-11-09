@@ -40,6 +40,14 @@ class TravelProfile(ComparisonProfile):
     def retrieval_sensitive_fields(self) -> set[str]:
         return {"departure", "days"}
 
+    def budget_attribute(self) -> str:
+        return "budget"
+
+    def budget_requires_refresh(self, direction, coverage) -> bool:
+        # Budget can change the whole itinerary, even when the limit is tighter.
+        fixed_fixture = coverage["sufficient"] and coverage["budgetIndependent"] and coverage.get("sourceMode") == "fixture"
+        return direction != "unchanged" and not fixed_fixture
+
     def clarification_prompt(self, context) -> str:
         fields = context.decision.domain_state.get("conversationFields", {})
         missing_departure = not fields.get("departure", {}).get("value")
@@ -83,6 +91,8 @@ class TravelFixtureProvider(FixtureCandidateProvider):
             result.warnings.append(f"fixture 路程和预算仅为上海出发演示基准，当前从{departure}出发，不参与路线或预算评价")
         else:
             result.warnings.append("fixture 路程和预算是模拟参考，不是真实路线或报价")
+            if departure == "上海":
+                result.budget_coverage = {"complete": True, "budgetIndependent": True}
         return result
 
 

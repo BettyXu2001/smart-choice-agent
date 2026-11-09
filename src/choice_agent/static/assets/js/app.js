@@ -280,6 +280,7 @@
         });
     }
     function render() {
+        if (!identityReady) return;
         const route = currentRoute();
         setActiveNav(route);
         if (route === "/") {
@@ -864,6 +865,7 @@
                         <label class="field full">
                             <span>模型 Base URL</span>
                             <input type="url" name="baseUrl" value="${escapeHtml(settings.baseUrl)}" placeholder="https://api.deepseek.com">
+                            <small class="muted">自定义地址需部署者授权，请填写无需跳转的最终地址。</small>
                         </label>
                         <div class="form-grid two">
                             <label class="field">
@@ -887,6 +889,7 @@
                             <label class="field">
                                 <span>搜索 Base URL</span>
                                 <input type="url" name="searchBaseUrl" value="${escapeHtml(settings.searchBaseUrl)}" placeholder="https://api.openai.com/v1">
+                                <small class="muted">自定义地址需部署者授权，请填写无需跳转的最终地址。</small>
                             </label>
                             <label class="field">
                                 <span>搜索模型</span>
@@ -2501,6 +2504,7 @@
         }
     }
     function handleClick(event) {
+        if (!identityReady) return;
         if (evaluationDashboard?.handleClick(event)) {
             return;
         }
@@ -2634,6 +2638,7 @@
         }
     }
     function handleSubmit(event) {
+        if (!identityReady) { event.preventDefault(); return; }
         const form = event.target;
         if (evaluationDashboard?.handleSubmit(event)) {
             return;
@@ -2701,25 +2706,40 @@
         applyTheme(state.theme);
         applyDeveloperMode();
     }
-    function initUserField() {
-        userIdInput.value = DietApi.setUserId(DietApi.getUserId());
-        userIdInput.addEventListener("change", () => {
-            DietApi.setUserId(userIdInput.value);
-            state.home.loaded = false;
-            state.personalMeals = [];
-            state.publicMeals = [];
-            state.history = { items: [], detail: null, loading: false, error: "" };
-            state.profile = { data: null, loading: false, error: "" };
-            state.traces.rows = [];
-            state.traces.selected = null;
-            Object.assign(state.evaluation, { dashboard: null, selectedRun: null, selectedCaseId: null, loading: false });
-            state.chat.generation += 1;
-            Object.assign(state.chat, {sessionId: null, decision: null, messages: defaultChatMessages(), initialized: false, sending: false, retry: null, error: "", draft: "", editFields: null, panelOpen: false, pendingPrompt: "", autoSending: false});
-            showToast("用户 ID 已切换");
-            render();
-        });
+    let identityReady = false;
+    function identityError(message) {
+        identityReady = false;
+        state.chat.generation += 1;
+        Object.assign(state.chat, {sessionId: null, decision: null, initialized: false, messages: [], sending: false, retry: null});
+        state.history = {items: [], detail: null, loading: false, error: ""};
+        state.profile = {data: null, loading: false, error: ""};
+        state.personalMeals = [];
+        state.traces.rows = [];
+        state.traces.selected = null;
+        Object.assign(state.evaluation, {dashboard: null, selectedRun: null, selectedCaseId: null});
+        userIdInput.value = "";
+        app.hidden = true;
+        app.innerHTML = "";
+        const panel = document.createElement("section");
+        panel.className = "empty-state";
+        panel.innerHTML = `<p>${escapeHtml(message)}</p><button id="identityRetry" type="button">刷新并重新建立会话</button>`;
+        app.insertAdjacentElement("afterend", panel);
+        document.getElementById("identityRetry").addEventListener("click", () => location.reload());
     }
-    window.addEventListener("hashchange", render);
+    async function initializeIdentity() {
+        app.innerHTML = '<div class="empty-state">正在建立匿名会话…</div>';
+        try {
+            await DietApi.ensureIdentity();
+            userIdInput.value = DietApi.getUserId();
+            identityReady = true;
+            if (!location.hash) navigate("/");
+            else render();
+        } catch (error) {
+            identityError(error.message);
+        }
+    }
+    window.addEventListener("choice-agent-identity-expired", () => identityError("匿名会话已失效，请刷新页面后继续。旧请求不会自动重发。"));
+    window.addEventListener("hashchange", () => { if (identityReady) render(); });
     document.addEventListener("click", closeThemeMenuOnOutsideClick);
     document.addEventListener("click", handleClick);
     app.addEventListener("input", event => {
@@ -2754,10 +2774,5 @@
     const evaluationDashboard = window.createEvaluationDashboard ? window.createEvaluationDashboard({state, app, navigate, showToast, escapeHtml, safeJson, statCard, formatScore}) : null;
     const {renderChat, closeDietPanel, sendDietCommand, handleDietAction, submitChat, resetChat, prepareChatFromHome} = conversation;
     initTheme();
-    initUserField();
-    if (!location.hash) {
-        navigate("/");
-    } else {
-        render();
-    }
+    initializeIdentity();
 })();

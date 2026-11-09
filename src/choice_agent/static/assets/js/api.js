@@ -6,7 +6,9 @@
     const DECISION_HISTORY_API_BASE = "/api/v1/decision-history";
     const EVALUATION_API_BASE = "/api/v1/evaluations";
     const PROFILE_API_BASE = "/api/v1/profile";
-    const USER_ID_KEY = "diet.userId";
+    let identityPromise = null;
+    let currentUserId = null;
+    let identityExpired = false;
     const MODEL_SETTINGS_KEY = "choiceAgentModelSettings";
     const DEFAULT_MODEL_SETTINGS = {
         enabled: false,
@@ -26,13 +28,34 @@
     };
 
     function getUserId() {
-        return localStorage.getItem(USER_ID_KEY) || "1";
+        return currentUserId;
     }
 
-    function setUserId(userId) {
-        const normalized = String(userId || "1").trim() || "1";
-        localStorage.setItem(USER_ID_KEY, normalized);
-        return normalized;
+    async function ensureIdentity() {
+        if (identityExpired) throw new Error("会话已失效，请刷新页面后继续。");
+        if (!identityPromise) {
+            const load = () => fetch("/api/v1/identity", {credentials: "same-origin", cache: "no-store"});
+            identityPromise = (navigator.locks ? navigator.locks.request("choice-agent-identity", load) : load())
+                .then(async response => {
+                    if (!response.ok) throw new Error(await readError(response) || "无法初始化匿名会话");
+                    const identity = await response.json();
+                    if (!Number.isInteger(identity.userId) || identity.userId < 2) throw new Error("身份响应不合法");
+                    currentUserId = String(identity.userId);
+                    return currentUserId;
+                }).catch(error => {
+                    identityPromise = null;
+                    throw error;
+                });
+        }
+        return identityPromise;
+    }
+
+    function expireIdentity() {
+        if (identityExpired) return;
+        identityExpired = true;
+        currentUserId = null;
+        identityPromise = null;
+        window.dispatchEvent(new Event("choice-agent-identity-expired"));
     }
 
     function normalizeModelSettings(settings) {
@@ -129,9 +152,9 @@
     }
 
     async function request(baseUrl, path, options) {
+        await ensureIdentity();
         const config = options || {};
         const headers = new Headers(config.headers || {});
-        headers.set("X-User-Id", getUserId());
         attachModelHeaders(headers);
         attachSearchHeaders(headers);
 
@@ -141,6 +164,7 @@
 
         const response = await fetch(`${baseUrl}${path}`, {
             ...config,
+            credentials: "same-origin",
             headers,
             body: config.body === undefined || config.body instanceof FormData
                 ? config.body
@@ -148,6 +172,7 @@
         });
 
         if (!response.ok) {
+            if (response.status === 401) expireIdentity();
             const detail = await readError(response);
             const error = new Error(detail || `请求失败：${response.status}`);
             error.status = response.status;
@@ -155,11 +180,13 @@
             throw error;
         }
 
+        if (identityExpired) throw new Error("会话已失效，请刷新页面。");
         if (response.status === 204) {
             return null;
         }
 
         const text = await response.text();
+        if (identityExpired) throw new Error("会话已失效，请刷新页面。");
         if (!text) {
             return null;
         }
@@ -199,19 +226,21 @@
     }
 
     async function streamRequest(baseUrl, path, body, options) {
+        await ensureIdentity();
         const config = options || {};
         const headers = new Headers(config.headers || {});
-        headers.set("X-User-Id", getUserId());
         headers.set("Content-Type", "application/json");
         attachModelHeaders(headers);
         attachSearchHeaders(headers);
         const response = await fetch(`${baseUrl}${path}`, {
             method: "POST",
+            credentials: "same-origin",
             headers,
             body: JSON.stringify(body),
             signal: config.signal
         });
         if (!response.ok) {
+            if (response.status === 401) expireIdentity();
             const detail = await readError(response);
             const error = new Error(detail || `请求失败：${response.status}`);
             error.status = response.status;
@@ -226,6 +255,7 @@
         let buffer = "";
         let finalResponse = null;
         const handleLine = (line) => {
+            if (identityExpired) throw new Error("会话已失效，请刷新页面。");
             const text = line.trim();
             if (!text) return;
             let event;
@@ -284,7 +314,7 @@
 
     window.DietApi = {
         getUserId,
-        setUserId,
+        ensureIdentity,
         getModelSettings,
         saveModelSettings,
         clearModelSettings,

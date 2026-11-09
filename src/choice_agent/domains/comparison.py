@@ -5,6 +5,7 @@ from typing import Any
 
 from choice_agent.agents.base import AgentContext
 from choice_agent.decision.evidence import EvidenceValidator, sync_decision_evidence
+from choice_agent.decision.execution import bind_budget_coverage
 from choice_agent.decision.ranking import CriterionEvaluator, GenericRankingEngine
 from choice_agent.decision.state_machine import transition_decision
 from choice_agent.domains.profile import DomainProfile
@@ -92,6 +93,8 @@ class ComparisonProfile(DomainProfile):
         context.emit_progress("searching_candidates", "正在寻找候选", sourceMode=source_mode)
         transition_decision(context.decision, DecisionStatus.SEARCHING, DecisionNextAction.SEARCH_CANDIDATES)
         result = self._search(context)
+        coverage_declaration = result.budget_coverage
+        covered_ids = [item.candidate_id for item in result.candidates]
         manual = ManualCandidateProvider().search(context)
         result = CompositeCandidateProvider.merge([result, manual])
         merged_count = len(result.candidates)
@@ -142,6 +145,9 @@ class ComparisonProfile(DomainProfile):
             "realTime": bool(result.run and result.run.mode == "web"),
             "warnings": [*result.warnings, *validation_warnings],
         }
+        coverage = bind_budget_coverage(self, context.decision, coverage_declaration, result.run, covered_ids)
+        if coverage:
+            context.decision.domain_state["source"]["budgetCoverage"] = coverage
         ranking_diagnostics: dict[str, Any] = {}
         context.decision.candidates = self.ranking.rank(
             context.decision, candidates, self.evaluator, diagnostics=ranking_diagnostics
@@ -295,6 +301,8 @@ class ComparisonProfile(DomainProfile):
                 return self.web_provider.search(context)
             except RuntimeError as error:
                 result = self.candidate_provider.search(context)
+                # An offline fallback cannot certify the requested live search scope.
+                result.budget_coverage = None
                 result.warnings.append(f"Web Search 失败，已回退 fixture：{error}")
                 if context.trace:
                     context.trace.fallback(

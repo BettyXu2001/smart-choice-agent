@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -63,24 +63,42 @@ class EvaluationRepository:
         if query:
             like = f"%{query}%"
             stmt = stmt.where(EvaluationCaseRecord.title.like(like) | EvaluationCaseRecord.original_question.like(like))
-        rows = list(self.db.scalars(stmt.order_by(desc(EvaluationCaseRecord.updated_at)).limit(limit)))
-        if module:
-            rows = [row for row in rows if module in (row.modules or [])]
-        return rows
+        stmt = stmt.order_by(desc(EvaluationCaseRecord.updated_at), desc(EvaluationCaseRecord.id))
+        if not module:
+            return list(self.db.scalars(stmt.limit(limit)))
+        matches: list[EvaluationCaseRecord] = []
+        rows = self.db.scalars(stmt.execution_options(yield_per=100))
+        try:
+            for row in rows:
+                if module in (row.modules or []):
+                    matches.append(row)
+                    if len(matches) >= limit:
+                        break
+        finally:
+            rows.close()
+        return matches
 
     def update_case(self, row: EvaluationCaseRecord, expected_revision: int, changes: dict[str, Any]) -> EvaluationCaseRecord:
         if row.revision != expected_revision:
             raise EvaluationConflictError("Case 已被更新，请刷新后重试")
-        old_status = row.status
-        for key, value in changes.items():
-            setattr(row, key, value)
-        row.revision += 1
-        row.updated_at = datetime.now()
-        row.audit_events = [
+        now = datetime.now()
+        audit_events = [
             *(row.audit_events or []),
-            {"at": row.updated_at.isoformat(), "event": "updated", "from": old_status, "to": row.status},
+            {"at": now.isoformat(), "event": "updated", "from": row.status, "to": changes.get("status", row.status)},
         ]
+        result = self.db.execute(
+            update(EvaluationCaseRecord)
+            .where(EvaluationCaseRecord.id == row.id,
+                   EvaluationCaseRecord.owner_user_id == row.owner_user_id,
+                   EvaluationCaseRecord.revision == expected_revision)
+            .values(**changes, revision=expected_revision + 1, updated_at=now, audit_events=audit_events)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            self.db.rollback()
+            raise EvaluationConflictError("Case 已被更新，请刷新后重试")
         self.db.commit()
+        self.db.refresh(row)
         return row
 
     def add_dataset(self, owner_id: int, data: dict[str, Any]) -> EvaluationDatasetRecord:

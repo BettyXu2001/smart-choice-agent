@@ -5,6 +5,7 @@ from urllib import request
 from typing import Any, Protocol
 
 from choice_agent.config import Settings
+from choice_agent.providers.http import open_provider_request
 from choice_agent.providers.observability import (
     ModelCompletion,
     ProviderResponseError,
@@ -52,7 +53,7 @@ class OpenAICompatibleProvider:
             },
             method="POST",
         )
-        with request.urlopen(http_request, timeout=self.settings.model_timeout_seconds) as response:
+        with open_provider_request(http_request, timeout=self.settings.model_timeout_seconds) as response:
             response_payload = json.loads(response.read().decode("utf-8"))
         actual_model = str(response_payload.get("model") or model)
         metadata = metadata_from_usage(

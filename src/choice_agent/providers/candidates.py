@@ -18,6 +18,8 @@ class CandidateSearchResult:
     evidence: list[Evidence] = field(default_factory=list)
     run: SearchRun | None = None
     warnings: list[str] = field(default_factory=list)
+    # Only Provider code may certify coverage; search response JSON is untrusted.
+    budget_coverage: dict[str, Any] | None = None
 
 
 class CandidateProvider(Protocol):

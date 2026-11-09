@@ -123,9 +123,14 @@ class StageRunner:
             pool_summary = context.trace.metadata.get("candidatePool", {})
             pool_summary.update({
                 "candidateCount": len(context.decision.domain_state.get("candidatePool", [])),
+                "candidateCountAfter": len(context.decision.domain_state.get("candidatePool", [])),
+                "activeCandidateCount": len(context.decision.candidates),
                 "evidenceCount": len(context.decision.evidence),
                 "searchRunCount": len(context.decision.search_runs),
             })
+            if "candidate_refresh" in executed or "critic_recovery_refresh" in executed:
+                pool_summary["reused"] = False
+                pool_summary["refreshedCandidateCount"] = pool_summary["candidateCountAfter"]
             context.trace.metadata["candidatePool"] = pool_summary
         context.emit_progress("recommendation_ready", "决策结果已就绪", executionMode=plan.mode.value, status=context.decision.status.value)
         return StageRunResult("answer", profile.phase(context))
@@ -276,6 +281,7 @@ class StageRunner:
         source = context.decision.domain_state.get("source", {})
         pool_summary = {
             "candidateCount": len(pool),
+            "candidateCountBefore": len(pool),
             "reused": plan.mode in {ExecutionMode.RERANK, ExecutionMode.EXPLAIN_ONLY, ExecutionMode.WHAT_IF},
             "sourceMode": source.get("mode"),
             "evidenceCount": len(context.decision.evidence),
@@ -285,11 +291,13 @@ class StageRunner:
             "executionMode": plan.mode.value,
             "plannedPath": list(plan.planned_path),
             "skipReasons": plan.skip_reasons,
+            **plan.diagnostics,
             "candidatePool": pool_summary,
         })
         context.trace.turn_summary.update({
             "executionMode": plan.mode.value,
             "planReason": plan.reason,
+            **plan.diagnostics,
             "plannedPath": list(plan.planned_path),
         })
         context.trace.node(
@@ -299,6 +307,10 @@ class StageRunner:
             plan.reason,
             output_payload={
                 "mode": plan.mode.value,
+                "reason": plan.reason,
+                **plan.diagnostics,
+                "reusedCandidatePool": pool_summary["reused"],
+                "candidateCountBefore": len(pool),
                 "plannedPath": list(plan.planned_path),
                 "skipReasons": plan.skip_reasons,
             },

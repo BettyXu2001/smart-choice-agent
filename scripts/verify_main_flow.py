@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 from urllib import request
+from http.cookiejar import CookieJar
 
 
 BASE = "http://127.0.0.1:8000"
+OPENER = request.build_opener(request.HTTPCookieProcessor(CookieJar()))
 
 
 def call(method: str, path: str, body: dict | None = None):
@@ -14,14 +16,15 @@ def call(method: str, path: str, body: dict | None = None):
         BASE + path,
         data=payload,
         method=method,
-        headers={"Content-Type": "application/json", "X-User-Id": "7001"},
+        headers={"Content-Type": "application/json"},
     )
-    with request.urlopen(req, timeout=10) as response:
+    with OPENER.open(req, timeout=30) as response:
         raw = response.read()
         return json.loads(raw.decode("utf-8")) if raw else None
 
 
 def main() -> None:
+    call("GET", "/api/v1/identity")
     health = call("GET", "/health")
     session = call("POST", "/api/v1/diet/sessions")
     chat = call(

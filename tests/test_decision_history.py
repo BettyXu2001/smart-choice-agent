@@ -281,3 +281,21 @@ def test_outcome_review_due_status_uses_seven_day_boundary():
     )
 
     assert outcome_review_status(decision, now) == "due"
+
+
+def test_history_filters_before_limit_and_has_stable_order(database):
+    from datetime import datetime, timedelta
+    now = datetime(2026, 1, 1)
+    with database.session_factory() as db:
+        for index in range(155):
+            decision = DecisionState(decision_id=f"d{index:03}", session_id=f"s{index}", domain="travel",
+                                     owner_user_id=7 if index < 5 else 8)
+            db.add(DecisionRecord(id=decision.decision_id, session_id=decision.session_id,
+                                 state_json=decision.model_dump(mode="json", by_alias=True),
+                                 created_at=now, updated_at=now if index < 5 else now + timedelta(days=1)))
+        db.commit()
+        repo = DecisionRepository(db)
+        assert [d.decision_id for _, d in repo.list_for_user(7)] == ["d004", "d003", "d002", "d001", "d000"]
+        assert [d.decision_id for _, d in repo.list_for_user(7, 2)] == ["d004", "d003"]
+        assert len(repo.list_for_user(8, 1000)) == 100
+        assert repo.list_for_user(9) == []

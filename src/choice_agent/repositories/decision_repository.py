@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import desc, select, update
+from sqlalchemy import desc, or_, select, update
 from sqlalchemy.orm import Session
 
 from choice_agent.db_models import DecisionRecord
@@ -38,10 +38,13 @@ class DecisionRepository:
 
     def list_for_user(self, user_id: int, limit: int = 50) -> list[tuple[DecisionRecord, DecisionState]]:
         bounded_limit = max(1, min(limit, 100))
+        owner = DecisionRecord.state_json["ownerUserId"].as_integer()
+        ownership = or_(owner == user_id, owner.is_(None)) if user_id == 1 else owner == user_id
         rows = self.db.scalars(
             select(DecisionRecord)
-            .order_by(desc(DecisionRecord.updated_at), desc(DecisionRecord.created_at))
-            .limit(bounded_limit * 3)
+            .where(ownership)
+            .order_by(desc(DecisionRecord.updated_at), desc(DecisionRecord.created_at), desc(DecisionRecord.id))
+            .limit(bounded_limit)
         ).all()
         visible: list[tuple[DecisionRecord, DecisionState]] = []
         for row in rows:

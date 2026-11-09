@@ -24,3 +24,12 @@ yarn-error.log
 *.log
 .DS_Store
 Thumbs.db
+# Runtime databases and test data must never enter an image.
+*.db
+*.sqlite
+*.sqlite3
+*.db-*
+*.sqlite-*
+*.sqlite3-*
+.pytest-runtime
+.test-tmp

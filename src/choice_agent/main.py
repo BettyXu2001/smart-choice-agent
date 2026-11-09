@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from choice_agent.api.evaluations import router as evaluation_router
 from choice_agent.api.routes import router
 from choice_agent.config import Settings
+from choice_agent.auth import identity, validate_session_settings
 from choice_agent.database import Database
 from choice_agent.domains.diet.seed import seed_legacy_data
 from choice_agent.providers.model import OpenAICompatibleProvider
@@ -26,13 +27,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        validate_session_settings(resolved)
         database.create_all()
         with database.session_factory() as db:
             seed_legacy_data(db)
         app.state.settings = resolved
         app.state.database = database
         app.state.provider = OpenAICompatibleProvider(resolved)
-        yield
+        try:
+            yield
+        finally:
+            database.engine.dispose()
 
     app = FastAPI(
         title="Choice Agent V2",
@@ -42,6 +47,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(router)
     app.include_router(evaluation_router)
+    app.get("/api/v1/identity")(identity)
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, error: HTTPException) -> JSONResponse:
@@ -49,9 +55,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, error: RequestValidationError) -> JSONResponse:
+        errors = [
+            {key: value for key, value in item.items() if key not in {"ctx", "input"}}
+            for item in error.errors()
+        ]
         return JSONResponse(
             status_code=422,
-            content={"message": "请求参数不合法", "errors": error.errors()},
+            content=jsonable_encoder({"message": "请求参数不合法", "errors": errors}),
         )
 
     @app.get("/health")

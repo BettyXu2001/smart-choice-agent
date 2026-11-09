@@ -36,7 +36,7 @@ def test_openai_compatible_provider_reads_real_usage_and_configured_cost(monkeyp
         "choices": [{"message": {"content": '{"answer":"ok"}'}}],
         "usage": {"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125},
     }
-    monkeypatch.setattr("choice_agent.providers.model.request.urlopen", lambda *args, **kwargs: FakeResponse(payload))
+    monkeypatch.setattr("choice_agent.providers.model.open_provider_request", lambda *args, **kwargs: FakeResponse(payload))
 
     result = provider({
         "priced-model": {"inputPer1MTokens": 2.0, "outputPer1MTokens": 8.0}
@@ -56,7 +56,7 @@ def test_usage_and_unknown_price_remain_null(monkeypatch):
     payload = {
         "choices": [{"message": {"content": '{"answer":"ok"}'}}],
     }
-    monkeypatch.setattr("choice_agent.providers.model.request.urlopen", lambda *args, **kwargs: FakeResponse(payload))
+    monkeypatch.setattr("choice_agent.providers.model.open_provider_request", lambda *args, **kwargs: FakeResponse(payload))
 
     result = provider().complete_json("system", "user", "unknown-model")
 
@@ -72,7 +72,7 @@ def test_invalid_json_error_keeps_response_usage(monkeypatch):
         "choices": [{"message": {"content": "not-json"}}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
     }
-    monkeypatch.setattr("choice_agent.providers.model.request.urlopen", lambda *args, **kwargs: FakeResponse(payload))
+    monkeypatch.setattr("choice_agent.providers.model.open_provider_request", lambda *args, **kwargs: FakeResponse(payload))
 
     with pytest.raises(ProviderResponseError) as captured:
         provider().complete_json("system", "user", "priced-model")

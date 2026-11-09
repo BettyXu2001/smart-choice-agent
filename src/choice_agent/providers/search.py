@@ -4,11 +4,12 @@ import json
 from datetime import datetime
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request
 from uuid import uuid4
 
 from choice_agent.agents.base import AgentContext
 from choice_agent.providers.candidates import CandidateSearchResult
+from choice_agent.providers.http import open_provider_request
 from choice_agent.providers.observability import (
     ProviderCallResult,
     ProviderResponseError,
@@ -124,7 +125,7 @@ class OpenAIWebSearchProvider:
         return ProviderCallResult(result, metadata)
 
     def _send(self, request: Request, timeout: float) -> dict[str, Any]:
-        with urlopen(request, timeout=timeout) as response:
+        with open_provider_request(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _parse(self, payload: dict[str, Any], context: AgentContext) -> CandidateSearchResult:

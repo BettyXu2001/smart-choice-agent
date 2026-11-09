@@ -19,3 +19,7 @@ services:
         value: 3.12.6
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: CHOICE_AGENT_SESSION_SECRET
+        generateValue: true
+      - key: CHOICE_AGENT_COOKIE_SECURE
+        value: "true"

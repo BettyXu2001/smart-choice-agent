@@ -13,11 +13,13 @@ from choice_agent.api.decision_stream import stream_command_decision, stream_cre
 from choice_agent.agents.base import AgentContext
 from choice_agent.agents.diet import EvaluationAgent
 from choice_agent.config import Settings
+from choice_agent.auth import require_identity
 from choice_agent.db_models import DecisionRecord, MealRecord, TraceRecord
 from choice_agent.decision.state_machine import DecisionRevisionError
 from choice_agent.orchestration.diet import DietOrchestrator
 from choice_agent.orchestration.generic import GenericDecisionOrchestrator
 from choice_agent.providers.model import ModelProvider, OpenAICompatibleProvider
+from choice_agent.providers.http import authorize_base_url
 from choice_agent.providers.search import SearchProviderError
 from choice_agent.run_mode import resolve_run_mode
 from choice_agent.repositories.decision_repository import DecisionRepository
@@ -69,10 +71,22 @@ def runtime_model_from_headers(
 ) -> tuple[Settings, ModelProvider]:
     api_key = (model_api_key or "").strip()
     use_runtime_model = _truthy_header(model_enabled) and bool(api_key)
+    try:
+        authorized_model_url = authorize_base_url(
+            (model_base_url or "").strip() or base_settings.model_base_url,
+            base_settings.model_base_url, base_settings.model_base_url_allowlist,
+        ) if use_runtime_model else base_settings.model_base_url
+        use_runtime_search = _truthy_header(search_enabled) and bool((search_api_key or "").strip())
+        authorized_search_url = authorize_base_url(
+            (search_base_url or "").strip() or base_settings.search_base_url,
+            base_settings.search_base_url, base_settings.search_base_url_allowlist, search=True,
+        ) if use_runtime_search else base_settings.search_base_url
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Provider 地址不合法或未获授权，请联系部署者配置可信地址") from error
     runtime_settings = replace(
         base_settings,
         model_api_key=api_key if use_runtime_model else base_settings.model_api_key,
-        model_base_url=((model_base_url or base_settings.model_base_url).strip() or base_settings.model_base_url) if use_runtime_model else base_settings.model_base_url,
+        model_base_url=authorized_model_url,
         main_model=((main_model or base_settings.main_model).strip() or base_settings.main_model) if use_runtime_model else base_settings.main_model,
         light_model=((light_model or base_settings.light_model).strip() or base_settings.light_model) if use_runtime_model else base_settings.light_model,
         enable_llm=True if use_runtime_model else base_settings.enable_llm,
@@ -83,7 +97,7 @@ def runtime_model_from_headers(
             runtime_settings,
             search_provider="openai",
             search_api_key=search_key,
-            search_base_url=(search_base_url or runtime_settings.search_base_url).strip() or runtime_settings.search_base_url,
+            search_base_url=authorized_search_url,
             search_model=(search_model or runtime_settings.search_model).strip() or runtime_settings.search_model,
         )
     if runtime_settings == base_settings:
@@ -135,10 +149,8 @@ def search_capabilities(
         default_search_mode=default_mode,
         run_mode=resolve_run_mode(active_settings),
     )
-def user_id(x_user_id: int = Header(default=1, alias="X-User-Id")) -> int:
-    if x_user_id < 1:
-        raise HTTPException(status_code=400, detail="X-User-Id 必须大于 0")
-    return x_user_id
+def user_id(request: Request) -> int:
+    return require_identity(request)
 
 
 def meal_response(row: MealRecord, score: float = 0) -> MealResponse:
@@ -436,6 +448,22 @@ def session_traces(
     ]
 
 
+def normalized_time_range(start_at: datetime, end_at: datetime) -> tuple[datetime, datetime]:
+    start_aware = start_at.utcoffset() is not None
+    end_aware = end_at.utcoffset() is not None
+    if start_aware != end_aware:
+        raise HTTPException(status_code=400, detail="开始与结束时间需采用一致的时区格式")
+    if start_aware:
+        try:
+            start_at = start_at.astimezone().replace(tzinfo=None)
+            end_at = end_at.astimezone().replace(tzinfo=None)
+        except (ValueError, OverflowError) as error:
+            raise HTTPException(status_code=400, detail="时间范围无法转换为服务器本地时间") from error
+    if start_at >= end_at:
+        raise HTTPException(status_code=400, detail="时间范围不合法，开始时间必须早于结束时间")
+    return start_at, end_at
+
+
 @router.get("/api/v1/diet/debug/traces")
 def list_traces(
     start_at: datetime = Query(alias="startAt"),
@@ -445,8 +473,7 @@ def list_traces(
     uid: int = Depends(user_id),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    if start_at >= end_at:
-        raise HTTPException(status_code=400, detail="Trace 查询时间范围不合法")
+    start_at, end_at = normalized_time_range(start_at, end_at)
     return [
         trace_response(row)
         for row in DietRepository(db).traces(uid, start_at, end_at, only_unlabeled, limit)
@@ -520,13 +547,12 @@ def evaluate(
     active_settings, active_provider = (
         runtime_model if isinstance(runtime_model, tuple) else (settings, provider)
     )
-    if body.start_at >= body.end_at:
-        raise HTTPException(status_code=400, detail="评估时间范围不合法")
+    start_at, end_at = normalized_time_range(body.start_at, body.end_at)
     repository = DietRepository(db)
-    rows = repository.traces(uid, body.start_at, body.end_at, False, body.limit)
+    rows = repository.traces(uid, start_at, end_at, False, body.limit)
     session_ids = list(dict.fromkeys(row.session_id for row in rows))
     feedbacks_by_session: dict[str, list[Any]] = {session_id: [] for session_id in session_ids}
-    for feedback in repository.feedbacks(uid, session_ids, body.start_at, body.end_at):
+    for feedback in repository.feedbacks(uid, session_ids, start_at, end_at):
         feedbacks_by_session.setdefault(feedback.session_id, []).append(feedback)
 
     results: list[dict[str, Any]] = []

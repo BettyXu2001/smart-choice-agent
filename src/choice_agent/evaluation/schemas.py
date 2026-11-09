@@ -119,6 +119,15 @@ class EvaluationCaseUpdate(EvaluationModel):
     status: CaseStatus | None = None
     case_data: EvaluationCaseData | None = None
 
+    @field_validator("title", "expected_behavior", "error_type", "modules", "status", "case_data")
+    @classmethod
+    def reject_explicit_null(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("该字段不能为 null；不修改时请省略")
+        if isinstance(value, str) and not value.strip():
+            raise ValueError("该字段不能为空")
+        return value
+
 
 class EvaluationDatasetCreate(EvaluationModel):
     name: str = Field(min_length=1, max_length=128)
